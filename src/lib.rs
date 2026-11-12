@@ -18,6 +18,7 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand};
+use hyper::Uri;
 use iroh::RelayUrl;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -25,6 +26,7 @@ use crate::{
     adapters::{
         endpoint::{Discovery, NetConfig},
         keyfile, runtime,
+        t3::{self, T3Target},
     },
     agent::guides::{self, Kind},
     core::{
@@ -34,7 +36,11 @@ use crate::{
     },
     join::{JoinConfig, Joiner},
     protocol::control::AnswerText,
-    share::{Share, ShareConfig, Source, delivery::Target, proxy::UpstreamUrl},
+    share::{
+        Share, ShareConfig, Source,
+        delivery::{CommandTarget, Target},
+        proxy::UpstreamUrl,
+    },
 };
 
 pub(crate) type BoxError = Box<dyn Error + Send + Sync>;
@@ -134,6 +140,9 @@ struct Delivery {
     /// File holding the T3 token (t3 target).
     #[arg(long, value_name = "FILE")]
     t3_token_file: Option<PathBuf>,
+    /// Seconds a command may take per batch before it is killed.
+    #[arg(long, value_name = "SECS", default_value_t = 60)]
+    command_timeout: u64,
     /// Hand each batch of comments to this command, as NDJSON on its stdin.
     #[arg(last = true, value_name = "COMMAND")]
     command: Vec<OsString>,
@@ -175,16 +184,16 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
             if !root.is_dir() {
                 return Err(format!("{} is not a directory", root.display()).into());
             }
-            let what = format!("{} (live reload)", root.display());
-            share(Source::Files(root), &net, delivery, &what).await
+            let site = root.display().to_string();
+            share(Source::Files(root), &net, delivery, &site, " (live reload)").await
         }
         Command::Proxy {
             upstream,
             net,
             delivery,
         } => {
-            let what = upstream.to_string();
-            share(Source::Proxy(upstream), &net, delivery, &what).await
+            let site = upstream.to_string();
+            share(Source::Proxy(upstream), &net, delivery, &site, "").await
         }
         Command::Join {
             token,
@@ -225,13 +234,18 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
 }
 
 /// The target the delivery options select, and a note for the startup
-/// output. jamjam probes nothing: missing pieces are errors naming the
-/// option.
-fn target(delivery: Delivery) -> Result<(Target, Option<String>), BoxError> {
+/// output; `site` is what is shared, `env_thread` is `T3CODE_THREAD_ID`.
+/// jamjam probes nothing: missing pieces are errors naming the option.
+fn target(
+    delivery: Delivery,
+    site: &str,
+    env_thread: Option<OsString>,
+) -> Result<(Target, Option<String>), BoxError> {
     let Delivery {
         thread,
         t3_url,
         t3_token_file,
+        command_timeout,
         command,
     } = delivery;
     let t3 = thread.is_some() || t3_url.is_some() || t3_token_file.is_some();
@@ -241,12 +255,37 @@ fn target(delivery: Delivery) -> Result<(Target, Option<String>), BoxError> {
         );
     }
     if t3 {
-        return Err("the t3 target (--thread, --t3-url, --t3-token-file) is not available in this version yet".into());
+        let url = t3_url.ok_or("the t3 target needs T3's MCP URL: pass --t3-url")?;
+        let url = url
+            .parse::<Uri>()
+            .ok()
+            .filter(|url| matches!(url.scheme_str(), Some("http" | "https")))
+            .ok_or_else(|| format!("--t3-url {url} is not an http:// or https:// URL"))?;
+        let token_file = t3_token_file
+            .ok_or("the t3 target needs a file holding the T3 token: pass --t3-token-file")?;
+        let thread = match thread {
+            Some(thread) => thread,
+            None => env_thread
+                .and_then(|thread| thread.into_string().ok())
+                .filter(|thread| !thread.is_empty())
+                .ok_or("the t3 target needs a thread: pass --thread (or set T3CODE_THREAD_ID)")?,
+        };
+        let target = T3Target {
+            url,
+            token_file,
+            thread,
+            site: site.to_owned(),
+        };
+        return Ok((Target::T3(target), None));
     }
     if !command.is_empty() {
+        let command = CommandTarget {
+            argv: command,
+            timeout: Duration::from_secs(command_timeout),
+        };
         return Ok((Target::Command(command), None));
     }
-    let note = std::env::var_os("T3CODE_THREAD_ID").map(|_| {
+    let note = env_thread.map(|_| {
         "T3CODE_THREAD_ID is set, but without --t3-url comments wait for jamjam recv".to_owned()
     });
     Ok((Target::Recv, note))
@@ -269,23 +308,36 @@ async fn share(
     source: Source,
     net: &ShareNet,
     delivery: Delivery,
-    what: &str,
+    site: &str,
+    detail: &str,
 ) -> Result<(), BoxError> {
     let discovery = if net.local {
         Discovery::Direct
     } else {
         Discovery::Public
     };
-    let (target, note) = target(delivery)?;
-    let goes_to = match &target {
+    let (mut target, note) = target(delivery, site, std::env::var_os("T3CODE_THREAD_ID"))?;
+    let goes_to = match &mut target {
         Target::Recv => "jamjam recv".to_owned(),
-        Target::Command(argv) => format!(
+        Target::Command(command) => format!(
             "the command {}",
-            argv.iter()
+            command
+                .argv
+                .iter()
                 .map(|arg| arg.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join(" ")
         ),
+        Target::T3(t3) => {
+            let thread = t3::open(t3).await?;
+            let resolved = thread
+                .resolved_from
+                .map(|child| format!(", the top-level thread of {child}"))
+                .unwrap_or_default();
+            let goes_to = format!("the T3 thread {:?} ({}{resolved})", thread.title, thread.id);
+            t3.thread = thread.id;
+            goes_to
+        }
     };
     let config = ShareConfig::new(
         source,
@@ -301,7 +353,7 @@ async fn share(
     {
         tracing::warn!("no relay reachable yet; joiners may not find this share");
     }
-    println!("jamjam: sharing {what}");
+    println!("jamjam: sharing {site}{detail}");
     println!("jamjam: token: {}", share.token());
     println!(
         "jamjam: warning: anyone with the token can see the site and send comments to the agent until this share stops"

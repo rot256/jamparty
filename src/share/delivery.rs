@@ -5,13 +5,20 @@
 //!   it is delivered once that client says it printed it, and returned to
 //!   the queue (no backoff) if the client goes away first.
 //! - `command`: the batch goes to the command's stdin.
+//! - `t3`: the batch is a message to a T3 thread.
 
-use std::{ffi::OsString, sync::Arc};
+use std::{ffi::OsString, sync::Arc, time::Duration};
 
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    adapters::command, core::queue::DeliveryResult, protocol::comment::Comment, share::hub::Hub,
+    adapters::{
+        command,
+        t3::{T3Delivery, T3Target},
+    },
+    core::queue::DeliveryResult,
+    protocol::comment::Comment,
+    share::hub::Hub,
 };
 
 /// Where comments go.
@@ -19,8 +26,18 @@ use crate::{
 pub(crate) enum Target {
     /// Held for `jamjam recv`.
     Recv,
-    /// Piped to this argv (not empty).
-    Command(Vec<OsString>),
+    /// Piped to a command.
+    Command(CommandTarget),
+    /// Sent to a T3 thread (resolved at start).
+    T3(T3Target),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommandTarget {
+    /// Not empty.
+    pub(crate) argv: Vec<OsString>,
+    /// A run taking longer is killed and counts as failed.
+    pub(crate) timeout: Duration,
 }
 
 /// A waiting `jamjam recv`: the batch goes out on `batch`; `printed`
@@ -43,8 +60,12 @@ pub(crate) fn start(
             tasks.spawn(to_recv(hub, receiver));
             Some(requests)
         }
-        Target::Command(argv) => {
-            tasks.spawn(to_command(hub, argv));
+        Target::Command(command) => {
+            tasks.spawn(to_command(hub, command));
+            None
+        }
+        Target::T3(target) => {
+            tasks.spawn(to_t3(hub, T3Delivery::new(target)));
             None
         }
     }
@@ -67,10 +88,18 @@ async fn to_recv(hub: Arc<Hub>, mut requests: mpsc::Receiver<RecvRequest>) {
     }
 }
 
-async fn to_command(hub: Arc<Hub>, argv: Vec<OsString>) {
+async fn to_command(hub: Arc<Hub>, target: CommandTarget) {
     loop {
         let batch = hub.next_batch().await;
-        let (result, detail) = command::deliver(&argv, &batch).await;
+        let (result, detail) = command::deliver(&target.argv, target.timeout, &batch).await;
+        hub.finish(result, &detail);
+    }
+}
+
+async fn to_t3(hub: Arc<Hub>, t3: T3Delivery) {
+    loop {
+        let batch = hub.next_batch().await;
+        let (result, detail) = t3.deliver(&batch).await;
         hub.finish(result, &detail);
     }
 }

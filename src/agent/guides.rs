@@ -91,15 +91,23 @@ pub(crate) fn guide(kind: Kind) -> String {
    the t3 target:
      jamjam serve <dir> --t3-url <T3 MCP URL> --t3-token-file <file>
      jamjam proxy <url> --t3-url <T3 MCP URL> --t3-token-file <file>
-   The thread is your own: T3CODE_THREAD_ID, or pass --thread <id>. The URL
-   and token file come from your environment's setup (ask the user if you do
-   not have them). At start it prints the thread's title.
+   The thread is your own: T3CODE_THREAD_ID, or pass --thread <id> (a
+   subagent's thread is resolved to its top-level thread). The URL and the
+   token file come from your environment's setup (ask the user if you do not
+   have them); the token is read from the file at every delivery, so a
+   renewed token is picked up. At start the share reads the thread and
+   prints its title; an unknown or archived thread is an error and the share
+   exits.
 ",
             "\
-3. Comments arrive as messages in this thread, a header followed by the JSON
-   comments; nothing to poll. Act on them when they come.
-   Without --t3-url and --thread the share keeps comments for `jamjam recv`
-   instead (see `jamjam agent other`).
+3. Comments arrive as messages in this thread, queued as a new turn (never
+   steering a running one): a header line, `Comments from jamjam on
+   <site>; reviewer input, ...`, then one JSON comment per line. Nothing to
+   poll. If T3 cannot be reached the share retries with backoff; if the
+   thread is gone it keeps the comments and the pages show it, until you
+   restart the share.
+   Without the t3 options the share keeps comments for `jamjam recv` instead
+   (see `jamjam agent other`).
 ",
         ),
         Kind::Claude => (

@@ -1,13 +1,7 @@
 //! In-process shares and joiners over iroh with direct addresses, a
 //! fixture site and a small HTTP client.
 
-use std::{
-    future::Future,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::OnceLock,
-    time::Duration,
-};
+use std::{future::Future, net::SocketAddr, ops::Deref, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -65,30 +59,54 @@ pub(crate) fn fixture_dir() -> TempDir {
     dir
 }
 
-/// One runtime directory for every share in this process; tests reach a
-/// share through its own socket path.
-fn runtime_dir() -> &'static Path {
-    static DIR: OnceLock<TempDir> = OnceLock::new();
-    DIR.get_or_init(|| tempfile::tempdir().unwrap()).path()
-}
-
-/// A share's configuration for tests: direct addresses, short hello timeout.
+/// A share's configuration for tests: direct addresses, short hello
+/// timeout; [`start`] gives it a runtime directory.
 pub(crate) fn config(source: Source, target: Target) -> ShareConfig {
-    let mut config = ShareConfig::new(source, net(), target, runtime_dir().join("run"));
+    let mut config = ShareConfig::new(source, net(), target, PathBuf::new());
     config.hello_timeout = Duration::from_secs(2);
     config
 }
 
-pub(crate) async fn share(source: Source) -> Share {
-    Share::start(config(source, Target::Recv)).await.unwrap()
+/// A share with its own runtime directory, removed with it.
+pub(crate) struct TestShare {
+    share: Share,
+    _runtime: TempDir,
 }
 
-pub(crate) async fn share_files(dir: &TempDir) -> Share {
+impl Deref for TestShare {
+    type Target = Share;
+
+    fn deref(&self) -> &Share {
+        &self.share
+    }
+}
+
+impl TestShare {
+    pub(crate) async fn stop(self) {
+        self.share.stop().await;
+    }
+}
+
+/// Starts a share from `config`, in a fresh runtime directory.
+pub(crate) async fn start(mut config: ShareConfig) -> TestShare {
+    let runtime = tempfile::tempdir().unwrap();
+    config.runtime_dir = runtime.path().join("run");
+    TestShare {
+        share: Share::start(config).await.unwrap(),
+        _runtime: runtime,
+    }
+}
+
+pub(crate) async fn share(source: Source) -> TestShare {
+    start(config(source, Target::Recv)).await
+}
+
+pub(crate) async fn share_files(dir: &TempDir) -> TestShare {
     let root: PathBuf = std::fs::canonicalize(dir.path()).unwrap();
     share(Source::Files(root)).await
 }
 
-pub(crate) async fn share_proxy(upstream: SocketAddr) -> Share {
+pub(crate) async fn share_proxy(upstream: SocketAddr) -> TestShare {
     let url: UpstreamUrl = format!("http://{upstream}").parse().unwrap();
     share(Source::Proxy(url)).await
 }

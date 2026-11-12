@@ -1,7 +1,7 @@
-//! The command target: success, failure with backoff on a manual clock, and
-//! holding comments when the command is gone.
+//! The command target: success, failure with backoff on a manual clock,
+//! a timeout, and holding comments when the command is gone.
 
-use std::{ffi::OsString, path::Path, sync::Arc};
+use std::{ffi::OsString, path::Path, sync::Arc, time::Duration};
 
 use jiff::{SignedDuration, Timestamp};
 use tempfile::TempDir;
@@ -10,19 +10,30 @@ use tokio::net::UnixStream;
 use crate::{
     agent,
     core::{clock::ManualClock, queue::DeliveryState},
-    share::{Share, Source, delivery::Target},
-    tests::harness::{DRAFT, config, fixture_dir, join, post_comment, until, within},
+    share::{
+        Source,
+        delivery::{CommandTarget, Target},
+    },
+    tests::harness::{
+        DRAFT, TestShare, config, fixture_dir, join, post_comment, start, until, within,
+    },
 };
 
 fn t0() -> Timestamp {
     Timestamp::from_second(1_800_000_000).unwrap()
 }
 
-async fn share_to(dir: &TempDir, argv: Vec<OsString>, clock: Arc<ManualClock>) -> Share {
+async fn share_to(
+    dir: &TempDir,
+    argv: Vec<OsString>,
+    timeout: Duration,
+    clock: Arc<ManualClock>,
+) -> TestShare {
     let root = std::fs::canonicalize(dir.path()).unwrap();
-    let mut config = config(Source::Files(root), Target::Command(argv));
+    let command = CommandTarget { argv, timeout };
+    let mut config = config(Source::Files(root), Target::Command(command));
     config.clock = clock;
-    Share::start(config).await.unwrap()
+    start(config).await
 }
 
 /// `sh -c <script> <log> <flag>`: appends stdin to `log`, fails while
@@ -51,7 +62,7 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
     std::fs::write(&flag, "").unwrap();
     let clock = Arc::new(ManualClock::new(t0()));
     let argv = logging_command(&log, &flag);
-    let share = share_to(&dir, argv, Arc::clone(&clock)).await;
+    let share = share_to(&dir, argv, Duration::from_secs(60), Arc::clone(&clock)).await;
     let alice = join(&share, "alice").await;
     assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
 
@@ -105,7 +116,8 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
 async fn a_missing_command_holds_comments() {
     let dir = fixture_dir();
     let missing = vec![OsString::from("/nonexistent/jamjam-agent")];
-    let share = share_to(&dir, missing, Arc::new(ManualClock::new(t0()))).await;
+    let clock = Arc::new(ManualClock::new(t0()));
+    let share = share_to(&dir, missing, Duration::from_secs(60), clock).await;
     let alice = join(&share, "alice").await;
     assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
     until("the hold", || {
@@ -127,4 +139,51 @@ async fn a_missing_command_holds_comments() {
     assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
     assert_eq!(share.queued().len(), 2);
     assert_eq!(share.hub().delivery_state(), DeliveryState::Held);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_that_takes_too_long_is_killed_and_retried() {
+    let dir = fixture_dir();
+    let work = tempfile::tempdir().unwrap();
+    let pid = work.path().join("pid");
+    let argv = vec![
+        "sh".into(),
+        "-c".into(),
+        r#"echo $$ > "$0"; exec sleep 30"#.into(),
+        pid.clone().into(),
+    ];
+    let clock = Arc::new(ManualClock::new(t0()));
+    let share = share_to(&dir, argv, Duration::from_millis(300), clock).await;
+    let alice = join(&share, "alice").await;
+    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    let mut view = alice.watch();
+    let status = within(
+        "the status line",
+        view.wait_for(|view| view.status.is_some()),
+    )
+    .await
+    .unwrap()
+    .status
+    .clone()
+    .unwrap();
+    let status = String::from(status);
+    assert!(
+        status.contains("killed") && status.contains("retrying"),
+        "{status}"
+    );
+    assert_eq!(
+        share.hub().wake_at(),
+        Some(t0() + SignedDuration::from_secs(1))
+    );
+    assert_eq!(share.queued().len(), 1);
+    let pid = std::fs::read_to_string(&pid).unwrap();
+    let alive = || {
+        std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    until("the command to be killed", || !alive()).await;
 }

@@ -1,8 +1,13 @@
-use std::ffi::OsString;
+use std::{ffi::OsString, time::Duration};
 
 use clap::{CommandFactory, Parser};
 
-use crate::{Cli, Command, Delivery, agent::guides, share::delivery::Target, target};
+use crate::{
+    Cli, Command, Delivery,
+    agent::guides,
+    share::delivery::{CommandTarget, Target},
+    target,
+};
 
 fn token() -> String {
     format!("{}:{}", "ab".repeat(32), "a".repeat(26))
@@ -71,17 +76,62 @@ fn delivery(args: &[&str]) -> Delivery {
 
 #[test]
 fn delivery_options_choose_the_target() {
-    let (recv, _) = target(delivery(&[])).unwrap();
+    let choose = |args: &[&str], env: Option<&str>| {
+        target(delivery(args), "/srv/site", env.map(OsString::from))
+    };
+    let (recv, note) = choose(&[], None).unwrap();
     assert_eq!(recv, Target::Recv);
-    let (command, note) = target(delivery(&["site", "--", "agent", "--flag"])).unwrap();
+    assert!(note.is_none());
+    let (_, note) = choose(&[], Some("thread-1")).unwrap();
+    assert!(note.unwrap().contains("--t3-url"));
+
+    let (command, note) = choose(&["site", "--", "agent", "--flag"], None).unwrap();
     assert_eq!(
         command,
-        Target::Command(vec![OsString::from("agent"), OsString::from("--flag")])
+        Target::Command(CommandTarget {
+            argv: vec![OsString::from("agent"), OsString::from("--flag")],
+            timeout: Duration::from_secs(60),
+        })
     );
     assert!(note.is_none());
-    let both = target(delivery(&["--t3-url", "http://t3", "--", "agent"]));
+    let (command, _) = choose(&["--command-timeout", "5", "--", "agent"], None).unwrap();
+    assert!(matches!(command, Target::Command(c) if c.timeout == Duration::from_secs(5)));
+    let both = choose(&["--t3-url", "http://t3/mcp", "--", "agent"], None);
     assert!(both.unwrap_err().to_string().contains("not both"));
-    assert!(target(delivery(&["--thread", "t"])).is_err());
+
+    let t3 = [
+        "--t3-url",
+        "http://t3/mcp",
+        "--t3-token-file",
+        "/run/t3-token",
+    ];
+    let (from_env, _) = choose(&t3, Some("thread-1")).unwrap();
+    let Target::T3(from_env) = from_env else {
+        panic!("not t3: {from_env:?}");
+    };
+    assert_eq!(from_env.thread, "thread-1");
+    assert_eq!(from_env.site, "/srv/site");
+    assert_eq!(from_env.url.to_string(), "http://t3/mcp");
+    let given = [&t3[..], &["--thread", "thread-2"]].concat();
+    let (Target::T3(given), _) = choose(&given, Some("thread-1")).unwrap() else {
+        panic!("not t3");
+    };
+    assert_eq!(given.thread, "thread-2");
+
+    // Each missing piece names its option; nothing is probed.
+    let missing = |args: &[&str], env: Option<&str>| choose(args, env).unwrap_err().to_string();
+    assert!(missing(&t3, None).contains("--thread"));
+    assert!(missing(&["--thread", "t"], None).contains("--t3-url"));
+    assert!(missing(&["--t3-url", "http://t3/mcp"], Some("t")).contains("--t3-token-file"));
+    let ftp = [
+        "--t3-url",
+        "ftp://t3",
+        "--t3-token-file",
+        "f",
+        "--thread",
+        "t",
+    ];
+    assert!(missing(&ftp, None).contains("http"));
 }
 
 #[test]

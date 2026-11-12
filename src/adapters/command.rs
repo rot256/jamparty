@@ -1,7 +1,8 @@
 //! The `command` target: runs the argv given after `--` once per batch,
-//! the batch as NDJSON on its stdin; exit status 0 means delivered.
+//! the batch as NDJSON on its stdin; exit status 0 means delivered. A run
+//! that outlasts its timeout is killed and counts as failed.
 
-use std::{ffi::OsString, io::ErrorKind, process::Stdio};
+use std::{ffi::OsString, io::ErrorKind, process::Stdio, time::Duration};
 
 use tokio::{io::AsyncWriteExt, process::Command};
 
@@ -9,7 +10,11 @@ use crate::{core::queue::DeliveryResult, protocol::comment::Comment};
 
 /// Delivers `batch` to `argv`; the string says what went wrong, if
 /// anything. A command that cannot be started at all is `Gone`.
-pub(crate) async fn deliver(argv: &[OsString], batch: &[Comment]) -> (DeliveryResult, String) {
+pub(crate) async fn deliver(
+    argv: &[OsString],
+    timeout: Duration,
+    batch: &[Comment],
+) -> (DeliveryResult, String) {
     let Some((program, args)) = argv.split_first() else {
         return (DeliveryResult::Gone, "no command".to_owned());
     };
@@ -42,17 +47,32 @@ pub(crate) async fn deliver(argv: &[OsString], batch: &[Comment]) -> (DeliveryRe
             input.push(b'\n');
         }
     }
-    if let Some(mut stdin) = child.stdin.take() {
-        // A command that exits without reading is judged by its status.
-        let _ = stdin.write_all(&input).await;
-        drop(stdin);
-    }
-    match child.wait().await {
-        Ok(status) if status.success() => (DeliveryResult::Ok, String::new()),
-        Ok(status) => (
+    let stdin = child.stdin.take();
+    let run = async {
+        if let Some(mut stdin) = stdin {
+            // A command that exits without reading is judged by its status.
+            let _ = stdin.write_all(&input).await;
+            drop(stdin);
+        }
+        child.wait().await
+    };
+    let status = tokio::time::timeout(timeout, run).await;
+    match status {
+        Ok(Ok(status)) if status.success() => (DeliveryResult::Ok, String::new()),
+        Ok(Ok(status)) => (
             DeliveryResult::Error,
             format!("{name} exited with {status}"),
         ),
-        Err(error) => (DeliveryResult::Error, format!("{name}: {error}")),
+        Ok(Err(error)) => (DeliveryResult::Error, format!("{name}: {error}")),
+        Err(_) => {
+            let _ = child.kill().await;
+            (
+                DeliveryResult::Error,
+                format!(
+                    "{name} took longer than {}s and was killed",
+                    timeout.as_secs()
+                ),
+            )
+        }
     }
 }
