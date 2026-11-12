@@ -1,5 +1,5 @@
 {
-  "name": "jamjam-browser-client",
+  "name": "nabe-browser-client",
   "private": true,
   "type": "module",
   "scripts": {

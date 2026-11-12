@@ -1,18 +1,18 @@
 use clap::Parser;
-use jamjam::Cli;
+use nabe::Cli;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "jamjam=info".into()),
+                .unwrap_or_else(|_| "nabe=info".into()),
         )
         .with_target(false)
         .init();
 
-    if let Err(error) = jamjam::run(Cli::parse()).await {
-        eprintln!("jamjam: {error}");
+    if let Err(error) = nabe::run(Cli::parse()).await {
+        eprintln!("nabe: {error}");
         std::process::exit(1);
     }
 }

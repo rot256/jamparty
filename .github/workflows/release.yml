@@ -1,6 +1,6 @@
 name: Release
 
-# Manual only while jamjam is under construction: a push must not publish a
+# Manual only while nabe is under construction: a push must not publish a
 # release or a crate.
 on:
   workflow_dispatch:
@@ -33,9 +33,9 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "jamjam") | .version')"
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "nabe") | .version')"
           if [ -z "$version" ] || [ "$version" = "null" ]; then
-            echo "Could not read the jamjam package version" >&2
+            echo "Could not read the nabe package version" >&2
             exit 1
           fi
 
@@ -175,7 +175,7 @@ jobs:
       - name: Verify static Linux binary
         if: runner.os == 'Linux'
         env:
-          BINARY: target/${{ matrix.target }}/release/jamjam
+          BINARY: target/${{ matrix.target }}/release/nabe
         run: |
           file "$BINARY"
           file "$BINARY" | grep -Eq 'statically linked|static-pie linked'
@@ -183,7 +183,7 @@ jobs:
       - name: Verify macOS ARM64 binary
         if: runner.os == 'macOS'
         env:
-          BINARY: target/${{ matrix.target }}/release/jamjam
+          BINARY: target/${{ matrix.target }}/release/nabe
         run: |
           file "$BINARY"
           file "$BINARY" | grep -q 'arm64'
@@ -193,13 +193,13 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           mkdir -p dist
-          tar -C "target/$TARGET/release" -czf "dist/jamjam-$TARGET.tar.gz" jamjam
-          shasum -a 256 "dist/jamjam-$TARGET.tar.gz" > "dist/jamjam-$TARGET.tar.gz.sha256"
+          tar -C "target/$TARGET/release" -czf "dist/nabe-$TARGET.tar.gz" nabe
+          shasum -a 256 "dist/nabe-$TARGET.tar.gz" > "dist/nabe-$TARGET.tar.gz.sha256"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: jamjam-${{ matrix.target }}
+          name: nabe-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 

@@ -1,12 +1,13 @@
-# jamjam
+# nabe
 
-jamjam lets an agent share a site it is working on with a few people. They
+nabe lets an agent share a site it is working on with a few people. They
 join from their own machine, point at the page and comment; the comments
 reach the agent's session. It is the multi-user successor of
 [komtar](https://github.com/rot256/komtar), peer to peer over
-[iroh](https://iroh.computer): there is no jamjam server. See
+[iroh](https://iroh.computer): there is no nabe server. See
 [DESIGN.md](DESIGN.md) for the design and the implementation plan; delivery
-to the agent (`jamjam recv`, `jamjam send`, T3) is not built yet.
+to the agent (`nabe recv`, `nabe send`, T3) is not built yet. nabe was
+called jamjam during design.
 
 ## Installation
 
@@ -21,13 +22,13 @@ cargo install --path .
 Share a static directory (pages reload when files change):
 
 ```sh
-jamjam serve ./public
+nabe serve ./public
 ```
 
 Or share a running development server:
 
 ```sh
-jamjam proxy http://127.0.0.1:5173
+nabe proxy http://127.0.0.1:5173
 ```
 
 Both print a party token. Anyone with the token can see the site and
@@ -35,7 +36,7 @@ comment until the share stops; restart the share to revoke it. Others join
 with:
 
 ```sh
-jamjam join <token> [--name <name>]
+nabe join <token> [--name <name>]
 ```
 
 `join` opens `http://<session>.localhost:<port>/` in the browser (Chromium
@@ -46,5 +47,5 @@ or Firefox; Safari does not resolve `*.localhost`). Then:
 3. **Press `/`** for a page-level comment when focus is not in a field.
 4. **Press Enter** to send; Shift+Enter adds a newline.
 
-The joiner keeps its key in `~/.config/jamjam/key`; the share shows its
+The joiner keeps its key in `~/.config/nabe/key`; the share shows its
 name next to a fingerprint of that key.

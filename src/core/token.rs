@@ -93,8 +93,8 @@ impl fmt::Debug for PartySecret {
     }
 }
 
-/// `<share key>:<secret>`, as printed by `jamjam share` and taken by
-/// `jamjam join`.
+/// `<share key>:<secret>`, as printed by `nabe share` and taken by
+/// `nabe join`.
 #[derive(Clone, Debug)]
 pub(crate) struct PartyToken {
     pub(crate) share: EndpointKey,

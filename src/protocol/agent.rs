@@ -1,4 +1,4 @@
-//! The runtime socket between `jamjam recv` / `jamjam send` and the running
+//! The runtime socket between `nabe recv` / `nabe send` and the running
 //! share: newline-delimited JSON, one [`Envelope`] per line, both ways.
 //!
 //! - recv: the client sends `recv`; when comments are pending the share

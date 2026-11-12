@@ -198,7 +198,7 @@ impl McpClient {
             params: json!({
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": { "name": "jamjam", "version": env!("CARGO_PKG_VERSION") },
+                "clientInfo": { "name": "nabe", "version": env!("CARGO_PKG_VERSION") },
             }),
         };
         let reply = self.post(None, &initialize).await?;

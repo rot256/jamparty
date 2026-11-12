@@ -1,4 +1,4 @@
-//! The joiner's persistent iroh key: `~/.config/jamjam/key` (or under
+//! The joiner's persistent iroh key: `~/.config/nabe/key` (or under
 //! `$XDG_CONFIG_HOME`), 64 hex characters, mode 0600, created on first use.
 
 use std::{
@@ -22,7 +22,7 @@ pub(crate) fn default_path() -> Result<PathBuf, BoxError> {
             PathBuf::from(home).join(".config")
         }
     };
-    Ok(config.join("jamjam").join("key"))
+    Ok(config.join("nabe").join("key"))
 }
 
 /// Reads the key at `path`, creating it first if it does not exist. A key
@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn created_once_with_mode_0600() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("jamjam/key");
+        let path = dir.path().join("nabe/key");
         let first = load_or_create(&path).unwrap();
         let again = load_or_create(&path).unwrap();
         assert_eq!(first.public(), again.public());

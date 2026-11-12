@@ -1532,39 +1532,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
-name = "jamjam"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "clap",
- "data-encoding",
- "futures-util",
- "getrandom 0.4.3",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-staticfile",
- "hyper-util",
- "iroh",
- "jiff",
- "nix",
- "notify",
- "percent-encoding",
- "proptest",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "jiff"
 version = "0.2.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1905,6 +1872,39 @@ dependencies = [
  "n0-error",
  "n0-future",
  "slotmap",
+]
+
+[[package]]
+name = "nabe"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "data-encoding",
+ "futures-util",
+ "getrandom 0.4.3",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-staticfile",
+ "hyper-util",
+ "iroh",
+ "jiff",
+ "nix",
+ "notify",
+ "percent-encoding",
+ "proptest",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]

@@ -74,7 +74,7 @@ async fn host_and_cross_site_rules() {
     assert_eq!(csp, ["frame-ancestors 'self'"]);
 
     // Another site cannot read pages, the status or the event stream.
-    for path in ["/", "/_jamjam/api/status", "/_jamjam/api/events"] {
+    for path in ["/", "/_nabe/api/status", "/_nabe/api/events"] {
         let reply = send("GET", path, &cross_fetch).await;
         assert_eq!(reply.status, 403, "{path}");
         assert!(reply.headers.contains_key(header::CONTENT_SECURITY_POLICY));
@@ -93,14 +93,14 @@ async fn host_and_cross_site_rules() {
     ];
     for headers in [&post_navigate[..], &cross_post[..]] {
         assert_eq!(
-            send("POST", "/_jamjam/api/comments", headers).await.status,
+            send("POST", "/_nabe/api/comments", headers).await.status,
             403
         );
     }
     // Same-origin writes need the exact Origin.
     let same_site_wrong_origin = [("sec-fetch-site", "same-site"), ("origin", origin.as_str())];
     assert_eq!(
-        send("POST", "/_jamjam/api/comments", &same_site_wrong_origin)
+        send("POST", "/_nabe/api/comments", &same_site_wrong_origin)
             .await
             .status,
         403
@@ -108,7 +108,7 @@ async fn host_and_cross_site_rules() {
     assert_eq!(
         send(
             "POST",
-            "/_jamjam/api/comments",
+            "/_nabe/api/comments",
             &[("origin", "http://evil.example")]
         )
         .await
@@ -119,15 +119,11 @@ async fn host_and_cross_site_rules() {
     let upgrade = [("connection", "upgrade"), ("upgrade", "websocket")];
     assert_eq!(send("GET", "/socket", &upgrade).await.status, 403);
     // Reserved paths take only their method.
-    assert_eq!(send("GET", "/_jamjam/api/comments", &[]).await.status, 405);
+    assert_eq!(send("GET", "/_nabe/api/comments", &[]).await.status, 405);
     assert_eq!(
-        send(
-            "POST",
-            "/_jamjam/api/status",
-            &[("origin", origin.as_str())]
-        )
-        .await
-        .status,
+        send("POST", "/_nabe/api/status", &[("origin", origin.as_str())])
+            .await
+            .status,
         405
     );
     // A same-origin POST with the right Origin reaches the handler, which
@@ -135,7 +131,7 @@ async fn host_and_cross_site_rules() {
     assert_eq!(
         send(
             "POST",
-            "/_jamjam/api/comments",
+            "/_nabe/api/comments",
             &[
                 ("origin", origin.as_str()),
                 ("sec-fetch-site", "same-origin")

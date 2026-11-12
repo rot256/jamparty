@@ -1,4 +1,4 @@
-//! `jamjam recv` and `jamjam send` over the runtime socket: comments reach
+//! `nabe recv` and `nabe send` over the runtime socket: comments reach
 //! the agent and count as delivered once printed; answers reach every
 //! joiner.
 
@@ -142,7 +142,7 @@ async fn answers_reach_every_joiner_and_later_ones() {
     let id = share.queued().first().unwrap().id;
 
     let path = share.socket_path();
-    send(path, "**Done**: see [the title](jamjam:%23title)", Some(id))
+    send(path, "**Done**: see [the title](nabe:%23title)", Some(id))
         .await
         .unwrap();
     let event = next_event(&mut bob_events, "answer").await;

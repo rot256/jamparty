@@ -1,6 +1,6 @@
 //! komtar's restricted Markdown renderer for answers: raw HTML is shown as
 //! text, images are dropped (their alt text stays), and links keep only
-//! `http`, `https`, `mailto` and `jamjam:` (element links) destinations.
+//! `http`, `https`, `mailto` and `nabe:` (element links) destinations.
 
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html};
 
@@ -60,7 +60,7 @@ fn safe_link(destination: &str) -> bool {
             .get(..colon)
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("http" | "https" | "mailto" | "jamjam")
+        Some("http" | "https" | "mailto" | "nabe")
     )
 }
 
@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn markdown_escapes_html_and_rejects_unsafe_links() {
         let html = render(
-            "- one\n- two\n\n<script>alert(1)</script>\n\n[bad](JavaScript:alert(1)) [data](data:text/html,bad) [good](https://example.com) [element](jamjam:%23intro%20.item) ![alt text](https://example.com/image.png)",
+            "- one\n- two\n\n<script>alert(1)</script>\n\n[bad](JavaScript:alert(1)) [data](data:text/html,bad) [good](https://example.com) [element](nabe:%23intro%20.item) ![alt text](https://example.com/image.png)",
         );
         assert!(html.contains("<ul>"));
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
@@ -80,7 +80,7 @@ mod tests {
         assert!(html.contains("bad"));
         assert!(html.contains("data"));
         assert!(html.contains("href=\"https://example.com\""));
-        assert!(html.contains("href=\"jamjam:%23intro%20.item\""));
+        assert!(html.contains("href=\"nabe:%23intro%20.item\""));
         assert!(html.contains("alt text"));
         assert!(!html.contains("<img"));
     }

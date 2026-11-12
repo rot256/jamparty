@@ -50,7 +50,7 @@ const ONLINE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "jamjam",
+    name = "nabe",
     version,
     about = "Share a site under development and collect comments on it"
 )]
@@ -84,7 +84,7 @@ enum Command {
 
     /// Join a share and open it in the browser.
     Join {
-        /// The party token printed by `jamjam serve` or `jamjam proxy`, or
+        /// The party token printed by `nabe serve` or `nabe proxy`, or
         /// `-` to read it from stdin (out of `ps` and shell history).
         #[arg(value_parser = parse_token)]
         token: TokenArg,
@@ -125,12 +125,12 @@ enum Command {
 #[derive(Debug, Args)]
 struct ShareNet {
     /// No relays or address lookup: bind 127.0.0.1 and print the address
-    /// for `jamjam join --share-addr`.
+    /// for `nabe join --share-addr`.
     #[arg(long, hide = true)]
     local: bool,
 }
 
-/// Where comments go: the t3 target, a command, or (neither) `jamjam recv`.
+/// Where comments go: the t3 target, a command, or (neither) `nabe recv`.
 #[derive(Debug, Args)]
 struct Delivery {
     /// T3 thread to deliver comments to (default: $T3CODE_THREAD_ID with --t3-url).
@@ -150,7 +150,7 @@ struct Delivery {
     command: Vec<OsString>,
 }
 
-/// Where `jamjam join` gets its token.
+/// Where `nabe join` gets its token.
 #[derive(Clone, Debug)]
 enum TokenArg {
     Given(PartyToken),
@@ -266,7 +266,7 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
 
 /// The target the delivery options select, and a note for the startup
 /// output; `site` is what is shared, `env_thread` is `T3CODE_THREAD_ID`.
-/// jamjam probes nothing: missing pieces are errors naming the option.
+/// nabe probes nothing: missing pieces are errors naming the option.
 fn target(
     delivery: Delivery,
     site: &str,
@@ -323,7 +323,7 @@ fn target(
         return Ok((Target::Command(command), None));
     }
     let note = env_thread.map(|_| {
-        "T3CODE_THREAD_ID is set, but without --t3-url comments wait for jamjam recv".to_owned()
+        "T3CODE_THREAD_ID is set, but without --t3-url comments wait for nabe recv".to_owned()
     });
     Ok((Target::Recv, note))
 }
@@ -337,12 +337,12 @@ fn is_loopback(host: &str) -> bool {
 
 fn net_config(discovery: Discovery) -> Result<NetConfig, BoxError> {
     let mut net = NetConfig::new(discovery);
-    if let Some(relay) = std::env::var_os("JAMJAM_RELAY").filter(|relay| !relay.is_empty()) {
-        let relay = relay.to_str().ok_or("JAMJAM_RELAY is not valid UTF-8")?;
+    if let Some(relay) = std::env::var_os("NABE_RELAY").filter(|relay| !relay.is_empty()) {
+        let relay = relay.to_str().ok_or("NABE_RELAY is not valid UTF-8")?;
         net.relay = Some(
             relay
                 .parse::<RelayUrl>()
-                .map_err(|error| format!("JAMJAM_RELAY: {error}"))?,
+                .map_err(|error| format!("NABE_RELAY: {error}"))?,
         );
     }
     Ok(net)
@@ -362,7 +362,7 @@ async fn share(
     };
     let (mut target, note) = target(delivery, site, std::env::var_os("T3CODE_THREAD_ID"))?;
     let goes_to = match &mut target {
-        Target::Recv => "jamjam recv".to_owned(),
+        Target::Recv => "nabe recv".to_owned(),
         Target::Command(command) => format!(
             "the command {}",
             command
@@ -397,20 +397,20 @@ async fn share(
     {
         tracing::warn!("no relay reachable yet; joiners may not find this share");
     }
-    println!("jamjam: sharing {site}{detail}");
-    println!("jamjam: token: {}", share.token());
+    println!("nabe: sharing {site}{detail}");
+    println!("nabe: token: {}", share.token());
     println!(
-        "jamjam: warning: anyone with the token can see the site and send comments to the agent until this share stops"
+        "nabe: warning: anyone with the token can see the site and send comments to the agent until this share stops"
     );
-    println!("jamjam: share id: {}", share.id());
-    println!("jamjam: comments go to {goes_to}");
+    println!("nabe: share id: {}", share.id());
+    println!("nabe: comments go to {goes_to}");
     if let Some(note) = note {
-        println!("jamjam: note: {note}");
+        println!("nabe: note: {note}");
     }
-    println!("jamjam: agents: run jamjam agent for the guides");
+    println!("nabe: agents: run nabe agent for the guides");
     if discovery == Discovery::Direct {
         for addr in share.direct_addrs() {
-            println!("jamjam: direct address: {addr}");
+            println!("nabe: direct address: {addr}");
         }
     }
     shutdown_signal().await?;
@@ -440,7 +440,7 @@ async fn join(
     })
     .await?;
     let url = joiner.url();
-    println!("jamjam: open {url}");
+    println!("nabe: open {url}");
     if !no_open {
         open_browser(&url);
     }

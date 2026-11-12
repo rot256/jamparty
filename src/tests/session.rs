@@ -54,7 +54,7 @@ async fn comments_are_queued_with_the_author_from_admission() {
     assert_eq!(post_comment(&joiner, "{}").await.status, 400);
     assert_eq!(share.queued().len(), 1);
 
-    let status = get(&joiner, "/_jamjam/api/status").await;
+    let status = get(&joiner, "/_nabe/api/status").await;
     assert!(status.body.contains("\"pending\":1"), "{}", status.body);
     assert!(
         status.body.contains("\"connected\":true"),
@@ -101,7 +101,7 @@ async fn presence_follows_two_joiners() {
     assert_eq!(share.presence().len(), 2);
 
     // Presence also streams to pages.
-    let events = local(&alice, "GET", "/_jamjam/api/events")
+    let events = local(&alice, "GET", "/_nabe/api/events")
         .body(Full::default())
         .unwrap();
     let response = send(alice.local_addr(), events).await;

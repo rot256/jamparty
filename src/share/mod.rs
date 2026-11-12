@@ -1,4 +1,4 @@
-//! The share (`jamjam serve` / `jamjam proxy`): an iroh endpoint that
+//! The share (`nabe serve` / `nabe proxy`): an iroh endpoint that
 //! admits joiners presenting the party secret, serves their request
 //! streams and takes their comments.
 
@@ -134,7 +134,7 @@ impl Share {
             secret: PartySecret::generate(&SystemRng),
         };
         let (listener, socket) = runtime::listen(&runtime_dir, &token.share.sid())?;
-        let endpoint = bind(&net, key, Accept::Jamjam).await?;
+        let endpoint = bind(&net, key, Accept::Nabe).await?;
         let shared = Arc::new(Shared {
             token,
             site,
@@ -164,7 +164,7 @@ impl Share {
         &self.shared.token
     }
 
-    /// The id `jamjam recv --share` and `jamjam send --share` take.
+    /// The id `nabe recv --share` and `nabe send --share` take.
     #[must_use]
     pub(crate) fn id(&self) -> Sid {
         self.shared.token.share.sid()

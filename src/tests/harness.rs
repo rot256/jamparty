@@ -222,7 +222,7 @@ pub(crate) async fn post_comment(joiner: &Joiner, body: &str) -> Reply {
             .or_insert_with(|| uuid::Uuid::new_v4().to_string().into());
     }
     let body = json.to_string();
-    let request = local(joiner, "POST", "/_jamjam/api/comments")
+    let request = local(joiner, "POST", "/_nabe/api/comments")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ORIGIN, joiner.origin().origin())
         .header("sec-fetch-site", "same-origin")
@@ -233,7 +233,7 @@ pub(crate) async fn post_comment(joiner: &Joiner, body: &str) -> Reply {
 
 /// Opens the joiner's event stream.
 pub(crate) async fn events(joiner: &Joiner) -> Incoming {
-    let request = local(joiner, "GET", "/_jamjam/api/events")
+    let request = local(joiner, "GET", "/_nabe/api/events")
         .body(Full::default())
         .unwrap();
     let response = send(joiner.local_addr(), request).await;

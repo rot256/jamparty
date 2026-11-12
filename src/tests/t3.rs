@@ -308,31 +308,31 @@ async fn the_token_is_read_at_each_delivery_and_sessions_are_renewed() {
 }
 
 /// Against a real T3: reads the thread and sends one message to it. Runs
-/// only when `JAMJAM_T3_URL`, `JAMJAM_T3_TOKEN_FILE` and `JAMJAM_T3_THREAD`
+/// only when `NABE_T3_URL`, `NABE_T3_TOKEN_FILE` and `NABE_T3_THREAD`
 /// are set (use a throwaway thread):
 ///
 /// ```sh
-/// JAMJAM_T3_URL=http://127.0.0.1:<port>/mcp JAMJAM_T3_TOKEN_FILE=<file> \
-///   JAMJAM_T3_THREAD=<thread id> cargo test t3_contract -- --nocapture
+/// NABE_T3_URL=http://127.0.0.1:<port>/mcp NABE_T3_TOKEN_FILE=<file> \
+///   NABE_T3_THREAD=<thread id> cargo test t3_contract -- --nocapture
 /// ```
 #[tokio::test]
 async fn t3_contract() {
-    let vars = ["JAMJAM_T3_URL", "JAMJAM_T3_TOKEN_FILE", "JAMJAM_T3_THREAD"].map(std::env::var);
+    let vars = ["NABE_T3_URL", "NABE_T3_TOKEN_FILE", "NABE_T3_THREAD"].map(std::env::var);
     let [Ok(url), Ok(token_file), Ok(thread)] = vars else {
-        eprintln!("t3_contract skipped: set JAMJAM_T3_URL, JAMJAM_T3_TOKEN_FILE, JAMJAM_T3_THREAD");
+        eprintln!("t3_contract skipped: set NABE_T3_URL, NABE_T3_TOKEN_FILE, NABE_T3_THREAD");
         return;
     };
     let mut target = T3Target {
         url: url.parse().unwrap(),
         token_file: token_file.into(),
         thread,
-        site: "the jamjam contract test".to_owned(),
+        site: "the nabe contract test".to_owned(),
     };
     let thread = t3::open(&target).await.unwrap();
     eprintln!("t3_contract: thread {:?} ({})", thread.title, thread.id);
     target.thread = thread.id;
     let (result, detail) = T3Delivery::new(target)
-        .deliver(&[comment("jamjam contract test: ignore this message.")])
+        .deliver(&[comment("nabe contract test: ignore this message.")])
         .await;
     assert_eq!(result, DeliveryResult::Ok, "{detail}");
 }

@@ -1,6 +1,6 @@
 # Repository instructions
 
-`jamjam` is the hosted, multi-user successor of komtar; DESIGN.md describes
+`nabe` is the hosted, multi-user successor of komtar; DESIGN.md describes
 the target and its implementation plan. Keep the runtime as one
 self-contained binary: JavaScript and CSS belong in `assets/client.js` and are
 embedded with `include_str!`.
@@ -13,6 +13,9 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 npm ci
 npm run lint
+uv run ruff format --check .
+uv run ruff check .
+uv run basedpyright
 uv run pytest
 cargo build --release
 ```

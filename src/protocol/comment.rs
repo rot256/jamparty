@@ -75,7 +75,7 @@ impl From<Draft> for DraftFields {
 }
 
 /// A queued comment, as delivered to the target (one JSON object each).
-/// Built by the share; read back only by `jamjam recv` from its own share.
+/// Built by the share; read back only by `nabe recv` from its own share.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Comment {

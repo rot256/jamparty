@@ -89,7 +89,7 @@ fn table() {
         ("site put", fetch(Method::Other, "/api/x"), Ok(Route::Proxy)),
         (
             "client.js",
-            fetch(Method::Get, "/_jamjam/client.js"),
+            fetch(Method::Get, "/_nabe/client.js"),
             Ok(Route::Proxy),
         ),
         ("upgrade", upgrade(Some("same-origin")), Ok(Route::Proxy)),
@@ -152,17 +152,17 @@ fn table() {
         ),
         (
             "trailing slash",
-            fetch(Method::Post, "/_jamjam/api/comments/"),
+            fetch(Method::Post, "/_nabe/api/comments/"),
             Ok(Route::Proxy),
         ),
         (
             "encoded",
-            fetch(Method::Post, "/%5Fjamjam/api/comments"),
+            fetch(Method::Post, "/%5Fnabe/api/comments"),
             Ok(Route::Proxy),
         ),
         (
             "double slash",
-            fetch(Method::Post, "//_jamjam/api/comments"),
+            fetch(Method::Post, "//_nabe/api/comments"),
             Ok(Route::Proxy),
         ),
     ];

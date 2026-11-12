@@ -1,5 +1,5 @@
 //! The joiner's local HTTP server on `127.0.0.1`: checks each request with
-//! the core decision, answers jamjam's own paths and forwards everything
+//! the core decision, answers nabe's own paths and forwards everything
 //! else to the share, one iroh stream per request.
 
 use std::{convert::Infallible, sync::Arc, time::Duration};

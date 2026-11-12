@@ -1,7 +1,7 @@
 //! The runtime directory and the per-share Unix sockets in it, which
-//! `jamjam recv` and `jamjam send` use to reach a running share.
+//! `nabe recv` and `nabe send` use to reach a running share.
 //!
-//! The directory is `$XDG_RUNTIME_DIR/jamjam/` or `~/.cache/jamjam/run/`,
+//! The directory is `$XDG_RUNTIME_DIR/nabe/` or `~/.cache/nabe/run/`,
 //! mode 0700 and owned by the user; each share's socket is `<id>.sock`
 //! (the id is the share's `<sid>`), mode 0600, removed when the share stops.
 
@@ -19,10 +19,10 @@ use crate::{BoxError, core::ids::Sid};
 /// The runtime directory, from the environment.
 pub(crate) fn default_dir() -> Result<PathBuf, BoxError> {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()) {
-        return Ok(PathBuf::from(dir).join("jamjam"));
+        return Ok(PathBuf::from(dir).join("nabe"));
     }
     let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".cache/jamjam/run"))
+    Ok(PathBuf::from(home).join(".cache/nabe/run"))
 }
 
 /// Creates `dir` (mode 0700) if needed and checks it.
@@ -157,7 +157,7 @@ pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, 
     }
 }
 
-const NO_SHARE: &str = "no share is running (start one with jamjam serve or jamjam proxy)";
+const NO_SHARE: &str = "no share is running (start one with nabe serve or nabe proxy)";
 
 #[cfg(test)]
 mod tests {

@@ -29,7 +29,7 @@ const EVENT_CAPACITY: usize = 256;
 /// Answers kept for pages that load later.
 const MAX_ANSWERS: usize = 100;
 
-/// What `/_jamjam/api/status` reports.
+/// What `/_nabe/api/status` reports.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct View {
     /// Connected to the share and admitted.
@@ -64,7 +64,7 @@ pub(crate) struct Answer {
     pub(crate) page: Option<String>,
 }
 
-/// One event on `/_jamjam/api/events`.
+/// One event on `/_nabe/api/events`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum Event {

@@ -32,7 +32,7 @@ pub(crate) struct NetConfig {
     pub(crate) discovery: Discovery,
     pub(crate) keep_alive: Duration,
     pub(crate) idle_timeout: Duration,
-    /// A self-hosted relay instead of n0's (`JAMJAM_RELAY`); public only.
+    /// A self-hosted relay instead of n0's (`NABE_RELAY`); public only.
     pub(crate) relay: Option<RelayUrl>,
 }
 
@@ -72,7 +72,7 @@ pub(crate) fn generate_key(rng: &dyn Rng) -> SecretKey {
     SecretKey::from_bytes(&random_array(rng))
 }
 
-/// Binds an endpoint with `key`; `accept` says whether it accepts jamjam
+/// Binds an endpoint with `key`; `accept` says whether it accepts nabe
 /// connections (the share) or only dials out (the joiner).
 pub(crate) async fn bind(
     config: &NetConfig,
@@ -87,7 +87,7 @@ pub(crate) async fn bind(
     let transport = match accept {
         // Before admission a joiner may open only its control stream, and
         // the share buffers little for it; [`admitted`] raises both.
-        Accept::Jamjam => transport
+        Accept::Nabe => transport
             .max_concurrent_bidi_streams(VarInt::from_u32(1))
             .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))
             .receive_window(VarInt::from_u32(UNADMITTED_WINDOW)),
@@ -107,7 +107,7 @@ pub(crate) async fn bind(
             .bind_addr("127.0.0.1:0")?,
     };
     let alpns = match accept {
-        Accept::Jamjam => vec![ALPN.to_vec()],
+        Accept::Nabe => vec![ALPN.to_vec()],
         Accept::Nothing => Vec::new(),
     };
     Ok(builder
@@ -120,7 +120,7 @@ pub(crate) async fn bind(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Accept {
-    Jamjam,
+    Nabe,
     Nothing,
 }
 

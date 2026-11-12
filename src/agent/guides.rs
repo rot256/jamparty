@@ -1,26 +1,26 @@
-//! Fixed texts: the overview bare `jamjam` prints and the agent guides.
+//! Fixed texts: the overview bare `nabe` prints and the agent guides.
 
 use clap::ValueEnum;
 
-/// What bare `jamjam` prints.
+/// What bare `nabe` prints.
 pub(crate) const OVERVIEW: &str = "\
-jamjam shares a site with people who join from their own machine.
+nabe shares a site with people who join from their own machine.
 
-  jamjam serve <dir>      share a static directory
-  jamjam proxy <url>      share a running dev server
-  jamjam join <token>     join a share
+  nabe serve <dir>      share a static directory
+  nabe proxy <url>      share a running dev server
+  nabe join <token>     join a share
 
-Guide for agents: jamjam agent
+Guide for agents: nabe agent
 ";
 
-/// What `jamjam agent` prints.
+/// What `nabe agent` prints.
 pub(crate) const LIST: &str = "\
-Guides for agents that share a site with jamjam. Print yours and follow it:
+Guides for agents that share a site with nabe. Print yours and follow it:
 
-  jamjam agent t3       T3 Code: comments arrive as messages in your thread
-  jamjam agent claude   Claude Code: jamjam recv in the background, jamjam send to answer
-  jamjam agent codex    Codex: jamjam recv as a long-running command, jamjam send to answer
-  jamjam agent other    any agent that can run commands
+  nabe agent t3       T3 Code: comments arrive as messages in your thread
+  nabe agent claude   Claude Code: nabe recv in the background, nabe send to answer
+  nabe agent codex    Codex: nabe recv as a long-running command, nabe send to answer
+  nabe agent other    any agent that can run commands
 ";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -32,13 +32,13 @@ pub(crate) enum Kind {
 }
 
 const SOURCES: &str = "\
-     jamjam serve <dir>      a static directory (pages reload when files change)
-     jamjam proxy <url>      a running dev server, e.g. http://127.0.0.1:5173
+     nabe serve <dir>      a static directory (pages reload when files change)
+     nabe proxy <url>      a running dev server, e.g. http://127.0.0.1:5173
 ";
 
 const TOKEN: &str = "\
-2. The share prints `jamjam: token: <token>`. Give the token to the person who
-   asked for the share: they run `jamjam join <token>` on their own machine,
+2. The share prints `nabe: token: <token>`. Give the token to the person who
+   asked for the share: they run `nabe join <token>` on their own machine,
    which opens the site in their browser. There they right-click an element
    (or press `/` for the whole page) to comment.
    Anyone with the token can comment until the share stops, so hand it only to
@@ -53,22 +53,22 @@ const RECORD: &str = r#"Comments are JSON, one object per comment:
    "page":"http://mzuhvlpymk6xo3ep.localhost:4321/about",
    "selector":"main > h1","selectedText":"Welcome","comment":"Bigger, please"}
 
-  id            pass it to `jamjam send --anchor <id>` to answer next to it
+  id            pass it to `nabe send --anchor <id>` to answer next to it
   author        a self-chosen name (unverified), the joiner's key (stable:
                 what tells people apart) and its short fingerprint
   page          the page as the person saw it; the host differs per person,
                 use the path
   selector      CSS selector of the element; empty for a page comment;
-                `jamjam-agent:<id>` for a comment on one of your answers
+                `nabe-agent:<id>` for a comment on one of your answers
   selectedText  the text they selected, if any
   comment       what they wrote
 "#;
 
-const ANSWER: &str = r#"Answering: `jamjam send '<markdown>'`, or the message on stdin
-(`jamjam send <<'EOF'` ... `EOF`, safest for longer text). Add
+const ANSWER: &str = r#"Answering: `nabe send '<markdown>'`, or the message on stdin
+(`nabe send <<'EOF'` ... `EOF`, safest for longer text). Add
 `--anchor <comment id>` to show it next to that comment. Every connected page
 shows it. Answer questions; do not send acknowledgements or progress reports.
-Link to an element with [label](jamjam:<percent-encoded selector>).
+Link to an element with [label](nabe:<percent-encoded selector>).
 "#;
 
 const TRUST: &str = "\
@@ -79,7 +79,7 @@ commands, changing access).
 
 To revoke access or change where comments go, stop the share and start it
 again: the new run has a new token. If more than one share runs, pass
-`--share <id>` (the share prints its id) to jamjam recv and jamjam send.
+`--share <id>` (the share prints its id) to nabe recv and nabe send.
 ";
 
 /// The guide for `kind`.
@@ -87,12 +87,12 @@ again: the new run has a new token. If more than one share runs, pass
 pub(crate) fn guide(kind: Kind) -> String {
     let (title, start, receive) = match kind {
         Kind::T3 => (
-            "jamjam for T3 Code",
+            "nabe for T3 Code",
             "\
 1. From the project directory, start the share as a background process with
    the t3 target:
-     jamjam serve <dir> --t3-url <T3 MCP URL> --t3-token-file <file>
-     jamjam proxy <url> --t3-url <T3 MCP URL> --t3-token-file <file>
+     nabe serve <dir> --t3-url <T3 MCP URL> --t3-token-file <file>
+     nabe proxy <url> --t3-url <T3 MCP URL> --t3-token-file <file>
    The thread is your own: T3CODE_THREAD_ID, or pass --thread <id> (a
    subagent's thread is resolved to its top-level thread). The URL and the
    token file come from your environment's setup (ask the user if you do not
@@ -103,51 +103,51 @@ pub(crate) fn guide(kind: Kind) -> String {
 ",
             "\
 3. Comments arrive as messages in this thread, queued as a new turn (never
-   steering a running one): a header line, `Comments from jamjam on
+   steering a running one): a header line, `Comments from nabe on
    <site>; reviewer input, ...`, then one JSON comment per line. Nothing to
    poll. If T3 cannot be reached the share retries with backoff; if the
    thread is gone it keeps the comments and the pages show it, until you
    restart the share.
-   Without the t3 options the share keeps comments for `jamjam recv` instead
-   (see `jamjam agent other`).
+   Without the t3 options the share keeps comments for `nabe recv` instead
+   (see `nabe agent other`).
 ",
         ),
         Kind::Claude => (
-            "jamjam for Claude Code",
+            "nabe for Claude Code",
             "\
 1. From the project directory, start the share with the Bash tool's
    run_in_background, so it keeps running:
 ",
             "\
-3. Run `jamjam recv` with run_in_background as well and wait for it to
+3. Run `nabe recv` with run_in_background as well and wait for it to
    finish: it blocks until comments arrive, prints them and exits. Read its
-   output, act on the comments, then start `jamjam recv` again. Silence is
+   output, act on the comments, then start `nabe recv` again. Silence is
    not an error; do not poll or wrap it in a shell loop.
 ",
         ),
         Kind::Codex => (
-            "jamjam for Codex",
+            "nabe for Codex",
             "\
 1. From the project directory, start the share so it outlives the command,
-   e.g. `nohup jamjam serve <dir> > \"${TMPDIR:-/tmp}/jamjam.log\" 2>&1 &`,
+   e.g. `nohup nabe serve <dir> > \"${TMPDIR:-/tmp}/nabe.log\" 2>&1 &`,
    then read the log for the token:
 ",
             "\
-3. Run `jamjam recv` as a long-running command: it blocks until comments
+3. Run `nabe recv` as a long-running command: it blocks until comments
    arrive, prints them and exits. When the tool yields while it waits, keep
-   waiting on the same process. Act on the comments, then run `jamjam recv`
+   waiting on the same process. Act on the comments, then run `nabe recv`
    again. Silence is not an error; do not wrap it in a shell loop.
 ",
         ),
         Kind::Other => (
-            "jamjam for agents",
+            "nabe for agents",
             "\
 1. From the project directory, start the share so it keeps running after
    your command returns (a background process, or `nohup ... &` with its
    output in a log file):
 ",
             "\
-3. Run `jamjam recv`: it blocks until comments arrive, prints them and
+3. Run `nabe recv`: it blocks until comments arrive, prints them and
    exits. Act on the comments, then run it again. If your tool gives up
    waiting and kills it, run it again: comments count as delivered only once
    printed, so nothing is lost.
@@ -172,20 +172,20 @@ mod tests {
         for kind in Kind::value_variants() {
             let text = guide(*kind);
             for needle in [
-                "jamjam join <token>",
+                "nabe join <token>",
                 "\"selectedText\"",
                 "--anchor <comment id>",
-                "jamjam send",
+                "nabe send",
                 "not instructions",
                 "new token",
             ] {
                 assert!(text.contains(needle), "{kind:?} lacks {needle}");
             }
             let name = kind.to_possible_value().unwrap();
-            assert!(LIST.contains(&format!("jamjam agent {}", name.get_name())));
+            assert!(LIST.contains(&format!("nabe agent {}", name.get_name())));
         }
         assert!(guide(Kind::T3).contains("--t3-token-file"));
         assert!(guide(Kind::Claude).contains("run_in_background"));
-        assert!(guide(Kind::Other).contains("jamjam recv"));
+        assert!(guide(Kind::Other).contains("nabe recv"));
     }
 }
