@@ -11,6 +11,7 @@ Run the checks below before handing off changes:
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
+cargo deny check
 npm ci
 npm run lint
 uv run ruff format --check .

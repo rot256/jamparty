@@ -1,0 +1,181 @@
+name: CI
+
+# The checks from AGENTS.md, plus cargo-deny (RustSec advisories, licenses,
+# bans, sources) and zizmor (these workflows). Runs on pushes to main, on
+# pull requests, and daily for new advisories; release.yml calls it before
+# building a release.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    # Daily, for advisories published against unchanged dependencies.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  # Not github.workflow: when release.yml calls this, that is "Release",
+  # and a group matching the caller's would wait on the caller forever.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail every compile step, including release builds, on any warning.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the repository
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --locked
+
+      - name: Check crates.io package
+        run: cargo publish --locked --dry-run
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+  javascript:
+    name: JavaScript
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the repository
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run --if-present typecheck
+
+  python:
+    name: Python
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the repository
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check formatting
+        run: uv run --locked ruff format --check .
+
+      - name: Lint
+        run: uv run --locked ruff check .
+
+      - name: Type check
+        run: uv run --locked basedpyright
+
+  browser:
+    name: Browser tests
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the repository
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+
+      - name: Install dependencies and browsers
+        run: |
+          uv sync --locked
+          uv run --locked playwright install --with-deps chromium firefox
+
+      # The tests build the binary themselves (cargo build).
+      - name: Run browser tests
+        run: uv run --locked pytest
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the repository
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Advisories (RustSec), licenses, bans and sources, per deny.toml.
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+
+  zizmor:
+    name: zizmor
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the repository; online audits read action metadata
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Audit workflows
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          version: 1.31.1
+          advanced-security: false
+          annotations: true
