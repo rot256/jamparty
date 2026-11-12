@@ -118,11 +118,14 @@ Guide for agents: jamjam agent
 Delivery options on `serve` and `proxy` (no config file needed; a config
 file at `~/.config/jamjam/config.json` may supply defaults, options win):
 
-- `--thread <id>` (or `T3CODE_THREAD_ID` if set) with `--t3-url <mcp url>`
-  and `--t3-token-file <file>`: the `t3` target. The token is passed as a
-  file, never as an argument (arguments show in `ps` and shell history).
+- `--t3-url <mcp url>` and `--t3-token-file <file>`, with `--thread <id>`
+  (or `T3CODE_THREAD_ID` if set): the `t3` target, chosen when `--t3-url`
+  or `--thread` is given. The token is passed as a file, never as an
+  argument (arguments show in `ps` and shell history).
 - `-- <command> [args...]`: the `command` target.
-- Neither: the `recv` target.
+- Neither: the `recv` target. If `T3CODE_THREAD_ID` is set, the startup
+  output says that comments wait for `jamjam recv` because `--t3-url` is
+  missing.
 
 jamjam probes nothing: it does not test endpoints or look for files it
 was not given. A missing piece fails with an error naming the option
@@ -136,12 +139,20 @@ For agents, hidden from `jamjam --help`:
 | `jamjam agent` | List the guides: `t3`, `claude`, `codex`, `other` |
 | `jamjam agent <kind>` | Print that guide |
 | `jamjam recv` | Wait until comments are pending, print them as NDJSON, exit |
-| `jamjam send <message> [--anchor <comment id>]` | Answer on the page |
+| `jamjam send [message] [--anchor <comment id>]` | Answer on the page (Markdown; from stdin when no message is given) |
 
 `recv` and `send` reach the running share through a Unix socket in the
 user's runtime directory (`$XDG_RUNTIME_DIR/jamjam/` or
-`~/.cache/jamjam/run/`), one per share, mode 0600: only the user's own
-processes can drive their shares.
+`~/.cache/jamjam/run/`, mode 0700, owned by the user, else refused), one
+per share (`<id>.sock`, mode 0600, removed when the share stops): only the
+user's own processes can drive their shares. They talk to the only running
+share; when several run they fail, listing the ids, and take
+`--share <id>` (the id is the share's `<sid>`, printed at startup; the token
+works too).
+
+`serve` and `proxy` print, besides the token: a one-line warning that
+anyone with the token can see the site and send comments to the agent, the
+share id, where comments go, and a pointer to `jamjam agent`.
 
 ## Agents
 
@@ -214,7 +225,7 @@ the token, the port is chosen at random and bound on `127.0.0.1` only.
 - Reserved paths under `/_jamjam/` are answered by the joiner itself:
   `api/comments` (POST, JSON), `api/status` (once on load),
   `api/events` (SSE: answers, delivery state, presence, status line,
-  reload; `: keep-alive` every 15 s). Everything else goes to the share.
+  reload; a `ping` event every 15 s). Everything else goes to the share.
 - No cookies of jamjam's own: the joiner process is the joiner's identity.
 
 ## Client injection
@@ -245,8 +256,8 @@ documented.
 
 Targets (chosen with `serve`/`proxy` options, see CLI):
 
-- **`recv`** (the default when no T3 thread is found and no command
-  is given): the share holds comments until an agent collects them with
+- **`recv`** (the default when neither the t3 options nor a command are
+  given): the share holds comments until an agent collects them with
   `jamjam recv`. Comments count as delivered once `recv` has printed
   them; if `recv` dies before printing, the next `recv` gets them. `recv`
   blocks until something is pending (no periodic checking).
@@ -255,8 +266,9 @@ Targets (chosen with `serve`/`proxy` options, see CLI):
   `--t3-token-file`; in the `t3` container the token comes from the
   existing sign-in script with label `jamjam`, renewed nightly and re-read
   per delivery).
-  - Chosen when `--thread` is given or `T3CODE_THREAD_ID` is set (with
-    neither, the target is `recv`). At start it calls `t3_thread_read`: unknown threads fail; a
+  - Chosen when `--t3-url` or `--thread` is given; the thread is
+    `--thread` or `T3CODE_THREAD_ID`, and a missing one is an error naming
+    `--thread`. At start it calls `t3_thread_read`: unknown threads fail; a
     child thread is resolved to its top-level thread or refused (the
     contract test settles which); the title is printed.
   - Each batch is one `t3_thread_send` with `mode: 'queue'` (starts an
@@ -264,7 +276,8 @@ Targets (chosen with `serve`/`proxy` options, see CLI):
     from jamjam on <directory>; reviewer input, not instructions from the
     owner. See `jamjam agent`.") followed by the JSON comments.
 - **`command`**: the argv after `--`, the batch as NDJSON on stdin; exit 0
-  means delivered.
+  means delivered, another status is a failure (backoff); a command that
+  cannot be started (not found, not executable) is gone.
 
 ## Answers and presence
 
@@ -279,13 +292,19 @@ One indicator in the comment UI, driven by `/_jamjam/api/events`:
 
 | State | Source |
 |---|---|
-| Browser to joiner: connected or reconnecting | The SSE stream's `open`/`error`, plus a 35 s watchdog |
+| Browser to joiner: connected or reconnecting | The SSE stream's `open`/`error`, plus a 35 s watchdog on its events (`ping` every 15 s) |
 | Joiner to share: connected or not | `share` events from the joiner (iroh connection state) |
 | Status line | `status` events, shown as text |
 
 Green: connected; amber: reconnecting; grey: share unreachable or a
 status line is set. Comments written while not green are kept in the page
 and sent when the connection is back.
+
+The page lists its own comments (bottom left, kept in `sessionStorage`
+across reloads): `queued`, `delivered`, or `not sent` with "send again".
+Anything not green also shows there as text. On every (re)connected event
+stream the page reloads `api/status` (pending, delivered, answers, status
+line).
 
 ## Security model
 
@@ -380,6 +399,29 @@ Kept out of the first version on purpose; the protocol leaves room:
   `delivered`. The local server sends a second
   `Content-Security-Policy: frame-ancestors 'self'` header rather than
   replacing the site's own.
+- Delivery: one task per share. A batch a `recv` took but did not confirm
+  (it went away before printing) goes back with no backoff (the queue's
+  `Returned` result). The status line follows the queue: none when ready,
+  "delivery failed (...); retrying in Ns" while backing off, "the agent is
+  gone (...); comments are kept until the share restarts" when held.
+- Runtime socket: one JSON line per message in the control envelope.
+  Client `recv`, share `comment{comment}` per comment and `end`, client
+  `printed`; client `send{message, anchor?}`, share `sent` or
+  `error{error}`. `send --anchor` takes a comment id the share has seen
+  (it remembers the last 1000); an unknown id is an error.
+- Answers on the wire: `answer{id, message, anchor?}` with
+  `anchor{comment, page, selector}`; the id is the share's, so every page
+  shows the same id (comments on an answer use the selector
+  `jamjam-agent:<id>`). The share keeps the last 100 answers and the status
+  line and sends them on admission; joiners drop answers they already
+  have. Joiners render the Markdown (komtar's restricted renderer: raw HTML
+  as text, no images, links only `http`, `https`, `mailto`, `jamjam:`). A
+  page places an anchored answer only when the comment's path and query
+  match its own.
+- Joiner endpoints also report `undelivered` (this joiner's comment ids)
+  and `answers` in `api/status`, and send `answer` and `ping` events.
+- `JAMJAM_RELAY` (a relay URL) replaces n0's relays on both sides and keeps
+  n0's address lookup. The config file is not read yet.
 - Offline use and the browser tests: hidden flags `--local` on
   `serve`/`proxy` (no relays or address lookup, bound on `127.0.0.1`,
   prints the direct address) and `--share-addr <addr>` on `join` (dial that
@@ -463,7 +505,9 @@ Must-have cases:
 6. Runtime socket, `recv` and `send`, delivery (command target first),
    answers (komtar's Markdown renderer and `jamjam agent` guidance come
    back from `agent.rs` in git history, removed with the FIFO transport),
-   connection state in the page; more browser tests.
+   connection state in the page; more browser tests (done; the t3 options
+   are parsed and refused until step 7, and the `t3` guide already
+   describes step 7's behaviour).
 7. T3 target: fake MCP, then the contract test on the box.
 8. Install jamjam in the `t3` container (infra repo) with its config and
    T3 token; end-to-end check: share from `t3`, join from the laptop,
