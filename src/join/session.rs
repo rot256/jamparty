@@ -35,6 +35,7 @@ const MAX_ANSWERS: usize = 100;
 
 /// What `/_jampot/api/status` reports.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct View {
     /// Connected to the share and admitted.
     pub(crate) connected: bool,
@@ -57,20 +58,24 @@ pub(crate) struct View {
 
 /// An answer as pages show it: rendered Markdown, and where it belongs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct Answer {
     pub(crate) id: CommentId,
     pub(crate) html: String,
     /// The selector of the comment it answers.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) anchor: Option<String>,
     /// The page that comment was made on.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) page: Option<String>,
 }
 
 /// One event on `/_jampot/api/events`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) enum Event {
     /// The connection to the share came up or went down.
     Share {

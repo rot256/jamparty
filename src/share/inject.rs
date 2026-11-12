@@ -12,10 +12,17 @@ use hyper::{
 use crate::share::body::{AppBody, RequestError, full_body};
 
 const MAX_HTML_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const EDIT_SCRIPT: &[u8] = b"\n<script type=\"module\" src=\"/_jampot/client.js\"></script>\n";
+/// The client learns this jampot's version from its URL, to name it when
+/// the joiner it talks to runs another.
+const EDIT_SCRIPT: &[u8] = concat!(
+    "\n<script type=\"module\" src=\"/_jampot/client.js?version=",
+    env!("CARGO_PKG_VERSION"),
+    "\"></script>\n"
+)
+.as_bytes();
 
 /// How the client is loaded: plain, or with the live-reload revision the
-/// page was served at.
+/// page was served at (both carry this jampot's version).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ClientMode {
     Edit,
@@ -111,7 +118,8 @@ fn client_script(mode: ClientMode) -> Cow<'static, [u8]> {
         ClientMode::Edit => Cow::Borrowed(EDIT_SCRIPT),
         ClientMode::Live(revision) => Cow::Owned(
             format!(
-                "\n<script type=\"module\" src=\"/_jampot/client.js?live={revision}\"></script>\n"
+                "\n<script type=\"module\" src=\"/_jampot/client.js?live={revision}&amp;version={}\"></script>\n",
+                env!("CARGO_PKG_VERSION")
             )
             .into_bytes(),
         ),
@@ -181,6 +189,8 @@ mod tests {
     #[test]
     fn marks_the_live_client_script() {
         let output = inject_client(b"<body>Hello</body>", ClientMode::Live(7));
-        assert!(String::from_utf8_lossy(&output).contains("client.js?live=7"));
+        let output = String::from_utf8_lossy(&output).into_owned();
+        let version = env!("CARGO_PKG_VERSION");
+        assert!(output.contains(&format!("client.js?live=7&amp;version={version}")));
     }
 }

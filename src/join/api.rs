@@ -19,7 +19,7 @@ use tokio::{
 
 use crate::{
     core::ids::CommentId,
-    join::session::{Event, Session},
+    join::session::{Event, Session, View},
     protocol::{
         MAX_LINE_BYTES,
         comment::{Draft, DraftFields},
@@ -32,10 +32,29 @@ use crate::{
 /// watchdog.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
+/// The version of these endpoints, as the page's client speaks them. The
+/// client is served by the share and the endpoints by the joiner, which
+/// may run another jampot; the client compares this number (from
+/// `api/status`) with its own and refuses to go on when they differ. Bump
+/// it on any change an older client or joiner cannot handle.
+pub(crate) const API_VERSION: u32 = 1;
+
+/// `api/status`: the endpoints' version and this jampot's, then the view.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+struct Status {
+    api: u32,
+    version: &'static str,
+    #[serde(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    view: View,
+}
+
 /// What a page posts: its ref for the comment (sent again unchanged on
 /// "send again") and the draft's fields.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 struct Submission {
     #[serde(rename = "ref")]
     reference: CommentRef,
@@ -48,13 +67,15 @@ struct Submission {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS))]
 struct Queued {
-    id: String,
+    id: CommentId,
     pending: usize,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS))]
 struct Limited429 {
     error: &'static str,
     retry_after_secs: u64,
@@ -114,15 +135,8 @@ async fn submit(
         .comment(reference, draft)
         .await
         .map_err(|_| not_sent())?;
-    let queued = |id: CommentId, pending| {
-        json_response(
-            StatusCode::ACCEPTED,
-            &Queued {
-                id: id.to_string(),
-                pending,
-            },
-        )
-    };
+    let queued =
+        |id: CommentId, pending| json_response(StatusCode::ACCEPTED, &Queued { id, pending });
     Ok(match outcome {
         AckOutcome::Queued { id } => queued(id, session.queued(id)),
         AckOutcome::Delivered { id } => queued(id, session.already_delivered(id)),
@@ -144,7 +158,14 @@ async fn submit(
 
 /// `GET api/status`: the session as the joiner sees it.
 pub(crate) fn status(session: &Session) -> Response<AppBody> {
-    json_response(StatusCode::OK, &session.view())
+    json_response(
+        StatusCode::OK,
+        &Status {
+            api: API_VERSION,
+            version: env!("CARGO_PKG_VERSION"),
+            view: session.view(),
+        },
+    )
 }
 
 /// `GET api/events`: the connection state first, then every event, with a
@@ -203,4 +224,82 @@ async fn next_frame(
 fn event_frame(event: &Event) -> Frame<Bytes> {
     let data = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_owned());
     Frame::data(Bytes::from(format!("data: {data}\n\n")))
+}
+
+/// The TypeScript the page's client is checked against
+/// (`client/src/generated/api.ts`), generated from the types above. The
+/// test fails when the file is stale; `JAMPOT_UPDATE_BINDINGS=1 cargo test
+/// bindings` rewrites it.
+#[cfg(test)]
+mod bindings {
+    use std::{env, fs, path::Path};
+
+    use ts_rs::{Config, TS};
+
+    use crate::{
+        core::{
+            ids::{CommentId, EndpointKey, Fingerprint},
+            name::JoinerName,
+        },
+        join::{
+            api::{API_VERSION, Limited429, Queued, Status, Submission},
+            session::{Answer, Event, View},
+        },
+        protocol::{
+            comment::Author,
+            control::{CommentRef, RefusedReason, StatusLine},
+        },
+        share::body::ErrorBody,
+    };
+
+    fn generate() -> String {
+        // Numbers in this API (revisions, counts, seconds) stay far below 2^53.
+        let cfg = Config::new().with_large_int("number");
+        let decls = [
+            CommentId::decl(&cfg),
+            CommentRef::decl(&cfg),
+            EndpointKey::decl(&cfg),
+            Fingerprint::decl(&cfg),
+            JoinerName::decl(&cfg),
+            StatusLine::decl(&cfg),
+            RefusedReason::decl(&cfg),
+            Author::decl(&cfg),
+            Answer::decl(&cfg),
+            View::decl(&cfg),
+            Status::decl(&cfg),
+            Event::decl(&cfg),
+            Submission::decl(&cfg),
+            Queued::decl(&cfg),
+            Limited429::decl(&cfg),
+            ErrorBody::decl(&cfg),
+        ];
+        let mut out = String::from(
+            "// Generated from the Rust types by `cargo test` (src/join/api.rs); do not edit.\n\
+             // Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings\n\n",
+        );
+        out.push_str(&format!("export const API_VERSION = {API_VERSION};\n"));
+        for decl in decls {
+            out.push_str("\nexport ");
+            out.push_str(&decl);
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn bindings_are_current() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("client/src/generated/api.ts");
+        let generated = generate();
+        if env::var_os("JAMPOT_UPDATE_BINDINGS").is_some() {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, &generated).unwrap();
+            return;
+        }
+        let current = fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            current == generated,
+            "{} is stale: run JAMPOT_UPDATE_BINDINGS=1 cargo test bindings",
+            path.display()
+        );
+    }
 }

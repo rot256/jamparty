@@ -624,8 +624,9 @@ Must-have cases:
 iroh 1.4.1 (transport), hyper and hyper-util (share serving, from
 komtar, and the joiner's local server), tokio, hyper's client with
 rustls (also the T3 MCP client), serde/serde_json, sha3, data-encoding,
-getrandom, subtle, rootcause (errors); proptest for tests; komtar's
-existing dependencies for static serving, file watching and Markdown.
+getrandom, subtle, rootcause (errors); proptest and ts-rs for tests;
+komtar's existing dependencies for static serving, file watching and
+Markdown.
 
 ## Open questions
 

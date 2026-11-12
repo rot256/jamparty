@@ -110,6 +110,7 @@ pub(crate) struct Anchor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) enum RefusedReason {
     /// Wrong secret: the token is wrong or from an earlier run.
     WrongSecret,
@@ -141,6 +142,7 @@ pub(crate) const MAX_COMMENT_REF: usize = 64;
 /// (the page uses a random UUID).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
 pub(crate) struct CommentRef(String);
 
 impl TryFrom<String> for CommentRef {
@@ -168,6 +170,7 @@ impl From<CommentRef> for String {
 /// A short status line shown on the page as is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
 pub(crate) struct StatusLine(String);
 
 impl TryFrom<String> for StatusLine {

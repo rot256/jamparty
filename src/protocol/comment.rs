@@ -22,6 +22,7 @@ pub(crate) const MAX_COMMENT: usize = 10_000;
 /// identifies it; `fingerprint` is its short form, for display only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct Author {
     pub(crate) name: JoinerName,
     pub(crate) fingerprint: Fingerprint,

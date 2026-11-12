@@ -17,6 +17,7 @@ use crate::core::{
 /// hyphenated form, as komtar's ids.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
 pub(crate) struct CommentId(Uuid);
 
 impl CommentId {
@@ -71,6 +72,7 @@ impl fmt::Debug for CommentId {
 /// `PublicKey`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
 pub(crate) struct EndpointKey(pub(crate) [u8; 32]);
 
 impl EndpointKey {
@@ -134,6 +136,7 @@ const FINGERPRINT_BYTES: usize = 5;
 /// A key's fingerprint: 10 lowercase hex characters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
 pub(crate) struct Fingerprint([u8; FINGERPRINT_BYTES]);
 
 impl TryFrom<String> for Fingerprint {

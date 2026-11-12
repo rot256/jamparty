@@ -102,7 +102,8 @@ async fn proxied_pages_and_streams_are_not_buffered() {
     let page = get(&joiner, "/").await;
     assert_eq!(page.status, 200);
     assert!(page.body.contains("Fixture"));
-    assert!(page.body.contains("/_jampot/client.js\""), "{}", page.body);
+    let script = format!("/_jampot/client.js?version={}\"", env!("CARGO_PKG_VERSION"));
+    assert!(page.body.contains(&script), "{}", page.body);
     assert_eq!(get(&joiner, "/nowhere").await.status, 404);
 
     // The first chunk arrives while the upstream still holds the second.

@@ -19,6 +19,7 @@ fn is_name_char(c: char) -> bool {
 /// 1 to 40 characters of `[A-Za-z0-9._@+-]`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
 pub(crate) struct JoinerName(String);
 
 impl JoinerName {
