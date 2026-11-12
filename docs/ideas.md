@@ -47,6 +47,14 @@ Open points:
   it.
 - GitHub is trusted at authentication time; a key removed from GitHub
   later stays associated until the share restarts (or re-checks).
+- Cache `github.com/<login>.keys` on the publisher's disk (for example
+  `~/.cache/jampot/github-keys/<login>`, with the fetch time): fewer
+  requests to GitHub, no rate-limit trouble, and authentication keeps
+  working while GitHub is unreachable. Refresh after a TTL (a day?), and
+  re-fetch once when someone presents a key the cache doesn't have (they
+  may have just added it). The cost: a key removed from GitHub is still
+  accepted until the TTL runs out; a manual refresh (or a short TTL) covers
+  the "key leaked" case.
 - Logins can be renamed; storing GitHub's numeric user id (from the API)
   alongside the login avoids a re-registered name inheriting access.
 - How this combines with the party token: token to reach the share, SSH or
