@@ -1,16 +1,16 @@
-//! A per-user token bucket on the injected clock, in its GCRA form: each
-//! user has a "theoretical arrival time" instead of a token count.
+//! A per-joiner token bucket (keyed by the joiner's endpoint key) on the injected clock, in its GCRA form: each
+//! joiner has a "theoretical arrival time" instead of a token count.
 //!
-//! With capacity `n` per `period`, a request costs `period / n`; a user may
+//! With capacity `n` per `period`, a request costs `period / n`; a joiner may
 //! run up to `n` requests ahead of the steady rate.
 
 use std::{collections::HashMap, fmt};
 
 use jiff::{SignedDuration, Timestamp};
 
-use crate::core::{clock::Clock, ids::UserId};
+use crate::core::{clock::Clock, ids::EndpointKey};
 
-/// Entries are swept when the map grows past this many users.
+/// Entries are swept when the map grows past this many joiners.
 const SWEEP_THRESHOLD: usize = 1024;
 
 /// `capacity` requests per `period`.
@@ -60,7 +60,7 @@ pub(crate) struct RateLimited {
 #[derive(Debug)]
 pub(crate) struct RateLimiter {
     limit: RateLimit,
-    arrival: HashMap<UserId, Timestamp>,
+    arrival: HashMap<EndpointKey, Timestamp>,
 }
 
 impl RateLimiter {
@@ -72,15 +72,19 @@ impl RateLimiter {
         }
     }
 
-    /// Takes one token for `user`, or says how long to wait.
-    pub(crate) fn check(&mut self, user: UserId, clock: &dyn Clock) -> Result<(), RateLimited> {
+    /// Takes one token for `joiner`, or says how long to wait.
+    pub(crate) fn check(
+        &mut self,
+        joiner: EndpointKey,
+        clock: &dyn Clock,
+    ) -> Result<(), RateLimited> {
         let now = clock.now();
         if self.arrival.len() > SWEEP_THRESHOLD {
             self.arrival.retain(|_, arrival| *arrival > now);
         }
         let arrival = self
             .arrival
-            .get(&user)
+            .get(&joiner)
             .copied()
             .map_or(now, |arrival| arrival.max(now));
         let ahead = arrival.duration_since(now);
@@ -90,11 +94,11 @@ impl RateLimiter {
             });
         }
         let next = arrival.checked_add(self.limit.interval).unwrap_or(arrival);
-        self.arrival.insert(user, next);
+        self.arrival.insert(joiner, next);
         Ok(())
     }
 
-    /// Number of users currently tracked.
+    /// Number of joiners currently tracked.
     #[must_use]
     pub(crate) fn tracked(&self) -> usize {
         self.arrival.len()
@@ -108,9 +112,16 @@ mod tests {
 
     use crate::core::{
         clock::{Clock, ManualClock},
-        ids::UserId,
+        ids::EndpointKey,
         ratelimit::{RateLimit, RateLimited, RateLimiter},
     };
+
+    fn key(n: u16) -> EndpointKey {
+        let mut bytes = [0; 32];
+        let [first, second, ..] = &mut bytes;
+        [*first, *second] = n.to_le_bytes();
+        EndpointKey(bytes)
+    }
 
     fn clock() -> ManualClock {
         ManualClock::new(Timestamp::from_second(1_800_000_000).unwrap())
@@ -121,23 +132,23 @@ mod tests {
         let clock = clock();
         let mut limiter = RateLimiter::new(RateLimit::default());
         for _ in 0..10 {
-            assert_eq!(limiter.check(UserId(1), &clock), Ok(()));
+            assert_eq!(limiter.check(key(1), &clock), Ok(()));
         }
         assert_eq!(
-            limiter.check(UserId(1), &clock),
+            limiter.check(key(1), &clock),
             Err(RateLimited {
                 retry_after: SignedDuration::from_secs(6)
             })
         );
-        assert_eq!(limiter.check(UserId(2), &clock), Ok(()), "per user");
+        assert_eq!(limiter.check(key(2), &clock), Ok(()), "per joiner");
         clock.advance(SignedDuration::from_secs(5));
-        assert!(limiter.check(UserId(1), &clock).is_err());
+        assert!(limiter.check(key(1), &clock).is_err());
         clock.advance(SignedDuration::from_secs(1));
-        assert_eq!(limiter.check(UserId(1), &clock), Ok(()));
-        assert!(limiter.check(UserId(1), &clock).is_err());
+        assert_eq!(limiter.check(key(1), &clock), Ok(()));
+        assert!(limiter.check(key(1), &clock).is_err());
         clock.advance(SignedDuration::from_secs(60));
         for _ in 0..10 {
-            assert_eq!(limiter.check(UserId(1), &clock), Ok(()));
+            assert_eq!(limiter.check(key(1), &clock), Ok(()));
         }
     }
 
@@ -152,20 +163,20 @@ mod tests {
         let clock = clock();
         let mut limiter =
             RateLimiter::new(RateLimit::new(2, SignedDuration::from_secs(10)).unwrap());
-        assert!(limiter.check(UserId(1), &clock).is_ok());
-        assert!(limiter.check(UserId(1), &clock).is_ok());
-        assert!(limiter.check(UserId(1), &clock).is_err());
+        assert!(limiter.check(key(1), &clock).is_ok());
+        assert!(limiter.check(key(1), &clock).is_ok());
+        assert!(limiter.check(key(1), &clock).is_err());
     }
 
     #[test]
-    fn idle_users_are_swept() {
+    fn idle_joiners_are_swept() {
         let clock = clock();
         let mut limiter = RateLimiter::new(RateLimit::default());
-        for user in 0..2000 {
-            limiter.check(UserId(user), &clock).unwrap();
+        for joiner in 0..2000 {
+            limiter.check(key(joiner), &clock).unwrap();
         }
         clock.advance(SignedDuration::from_secs(60));
-        limiter.check(UserId(0), &clock).unwrap();
+        limiter.check(key(0), &clock).unwrap();
         assert_eq!(limiter.tracked(), 1);
     }
 
@@ -178,7 +189,7 @@ mod tests {
             let mut accepted = 0i64;
             for step in steps {
                 clock.advance(SignedDuration::from_millis(step));
-                if limiter.check(UserId(1), &clock).is_ok() {
+                if limiter.check(key(1), &clock).is_ok() {
                     accepted += 1;
                 }
                 let elapsed = clock.now().duration_since(start).as_millis();

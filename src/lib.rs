@@ -1,5 +1,5 @@
 mod agent;
-// Pure core and wire types; the server and share wire them in (implementation plan steps 4 and 5).
+// Pure core and wire types; the share and joiner wire them in (implementation plan steps 4 and 5).
 #[allow(dead_code)]
 mod core;
 mod fifo;

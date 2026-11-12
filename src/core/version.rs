@@ -1,4 +1,4 @@
-//! The format version shared by the JSON files and the iroh protocol.
+//! The iroh protocol's format version.
 
 use serde::{Deserialize, Serialize};
 

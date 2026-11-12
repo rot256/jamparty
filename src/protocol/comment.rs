@@ -1,12 +1,13 @@
-//! A comment as handed to clients: `id`, `author`, `page`, `selector`,
-//! `selectedText`, `comment`, with length caps. Text from browsers is data
-//! in JSON fields, never formatted into prose.
+//! Comments: the draft a joiner sends, and the comment the share queues and
+//! delivers (`id`, `author`, `page`, `selector`, `selectedText`,
+//! `comment`), with length caps. Text from browsers is data in JSON fields,
+//! never formatted into prose.
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::{
-    ids::{CommentId, GithubLogin, UserId},
-    queue::Identified,
+    ids::{CommentId, Fingerprint},
+    name::JoinerName,
     text::{check_len, check_text},
 };
 
@@ -15,20 +16,19 @@ pub(crate) const MAX_SELECTOR: usize = 2048;
 pub(crate) const MAX_SELECTED_TEXT: usize = 2000;
 pub(crate) const MAX_COMMENT: usize = 10_000;
 
-/// Who wrote a comment, set by the server from the viewer's cookie.
+/// Who wrote a comment: set by the share from the joiner's admission,
+/// never from the comment body.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Author {
-    pub(crate) id: UserId,
-    pub(crate) login: GithubLogin,
+    pub(crate) name: JoinerName,
+    pub(crate) fingerprint: Fingerprint,
 }
 
-/// The fields of a comment; only reachable through a validated [`Comment`].
+/// The fields of a draft; only reachable through a validated [`Draft`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct CommentFields {
-    pub(crate) id: CommentId,
-    pub(crate) author: Author,
+pub(crate) struct DraftFields {
     pub(crate) page: String,
     pub(crate) selector: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,22 +36,22 @@ pub(crate) struct CommentFields {
     pub(crate) comment: String,
 }
 
-/// A comment whose fields are within the caps.
+/// What a joiner sends: a comment without id or author, within the caps.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "CommentFields", into = "CommentFields")]
-pub(crate) struct Comment(CommentFields);
+#[serde(try_from = "DraftFields", into = "DraftFields")]
+pub(crate) struct Draft(DraftFields);
 
-impl Comment {
+impl Draft {
     #[must_use]
-    pub(crate) fn fields(&self) -> &CommentFields {
+    pub(crate) fn fields(&self) -> &DraftFields {
         &self.0
     }
 }
 
-impl TryFrom<CommentFields> for Comment {
+impl TryFrom<DraftFields> for Draft {
     type Error = String;
 
-    fn try_from(fields: CommentFields) -> Result<Self, Self::Error> {
+    fn try_from(fields: DraftFields) -> Result<Self, Self::Error> {
         check_len(&fields.page, "page", MAX_PAGE)?;
         check_len(&fields.selector, "selector", MAX_SELECTOR)?;
         if let Some(selected) = &fields.selected_text {
@@ -62,33 +62,59 @@ impl TryFrom<CommentFields> for Comment {
     }
 }
 
-impl From<Comment> for CommentFields {
-    fn from(comment: Comment) -> Self {
-        comment.0
+impl From<Draft> for DraftFields {
+    fn from(draft: Draft) -> Self {
+        draft.0
     }
 }
 
-impl Identified for Comment {
-    fn id(&self) -> CommentId {
-        self.0.id
+/// A queued comment, as delivered to the target (one JSON object each).
+/// Built by the share; only ever serialised.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Comment {
+    pub(crate) id: CommentId,
+    pub(crate) author: Author,
+    pub(crate) page: String,
+    pub(crate) selector: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_text: Option<String>,
+    pub(crate) comment: String,
+}
+
+impl Comment {
+    #[must_use]
+    pub(crate) fn new(id: CommentId, author: Author, draft: Draft) -> Self {
+        let DraftFields {
+            page,
+            selector,
+            selected_text,
+            comment,
+        } = draft.0;
+        Self {
+            id,
+            author,
+            page,
+            selector,
+            selected_text,
+            comment,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        core::{ids::CommentId, rng::SeededRng},
-        protocol::comment::{Author, Comment, CommentFields, MAX_COMMENT},
+        core::{
+            ids::{CommentId, EndpointKey},
+            rng::SeededRng,
+        },
+        protocol::comment::{Author, Comment, Draft, DraftFields, MAX_COMMENT},
     };
 
-    pub(crate) fn fields(comment: &str) -> CommentFields {
-        CommentFields {
-            id: CommentId::generate(&SeededRng::new(1)),
-            author: Author {
-                id: crate::core::ids::UserId(42),
-                login: "octocat".to_owned().try_into().unwrap(),
-            },
-            page: "https://aaaaaaaaaaaaaaaa.jam.example/".to_owned(),
+    fn fields(comment: &str) -> DraftFields {
+        DraftFields {
+            page: "http://mzuhvlpymk6xo3ep.localhost:4321/".to_owned(),
             selector: "main > h1".to_owned(),
             selected_text: None,
             comment: comment.to_owned(),
@@ -97,11 +123,16 @@ mod tests {
 
     #[test]
     fn json_shape() {
-        let comment = Comment::try_from(CommentFields {
+        let draft = Draft::try_from(DraftFields {
             selected_text: Some("Hello".to_owned()),
             ..fields("Bigger, please")
         })
         .unwrap();
+        let author = Author {
+            name: "alice@laptop".to_owned().try_into().unwrap(),
+            fingerprint: EndpointKey([0xab; 32]).fingerprint(),
+        };
+        let comment = Comment::new(CommentId::generate(&SeededRng::new(1)), author, draft);
         let value = serde_json::to_value(&comment).unwrap();
         let mut keys: Vec<&str> = value
             .as_object()
@@ -122,29 +153,41 @@ mod tests {
             ]
         );
         assert_eq!(
-            value.pointer("/author/login"),
-            Some(&serde_json::json!("octocat"))
+            value.pointer("/author"),
+            Some(&serde_json::json!({"name": "alice@laptop", "fingerprint": "ababababab"}))
         );
-        assert_eq!(value.pointer("/author/id"), Some(&serde_json::json!(42)));
-        let back: Comment = serde_json::from_value(value).unwrap();
-        assert_eq!(back, comment);
+        assert_eq!(
+            value.pointer("/selectedText"),
+            Some(&serde_json::json!("Hello"))
+        );
     }
 
     #[test]
     fn caps_are_enforced_when_parsing() {
-        assert!(Comment::try_from(fields(&"x".repeat(MAX_COMMENT))).is_ok());
-        assert!(Comment::try_from(fields(&"x".repeat(MAX_COMMENT + 1))).is_err());
-        assert!(Comment::try_from(fields("   ")).is_err());
-        let mut long = serde_json::to_value(Comment::try_from(fields("x")).unwrap()).unwrap();
-        *long.pointer_mut("/selector").unwrap() = serde_json::Value::String("s".repeat(2049));
-        assert!(serde_json::from_value::<Comment>(long).is_err());
-        let mut extra = serde_json::to_value(Comment::try_from(fields("x")).unwrap()).unwrap();
-        extra
-            .pointer_mut("/author")
-            .unwrap()
-            .as_object_mut()
-            .unwrap()
-            .insert("admin".to_owned(), serde_json::Value::Bool(true));
-        assert!(serde_json::from_value::<Comment>(extra).is_err());
+        assert!(Draft::try_from(fields(&"x".repeat(MAX_COMMENT))).is_ok());
+        assert!(Draft::try_from(fields(&"x".repeat(MAX_COMMENT + 1))).is_err());
+        assert!(Draft::try_from(fields("   ")).is_err());
+        let ok = serde_json::to_value(Draft::try_from(fields("x")).unwrap()).unwrap();
+        for (pointer, len) in [
+            ("/page", 4097),
+            ("/selector", 2049),
+            ("/selectedText", 2001),
+        ] {
+            let mut long = ok.clone();
+            long.as_object_mut().unwrap().insert(
+                pointer.trim_start_matches('/').to_owned(),
+                "s".repeat(len).into(),
+            );
+            assert!(serde_json::from_value::<Draft>(long).is_err(), "{pointer}");
+        }
+        // A joiner cannot claim an author or id in its draft.
+        for key in ["author", "id", "admin"] {
+            let mut extra = ok.clone();
+            extra
+                .as_object_mut()
+                .unwrap()
+                .insert(key.to_owned(), "x".into());
+            assert!(serde_json::from_value::<Draft>(extra).is_err(), "{key}");
+        }
     }
 }

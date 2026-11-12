@@ -1,171 +1,176 @@
-//! A session's comment queue: sequence numbers, polls after a cursor and
-//! acknowledgements. No timers and no waiting: whoever waits for comments
-//! asks [`CommentQueue::has_after`] when woken.
+//! The share's comment queue and delivery state machine.
+//!
+//! Comments wait in order. One batch is in flight at a time: [`start`]
+//! hands out everything waiting, and comments arriving meanwhile form the
+//! next batch. [`finish`] reports the result: `Ok` drops the batch, `Error`
+//! puts it back in front and backs off on the injected clock, `Gone` puts
+//! it back and holds the queue for good (the share must be restarted to
+//! deliver elsewhere). No timers here: the caller retries [`start`] at
+//! [`DeliveryQueue::wake_at`].
+//!
+//! [`start`]: DeliveryQueue::start
+//! [`finish`]: DeliveryQueue::finish
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
-use crate::core::ids::{CommentId, Seq};
+use jiff::{SignedDuration, Timestamp};
 
-/// Maximum number of queued (unacknowledged) comments per session.
+/// Maximum number of undelivered comments (waiting and in flight).
 pub(crate) const MAX_QUEUED: usize = 500;
-/// How many acknowledged comment ids are remembered for status queries.
-pub(crate) const DELIVERED_MEMORY: usize = 4096;
+/// Backoff after the first failure; doubled per failure up to [`MAX_BACKOFF`].
+pub(crate) const FIRST_BACKOFF: SignedDuration = SignedDuration::from_secs(1);
+pub(crate) const MAX_BACKOFF: SignedDuration = SignedDuration::from_secs(60);
 
-/// Something with a comment id.
-pub(crate) trait Identified {
-    fn id(&self) -> CommentId;
-}
-
-/// A queued item and its sequence number.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Sequenced<T> {
-    pub(crate) seq: Seq,
-    pub(crate) item: T,
-}
-
-/// What viewers see about one of their comments.
+/// What the target said about a batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Delivery {
-    Queued,
-    Delivered,
-    /// Never seen (or forgotten, e.g. after a restart).
-    Unknown,
+pub(crate) enum DeliveryResult {
+    Ok,
+    /// A failure worth retrying.
+    Error,
+    /// The target reports itself gone (e.g. the thread was deleted).
+    Gone,
+}
+
+/// The queue's state, for the status line and the joiners.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeliveryState {
+    /// Nothing in flight; [`DeliveryQueue::start`] sends if anything waits.
+    Ready,
+    InFlight,
+    /// Waiting until `at` after a failure.
+    Retrying {
+        at: Timestamp,
+    },
+    /// The target is gone; nothing is sent again.
+    Held,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QueueError {
-    /// The queue holds [`MAX_QUEUED`] comments.
+    /// [`MAX_QUEUED`] comments are undelivered.
     Full,
-    /// An acknowledgement beyond the last assigned sequence number. Nothing
-    /// is changed.
-    AckOutOfRange { last: Seq },
-}
-
-/// Result of an accepted acknowledgement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Acked {
-    /// This many comments were dropped from the queue.
-    Removed(usize),
-    /// At or below an earlier acknowledgement; nothing changed.
-    Stale,
+    /// [`DeliveryQueue::finish`] without a batch in flight.
+    NotInFlight,
 }
 
 #[derive(Debug)]
-pub(crate) struct CommentQueue<T> {
-    /// Unacknowledged items, in increasing sequence order.
-    queued: VecDeque<Sequenced<T>>,
-    /// The last assigned sequence number.
-    last: Seq,
-    /// Everything at or below this is acknowledged.
-    acked: Seq,
-    delivered: HashSet<CommentId>,
-    delivered_order: VecDeque<CommentId>,
+pub(crate) struct DeliveryQueue<T> {
+    /// Not in flight, oldest first.
+    waiting: VecDeque<T>,
+    /// The batch in flight; empty unless the state is `InFlight`.
+    in_flight: Vec<T>,
+    state: DeliveryState,
+    /// Failures since the last success.
+    failures: u32,
 }
 
-impl<T> Default for CommentQueue<T> {
+impl<T> Default for DeliveryQueue<T> {
     fn default() -> Self {
         Self {
-            queued: VecDeque::new(),
-            last: Seq::ZERO,
-            acked: Seq::ZERO,
-            delivered: HashSet::new(),
-            delivered_order: VecDeque::new(),
+            waiting: VecDeque::new(),
+            in_flight: Vec::new(),
+            state: DeliveryState::Ready,
+            failures: 0,
         }
     }
 }
 
-impl<T: Identified + Clone> CommentQueue<T> {
+/// The wait after `failures` consecutive failures (at least 1).
+#[must_use]
+pub(crate) fn backoff(failures: u32) -> SignedDuration {
+    let doublings = failures.saturating_sub(1).min(16);
+    FIRST_BACKOFF
+        .checked_mul(1 << doublings)
+        .unwrap_or(MAX_BACKOFF)
+        .min(MAX_BACKOFF)
+}
+
+impl<T: Clone> DeliveryQueue<T> {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
+    /// Undelivered comments, waiting and in flight.
     #[must_use]
     pub(crate) fn len(&self) -> usize {
-        self.queued.len()
+        self.waiting.len() + self.in_flight.len()
     }
 
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
-        self.queued.is_empty()
+        self.len() == 0
     }
 
-    /// The last assigned sequence number.
     #[must_use]
-    pub(crate) fn last_seq(&self) -> Seq {
-        self.last
+    pub(crate) fn state(&self) -> DeliveryState {
+        self.state
     }
 
-    /// The highest acknowledged sequence number.
+    /// When to call [`DeliveryQueue::start`] again while retrying.
     #[must_use]
-    pub(crate) fn acked_through(&self) -> Seq {
-        self.acked
+    pub(crate) fn wake_at(&self) -> Option<Timestamp> {
+        match self.state {
+            DeliveryState::Retrying { at } => Some(at),
+            DeliveryState::Ready | DeliveryState::InFlight | DeliveryState::Held => None,
+        }
     }
 
-    /// Appends `item` and returns its sequence number.
-    pub(crate) fn push(&mut self, item: T) -> Result<Seq, QueueError> {
-        if self.queued.len() >= MAX_QUEUED {
+    /// Queues `item` behind everything undelivered.
+    pub(crate) fn push(&mut self, item: T) -> Result<(), QueueError> {
+        if self.len() >= MAX_QUEUED {
             return Err(QueueError::Full);
         }
-        self.last = self.last.next();
-        self.queued.push_back(Sequenced {
-            seq: self.last,
-            item,
-        });
-        Ok(self.last)
+        self.waiting.push_back(item);
+        Ok(())
     }
 
-    /// Whether any unacknowledged item has a sequence number above `cursor`.
-    #[must_use]
-    pub(crate) fn has_after(&self, cursor: Seq) -> bool {
-        self.queued.back().is_some_and(|last| last.seq > cursor)
+    /// Takes everything waiting as the next batch, if nothing is in flight,
+    /// the backoff has passed and the target is not gone.
+    pub(crate) fn start(&mut self, now: Timestamp) -> Option<Vec<T>> {
+        let may_send = match self.state {
+            DeliveryState::Ready => true,
+            DeliveryState::Retrying { at } => at <= now,
+            DeliveryState::InFlight | DeliveryState::Held => false,
+        };
+        if !may_send || self.waiting.is_empty() {
+            return None;
+        }
+        self.in_flight = self.waiting.drain(..).collect();
+        self.state = DeliveryState::InFlight;
+        Some(self.in_flight.clone())
     }
 
-    /// Up to `limit` unacknowledged items after `cursor`, in order.
-    #[must_use]
-    pub(crate) fn poll_after(&self, cursor: Seq, limit: usize) -> Vec<Sequenced<T>> {
-        let start = self.queued.partition_point(|queued| queued.seq <= cursor);
-        self.queued.range(start..).take(limit).cloned().collect()
-    }
-
-    /// Acknowledges everything up to and including `up_to`.
-    pub(crate) fn ack(&mut self, up_to: Seq) -> Result<Acked, QueueError> {
-        if up_to > self.last {
-            return Err(QueueError::AckOutOfRange { last: self.last });
+    /// Records the in-flight batch's result; returns the delivered items
+    /// (the batch on `Ok`, nothing otherwise).
+    pub(crate) fn finish(
+        &mut self,
+        result: DeliveryResult,
+        now: Timestamp,
+    ) -> Result<Vec<T>, QueueError> {
+        if self.state != DeliveryState::InFlight {
+            return Err(QueueError::NotInFlight);
         }
-        if up_to <= self.acked {
-            return Ok(Acked::Stale);
-        }
-        self.acked = up_to;
-        let mut removed = 0;
-        while let Some(front) = self.queued.pop_front_if(|front| front.seq <= up_to) {
-            self.remember_delivered(front.item.id());
-            removed += 1;
-        }
-        Ok(Acked::Removed(removed))
-    }
-
-    fn remember_delivered(&mut self, id: CommentId) {
-        if self.delivered.insert(id) {
-            self.delivered_order.push_back(id);
-        }
-        while self.delivered_order.len() > DELIVERED_MEMORY {
-            if let Some(oldest) = self.delivered_order.pop_front() {
-                self.delivered.remove(&oldest);
+        let batch = std::mem::take(&mut self.in_flight);
+        match result {
+            DeliveryResult::Ok => {
+                self.failures = 0;
+                self.state = DeliveryState::Ready;
+                return Ok(batch);
             }
+            DeliveryResult::Error => {
+                self.failures = self.failures.saturating_add(1);
+                let at = now
+                    .checked_add(backoff(self.failures))
+                    .unwrap_or(Timestamp::MAX);
+                self.state = DeliveryState::Retrying { at };
+            }
+            DeliveryResult::Gone => self.state = DeliveryState::Held,
         }
-    }
-
-    /// Delivery state of the comment `id`.
-    #[must_use]
-    pub(crate) fn status(&self, id: CommentId) -> Delivery {
-        if self.queued.iter().any(|queued| queued.item.id() == id) {
-            Delivery::Queued
-        } else if self.delivered.contains(&id) {
-            Delivery::Delivered
-        } else {
-            Delivery::Unknown
+        for item in batch.into_iter().rev() {
+            self.waiting.push_front(item);
         }
+        Ok(Vec::new())
     }
 }
 
