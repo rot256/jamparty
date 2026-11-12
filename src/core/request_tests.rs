@@ -3,8 +3,8 @@ use proptest::prelude::*;
 use crate::core::{
     ids::EndpointKey,
     request::{
-        COMMENTS_PATH, EVENTS_PATH, LocalOrigin, Method, PAGE_PATH, Refusal, RequestFacts, Route,
-        SETTINGS_PATH, STATUS_PATH, Upgrade,
+        COMMENTS_PATH, CURSOR_PATH, EVENTS_PATH, LocalOrigin, Method, PAGE_PATH, Refusal,
+        RequestFacts, Route, SETTINGS_PATH, STATUS_PATH, Upgrade,
     },
 };
 
@@ -143,6 +143,16 @@ fn table() {
             Err(Refusal::MethodNotAllowed),
         ),
         ("page", fetch(Method::Post, PAGE_PATH), Ok(Route::Page)),
+        (
+            "cursor",
+            fetch(Method::Post, CURSOR_PATH),
+            Ok(Route::Cursor),
+        ),
+        (
+            "get cursor",
+            fetch(Method::Get, CURSOR_PATH),
+            Err(Refusal::MethodNotAllowed),
+        ),
         (
             "get page",
             fetch(Method::Get, PAGE_PATH),

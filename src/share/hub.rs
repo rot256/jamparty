@@ -11,7 +11,7 @@ use std::{
 #[cfg(test)]
 use jiff::Timestamp;
 use tokio::{
-    sync::{Notify, broadcast},
+    sync::{Notify, broadcast, mpsc},
     time,
 };
 
@@ -28,7 +28,7 @@ use crate::{
     protocol::{
         comment::{Author, Comment, Draft},
         control::{AckOutcome, Anchor, AnswerText, CommentRef, ShareMessage, StatusLine},
-        presence::{PagePath, Person, Whereabouts},
+        presence::{PagePath, Person, Position, Whereabouts},
     },
 };
 
@@ -47,6 +47,9 @@ pub(crate) const MAX_JOINERS_PER_KEY: usize = 4;
 pub(crate) const MAX_QUEUED_PER_KEY: usize = 100;
 /// Comment refs remembered, so a comment sent again is queued once.
 const MAX_REFS: usize = 1000;
+/// Cursor messages waiting for one joiner's control stream; more are
+/// dropped (the next movement replaces them anyway).
+const CURSOR_QUEUE: usize = 32;
 /// Presence changes reach joiners at most this often, together.
 const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -119,7 +122,11 @@ impl Hub {
     /// Adds an admitted joiner to presence until the returned guard drops;
     /// `None` if the share has [`MAX_JOINERS`] connections, or
     /// [`MAX_JOINERS_PER_KEY`] with this key.
-    pub(crate) fn join(self: &Arc<Self>, author: Author) -> Option<Presence> {
+    pub(crate) fn join(
+        self: &Arc<Self>,
+        author: Author,
+    ) -> Option<(Presence, mpsc::Receiver<ShareMessage>)> {
+        let (cursors, receiver) = mpsc::channel(CURSOR_QUEUE);
         let connection = {
             let mut inner = self.lock();
             let same_key = inner
@@ -140,15 +147,20 @@ impl Hub {
                 url: None,
                 cursor: Switch::Off,
                 changed,
-                limiter: RateLimiter::new(RateLimit::PRESENCE),
+                limiter: RateLimiter::new(RateLimit::PRESENCE_FLOOD),
+                #[cfg(test)]
+                updates: 0,
+                cursor_limiter: RateLimiter::new(RateLimit::CURSOR),
+                cursors,
             });
             connection
         };
         self.broadcast_presence();
-        Some(Presence {
+        let presence = Presence {
             hub: Arc::clone(self),
             connection,
-        })
+        };
+        Some((presence, receiver))
     }
 
     fn broadcast_presence(&self) {
@@ -400,6 +412,13 @@ impl Hub {
         Ok(())
     }
 
+    /// Presence updates received from all connections so far.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn presence_updates(&self) -> u64 {
+        self.lock().joiners.iter().map(|seat| seat.updates).sum()
+    }
+
     /// Re-checks the queue now (tests move a manual clock, then call this).
     #[cfg(test)]
     pub(crate) fn wake(&self) {
@@ -442,8 +461,15 @@ struct Seat {
     cursor: Switch,
     /// When its whereabouts last changed (see `Inner::changes`).
     changed: u64,
-    /// Its presence updates.
+    /// Presence updates received (for tests).
+    #[cfg(test)]
+    updates: u64,
+    /// Its presence updates, against flooding.
     limiter: RateLimiter<()>,
+    /// Its cursor messages.
+    cursor_limiter: RateLimiter<()>,
+    /// Other joiners' cursors, for its control stream.
+    cursors: mpsc::Sender<ShareMessage>,
 }
 
 /// Why a joiner's message changed nothing.
@@ -451,8 +477,26 @@ struct Seat {
 pub(crate) enum Ignored {
     /// Over its rate limit; dropped.
     RateLimited,
+    /// Presence updates past the flood limit: recorded, but the joiner is
+    /// disconnected.
+    Flood,
+    /// A cursor while the joiner's cursor switch is off.
+    CursorOff,
+    /// A cursor before the joiner said which page it is on.
+    Nowhere,
     /// The connection left presence meanwhile.
     Gone,
+}
+
+impl Ignored {
+    /// Whether the joiner is to be disconnected for it.
+    #[must_use]
+    pub(crate) fn disconnects(self) -> bool {
+        match self {
+            Self::Flood => true,
+            Self::RateLimited | Self::CursorOff | Self::Nowhere | Self::Gone => false,
+        }
+    }
 }
 
 /// A joiner's place in presence; leaving is announced on drop.
@@ -462,12 +506,14 @@ pub(crate) struct Presence {
 }
 
 impl Presence {
-    /// Records where the joiner is now and what it is called; everyone
-    /// hears of it shortly (see [`flush_presence`]). Returns how its
-    /// comments are signed from now on.
+    /// Records where the joiner is now and what it is called, always (the
+    /// state is small; the last update wins); everyone hears of it shortly
+    /// (see [`flush_presence`]). Returns how its comments are signed from
+    /// now on, or [`Ignored::Flood`] when the joiner sends far more than it
+    /// should (it is then to be disconnected).
     pub(crate) fn update(&self, whereabouts: Whereabouts) -> Result<Author, Ignored> {
         let Whereabouts { name, url, cursor } = whereabouts;
-        let author = {
+        let (author, flooding) = {
             let mut guard = self.hub.lock();
             let inner = &mut *guard;
             inner.changes = inner.changes.wrapping_add(1);
@@ -477,21 +523,63 @@ impl Presence {
                 .iter_mut()
                 .find(|seat| seat.connection == self.connection)
                 .ok_or(Ignored::Gone)?;
-            seat.limiter
-                .check((), self.hub.clock.as_ref())
-                .map_err(|_| Ignored::RateLimited)?;
             seat.author.name = name;
             seat.url = url;
             seat.cursor = cursor;
             seat.changed = changed;
-            seat.author.clone()
+            #[cfg(test)]
+            {
+                seat.updates = seat.updates.saturating_add(1);
+            }
+            let flooding = seat.limiter.check((), self.hub.clock.as_ref()).is_err();
+            (seat.author.clone(), flooding)
         };
         self.hub.presence_changed.notify_one();
+        if flooding {
+            return Err(Ignored::Flood);
+        }
         Ok(author)
     }
 }
 
 impl Presence {
+    /// Forwards this joiner's cursor to the other people on its page (not
+    /// to its own key's other connections); returns to how many
+    /// connections.
+    pub(crate) fn cursor(&self, position: Option<Position>) -> Result<usize, Ignored> {
+        let mut guard = self.hub.lock();
+        let inner = &mut *guard;
+        let seat = inner
+            .joiners
+            .iter_mut()
+            .find(|seat| seat.connection == self.connection)
+            .ok_or(Ignored::Gone)?;
+        match seat.cursor {
+            Switch::On => {}
+            Switch::Off => return Err(Ignored::CursorOff),
+        }
+        let url = seat.url.clone().ok_or(Ignored::Nowhere)?;
+        seat.cursor_limiter
+            .check((), self.hub.clock.as_ref())
+            .map_err(|_| Ignored::RateLimited)?;
+        let key = seat.author.key;
+        let message = ShareMessage::Cursor {
+            key,
+            url: url.clone(),
+            position,
+        };
+        let mut sent = 0;
+        for other in &inner.joiners {
+            if other.author.key != key && other.url.as_ref() == Some(&url) {
+                // A full queue drops this one; the next movement follows.
+                if other.cursors.try_send(message.clone()).is_ok() {
+                    sent += 1;
+                }
+            }
+        }
+        Ok(sent)
+    }
+
     /// The page this joiner is on, as it last said.
     #[must_use]
     pub(crate) fn url(&self) -> Option<PagePath> {
@@ -524,7 +612,8 @@ impl Presence {
             | ShareMessage::Answer { .. }
             | ShareMessage::Delivered { .. }
             | ShareMessage::Reload { .. }
-            | ShareMessage::Status { .. }) => other,
+            | ShareMessage::Status { .. }
+            | ShareMessage::Cursor { .. }) => other,
         }
     }
 }

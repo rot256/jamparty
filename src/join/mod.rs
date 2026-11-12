@@ -6,6 +6,8 @@ mod connection;
 mod local;
 mod markdown;
 mod session;
+#[cfg(test)]
+pub(crate) use crate::join::session::REPORT_GAP;
 mod tabs;
 
 use std::{
@@ -120,6 +122,7 @@ impl Joiner {
         };
         let mut tasks = JoinSet::new();
         tasks.spawn(connection::run(dial, Arc::clone(&session)));
+        tasks.spawn(session::report_changes(Arc::clone(&session)));
         for listener in listeners {
             tasks.spawn(local::serve(listener, Arc::clone(&session)));
         }

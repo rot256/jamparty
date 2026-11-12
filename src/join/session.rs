@@ -12,7 +12,7 @@ use iroh::endpoint::{Connection, SendStream};
 use rootcause::prelude::report;
 use serde::Serialize;
 use tokio::{
-    sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot, watch},
+    sync::{Mutex as AsyncMutex, Notify, broadcast, mpsc, oneshot, watch},
     time,
 };
 
@@ -20,7 +20,7 @@ use crate::{
     Report,
     adapters::{lines, settings},
     core::{
-        ids::CommentId,
+        ids::{CommentId, EndpointKey},
         name::JoinerName,
         request::LocalOrigin,
         settings::{Keys, Settings, SettingsChange, Switch},
@@ -35,7 +35,7 @@ use crate::{
             AckOutcome, CommentRef, Envelope, JoinerMessage, RefusedReason, ShareMessage,
             StatusLine,
         },
-        presence::{PagePath, Person, Support, Whereabouts},
+        presence::{PagePath, Person, Position, Support, Whereabouts},
     },
 };
 
@@ -179,6 +179,13 @@ pub(crate) enum Event {
     Answer(Answer),
     /// The settings changed (in this page or another).
     Settings(PageSettings),
+    /// Someone's pointer on page `url` (sent only to tabs on it), or
+    /// (none) they left it.
+    Cursor {
+        key: EndpointKey,
+        url: PagePath,
+        position: Option<Position>,
+    },
 }
 
 /// How long to wait for the share to acknowledge a comment.
@@ -257,6 +264,18 @@ impl Control {
             .map_err(|_| report!("the connection to the share was lost"))
     }
 
+    /// Sends the joiner's pointer (none: it left the page).
+    async fn cursor(&self, position: Option<Position>) -> Result<(), Report> {
+        match self.presence {
+            Support::Supported => {}
+            Support::Unsupported => return Ok(()),
+        }
+        self.lines
+            .send(Envelope::from(JoinerMessage::Cursor { position }))
+            .await
+            .map_err(|_| report!("the connection to the share was lost"))
+    }
+
     fn acknowledge(&self, reference: &CommentRef, outcome: AckOutcome) {
         if let Some(ack) = self.acks().remove(reference) {
             let _ = ack.send(outcome);
@@ -297,6 +316,44 @@ async fn write_lines(mut writer: SendStream, mut queued: mpsc::Receiver<Envelope
     }
 }
 
+/// The least time between two presence reports: at most 4 per second.
+/// Every report goes through the reporter task (see [`report_changes`]),
+/// so nothing sends presence faster; the share disconnects a joiner past
+/// 10 per second sustained (`RateLimit::PRESENCE_FLOOD`), well above.
+pub(crate) const REPORT_GAP: Duration = Duration::from_millis(250);
+
+/// What the share was told on the current connection.
+#[derive(Default)]
+struct Told {
+    whereabouts: Option<Whereabouts>,
+    /// The latest cursor on a page the share has not been told yet; sent
+    /// right after the presence that tells it.
+    held: Option<(PagePath, Option<Position>)>,
+}
+
+/// Sends the joiner's whereabouts to the share as they change, coalesced:
+/// the latest state after each [`REPORT_GAP`], then any cursor that waited
+/// for it.
+pub(crate) async fn report_changes(session: Arc<Session>) {
+    loop {
+        session.changed.notified().await;
+        session.send_report().await;
+        time::sleep(REPORT_GAP).await;
+    }
+}
+
+/// Why a cursor was not sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CursorError {
+    /// The cursor switch is off: nothing is sent.
+    Off,
+    /// The joiner has another page (or none) for the tab.
+    Elsewhere,
+    Tab(TabError),
+    /// Not connected to the share.
+    Unreachable,
+}
+
 pub(crate) struct Session {
     pub(crate) origin: LocalOrigin,
     preferences: Mutex<Preferences>,
@@ -306,9 +363,12 @@ pub(crate) struct Session {
     /// Ids of this joiner's comments the share has not delivered yet.
     mine: Mutex<HashSet<CommentId>>,
     tabs: Mutex<Tabs>,
-    /// What the share was last told on the current connection; held while
-    /// telling, so reports go out in order.
-    told: AsyncMutex<Option<Whereabouts>>,
+    /// What the share was last told on the current connection, and a cursor
+    /// waiting for its page to be told first; locked while telling, so
+    /// presence and cursors go out in order.
+    told: AsyncMutex<Told>,
+    /// Poked when the whereabouts may have changed.
+    changed: Notify,
 }
 
 impl Session {
@@ -322,7 +382,8 @@ impl Session {
             events: broadcast::channel(EVENT_CAPACITY).0,
             mine: Mutex::new(HashSet::new()),
             tabs: Mutex::new(Tabs::default()),
-            told: AsyncMutex::new(None),
+            told: AsyncMutex::new(Told::default()),
+            changed: Notify::new(),
         }
     }
 
@@ -331,8 +392,13 @@ impl Session {
     }
 
     /// A page opened its event stream as `tab`, on `url`.
-    pub(crate) fn open_tab(&self, tab: TabId, url: PagePath) -> Result<(), TabError> {
-        self.tabs().open(tab, url)
+    pub(crate) fn open_tab(
+        &self,
+        tab: TabId,
+        url: Option<PagePath>,
+        seq: u64,
+    ) -> Result<(), TabError> {
+        self.tabs().open(tab, url, seq)
     }
 
     /// One of `tab`'s event streams closed.
@@ -341,8 +407,66 @@ impl Session {
     }
 
     /// `tab` moved to `url` (or became active there).
-    pub(crate) fn visit(&self, tab: &TabId, url: PagePath) -> Result<(), TabError> {
-        self.tabs().visit(tab, url)
+    pub(crate) fn visit(
+        &self,
+        tab: &TabId,
+        url: Option<PagePath>,
+        seq: u64,
+    ) -> Result<(), TabError> {
+        self.tabs().visit(tab, url, seq)
+    }
+
+    /// The URL `tab` is on.
+    pub(crate) fn tab_url(&self, tab: &TabId) -> Option<PagePath> {
+        self.tabs().url(tab).cloned()
+    }
+
+    /// Sends the pointer in `tab` on page `url` to the share, only while
+    /// the cursor switch is on and only if `url` is the page the joiner has
+    /// for that tab (a stale registration never routes a cursor). The tab
+    /// becomes the active one first, so the share forwards it to the
+    /// people on its page.
+    pub(crate) async fn cursor(
+        &self,
+        tab: &TabId,
+        seq: u64,
+        url: &PagePath,
+        position: Option<Position>,
+    ) -> Result<(), CursorError> {
+        match self.preferences().saved.show_cursor {
+            Switch::On => {}
+            Switch::Off => return Err(CursorError::Off),
+        }
+        let (known, latest) = {
+            let tabs = self.tabs();
+            let Some(latest) = tabs.seq(tab) else {
+                return Err(CursorError::Tab(TabError::Unknown));
+            };
+            (tabs.url(tab).cloned(), latest)
+        };
+        // From before the tab's latest report, or for another page: stale.
+        if seq < latest || known.as_ref() != Some(url) {
+            return Err(CursorError::Elsewhere);
+        }
+        if self.tabs().current().as_ref() != Some(url) {
+            self.visit(tab, Some(url.clone()), seq)
+                .map_err(CursorError::Tab)?;
+        }
+        let control = self.control().ok_or(CursorError::Unreachable)?;
+        let mut told = self.told.lock().await;
+        if told.whereabouts.as_ref() == Some(&self.whereabouts()) {
+            told.held = None;
+            return control
+                .cursor(position)
+                .await
+                .map_err(|_| CursorError::Unreachable);
+        }
+        // The share must learn the page first: the cursor (the latest only)
+        // waits for the next report, which keeps to the presence budget.
+        told.held = Some((url.clone(), position));
+        drop(told);
+        self.report();
+        Ok(())
     }
 
     fn whereabouts(&self) -> Whereabouts {
@@ -357,20 +481,40 @@ impl Session {
         }
     }
 
+    /// Asks for the share to be told where this joiner is: the reporter
+    /// task (see [`report_changes`]) sends the latest state, at most every
+    /// [`REPORT_GAP`], so a burst of changes stays within the share's
+    /// budget and ends on the last one.
+    pub(crate) fn report(&self) {
+        self.changed.notify_one();
+    }
+
     /// Tells the share where this joiner is now, if that changed since it
-    /// was last told (on this connection).
-    pub(crate) async fn report(&self) {
+    /// was last told (on this connection), then sends a cursor that waited
+    /// for that page. Only the reporter task and a new connection call it.
+    async fn send_report(&self) {
         let mut told = self.told.lock().await;
         let Some(control) = self.control() else {
             return;
         };
         let now = self.whereabouts();
-        if told.as_ref() == Some(&now) {
-            return;
+        if told.whereabouts.as_ref() != Some(&now) {
+            match control.tell(now.clone()).await {
+                Ok(()) => told.whereabouts = Some(now),
+                Err(error) => {
+                    tracing::debug!(%error, "could not report presence");
+                    return;
+                }
+            }
         }
-        match control.tell(now.clone()).await {
-            Ok(()) => *told = Some(now),
-            Err(error) => tracing::debug!(%error, "could not report presence"),
+        if let Some((url, position)) = told.held.take() {
+            let page = told.whereabouts.as_ref().and_then(|told| told.url.as_ref());
+            // Only for the page the share now has; a later one is moot.
+            if page == Some(&url)
+                && let Err(error) = control.cursor(position).await
+            {
+                tracing::debug!(%error, "could not send a held cursor");
+            }
         }
     }
 
@@ -441,7 +585,7 @@ impl Session {
         {
             // A new connection has been told nothing yet.
             let mut told = self.told.lock().await;
-            *told = None;
+            *told = Told::default();
             *self.control.lock().unwrap_or_else(PoisonError::into_inner) = Some(control);
         }
         let mut delivered = Vec::new();
@@ -462,7 +606,7 @@ impl Session {
         if !delivered.is_empty() {
             self.emit(Event::Delivered { ids: delivered });
         }
-        self.report().await;
+        self.send_report().await;
     }
 
     /// The connection is gone (or never came up).
@@ -588,6 +732,9 @@ impl Session {
                     view.answers.push(answer.clone());
                 });
                 self.emit(Event::Answer(answer));
+            }
+            ShareMessage::Cursor { key, url, position } => {
+                self.emit(Event::Cursor { key, url, position });
             }
             ShareMessage::Admitted { .. } | ShareMessage::Refused { .. } => {
                 tracing::debug!("unexpected admission message after admission");

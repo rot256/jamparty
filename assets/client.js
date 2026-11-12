@@ -497,6 +497,7 @@ var Connection = class {
         case "reload":
         case "presence":
         case "settings":
+        case "cursor":
         case "ping":
           break;
       }
@@ -1256,6 +1257,7 @@ function install() {
         case "status":
         case "presence":
         case "settings":
+        case "cursor":
         case "ping":
           break;
       }

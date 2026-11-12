@@ -68,7 +68,7 @@ pub(crate) async fn handle(
             // Subscribed before joining, so this joiner hears its own
             // presence too.
             let broadcasts = shared.hub.subscribe();
-            let Some(presence) = shared.hub.join(author.clone()) else {
+            let Some(seated) = shared.hub.join(author.clone()) else {
                 tracing::info!(name = %author.name, fingerprint = %author.fingerprint, "joiner refused: the share is full");
                 refuse(&connection, send, RefusedReason::Full).await;
                 return;
@@ -80,12 +80,11 @@ pub(crate) async fn handle(
                 send,
                 recv,
                 broadcasts,
+                seated,
                 &author,
-                &presence,
                 &shared,
             )
             .await;
-            drop(presence);
             tracing::info!(name = %author.name, fingerprint = %author.fingerprint, reason = %ended, "joiner left");
             connection.close(VarInt::from_u32(DROPPED_CODE), ended.as_bytes());
         }
@@ -164,10 +163,13 @@ async fn joined(
     mut send: SendStream,
     mut recv: ControlReader,
     mut broadcasts: broadcast::Receiver<ShareMessage>,
+    seated: (Presence, mpsc::Receiver<ShareMessage>),
     author: &Author,
-    presence: &Presence,
     shared: &Arc<Shared>,
 ) -> &'static str {
+    // Presence is left when this returns.
+    let (presence, mut cursors) = seated;
+    let presence = &presence;
     let mut greeting = vec![ShareMessage::Admitted {
         you: author.clone(),
         undelivered: shared.hub.undelivered_by(author),
@@ -224,9 +226,18 @@ async fn joined(
                 JoinerMessage::Presence { name, url, cursor } => {
                     match presence.update(Whereabouts { name, url, cursor }) {
                         Ok(renamed) => author = renamed,
+                        Err(ignored) if ignored.disconnects() => return "presence flood",
                         Err(ignored) => {
                             tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "presence update ignored");
                         }
+                    }
+                    continue;
+                }
+                JoinerMessage::Cursor { position } => {
+                    // Tests read this to tell what reached the share.
+                    tracing::debug!(name = %author.name, fingerprint = %author.fingerprint, "cursor message");
+                    if let Err(ignored) = presence.cursor(position) {
+                        tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "cursor ignored");
                     }
                     continue;
                 }
@@ -248,6 +259,10 @@ async fn joined(
                     Ok(message) => presence.redact(message),
                     Err(RecvError::Lagged(_)) => return "fell behind",
                     Err(RecvError::Closed) => return "share stopped",
+                },
+                cursor = cursors.recv() => match cursor {
+                    Some(cursor) => cursor,
+                    None => return "share stopped",
                 },
             };
             if lines::write(&mut send, &Envelope::from(message))

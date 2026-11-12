@@ -92,6 +92,7 @@ function install(): void {
         case "status":
         case "presence":
         case "settings":
+        case "cursor":
         case "ping":
           break;
       }

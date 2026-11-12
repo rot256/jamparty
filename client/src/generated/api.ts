@@ -39,7 +39,33 @@ url: PagePath | null, cursor: Switch, };
 
 export type TabId = string;
 
-export type Visit = { tab: TabId, url: PagePath, };
+export type Visit = { tab: TabId, 
+/**
+ * The tab's number for this report, counting up: an older report that
+ * arrives late changes nothing (0 when absent).
+ */
+seq?: number, 
+/**
+ * None: the page cannot say where it is (its URL is too long).
+ */
+url: PagePath | null, };
+
+export type CursorSelector = string;
+
+export type Fraction = number;
+
+export type Position = { selector: CursorSelector, x: Fraction, y: Fraction, };
+
+export type Pointer = { tab: TabId, 
+/**
+ * The number of the tab's report of `url`; older than the joiner's
+ * latest is refused (0 when absent).
+ */
+seq?: number, 
+/**
+ * The page the pointer is on, as the tab knows it.
+ */
+url: PagePath, position?: Position, };
 
 export type PageSettings = { 
 /**
@@ -139,7 +165,7 @@ undelivered: Array<CommentId>,
  */
 answers: Array<Answer>, settings: PageSettings, };
 
-export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings;
+export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, };
 
 export type Submission = { ref: CommentRef, page: string, selector: string, selectedText: string | null, comment: string, };
 

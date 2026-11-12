@@ -22,14 +22,14 @@ use crate::{
     core::{ids::CommentId, settings::SettingsChange},
     describe,
     join::{
-        session::{Event, Session, View},
+        session::{CursorError, Event, Session, View},
         tabs::{TabError, TabId},
     },
     protocol::{
         MAX_LINE_BYTES,
         comment::{Draft, DraftFields},
         control::{AckOutcome, CommentRef},
-        presence::PagePath,
+        presence::{PagePath, Position},
     },
     share::body::{AppBody, RequestError, empty_response, json_response},
 };
@@ -186,7 +186,7 @@ pub(crate) async fn settings(request: Request<Incoming>, session: &Session) -> R
     match changed {
         Ok(settings) => {
             // A new name or cursor switch is news for the share.
-            session.report().await;
+            session.report();
             json_response(StatusCode::OK, &settings)
         }
         Err(error) => error.into(),
@@ -200,22 +200,85 @@ pub(crate) async fn settings(request: Request<Incoming>, session: &Session) -> R
 #[cfg_attr(test, derive(ts_rs::TS))]
 struct Visit {
     tab: TabId,
-    url: PagePath,
+    /// The tab's number for this report, counting up: an older report that
+    /// arrives late changes nothing (0 when absent).
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    seq: Option<u64>,
+    /// None: the page cannot say where it is (its URL is too long).
+    url: Option<PagePath>,
 }
 
 /// `POST api/page`: the tab is on this URL now. 204, or 404 for a tab
 /// without an open event stream.
 pub(crate) async fn page(request: Request<Incoming>, session: &Session) -> Response<AppBody> {
     let visited = match read_json::<Visit>(request).await {
-        Ok(Visit { tab, url }) => session.visit(&tab, url).map_err(tab_error),
+        Ok(Visit { tab, seq, url }) => session
+            .visit(&tab, url, seq.unwrap_or(0))
+            .map_err(tab_error),
         Err(error) => Err(error),
     };
     match visited {
         Ok(()) => {
-            session.report().await;
+            session.report();
             no_content()
         }
         Err(error) => error.into(),
+    }
+}
+
+/// What a page posts to `api/cursor`: the pointer moved to `position`
+/// (an element and the offset in its box), or (none) left the page.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+struct Pointer {
+    tab: TabId,
+    /// The number of the tab's report of `url`; older than the joiner's
+    /// latest is refused (0 when absent).
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    seq: Option<u64>,
+    /// The page the pointer is on, as the tab knows it.
+    url: PagePath,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    position: Option<Position>,
+}
+
+/// `POST api/cursor`: forwards the pointer to the share. 204; 409 while
+/// the cursor switch is off or for a page the joiner does not have for
+/// the tab (nothing is sent then), 404 for an unknown tab, 503 without a
+/// share.
+pub(crate) async fn cursor(request: Request<Incoming>, session: &Session) -> Response<AppBody> {
+    let pointer = match read_json::<Pointer>(request).await {
+        Ok(pointer) => pointer,
+        Err(error) => return error.into(),
+    };
+    match session
+        .cursor(
+            &pointer.tab,
+            pointer.seq.unwrap_or(0),
+            &pointer.url,
+            pointer.position,
+        )
+        .await
+    {
+        Ok(()) => no_content(),
+        Err(CursorError::Off) => {
+            RequestError::new(StatusCode::CONFLICT, "the cursor is not shown").into()
+        }
+        Err(CursorError::Elsewhere) => RequestError::new(
+            StatusCode::CONFLICT,
+            "the joiner has another page for this tab",
+        )
+        .into(),
+        Err(CursorError::Tab(error)) => tab_error(error).into(),
+        Err(CursorError::Unreachable) => RequestError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the share is not reachable",
+        )
+        .into(),
     }
 }
 
@@ -251,10 +314,9 @@ pub(crate) fn events(session: &Arc<Session>, query: Option<&str>) -> Response<Ap
         Err(error) => return error.into(),
     };
     let tab = match tab {
-        Some((tab, url)) => match session.open_tab(tab.clone(), url) {
+        Some(TabQuery { tab, url, seq }) => match session.open_tab(tab.clone(), url, seq) {
             Ok(()) => {
-                let reporting = Arc::clone(session);
-                tokio::spawn(async move { reporting.report().await });
+                session.report();
                 Some(OpenTab {
                     session: Arc::clone(session),
                     tab,
@@ -271,10 +333,11 @@ pub(crate) fn events(session: &Arc<Session>, query: Option<&str>) -> Response<Ap
     let mut keep_alive = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     keep_alive.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let state = Stream {
+        session: Arc::clone(session),
         first: Some(first),
         receiver,
         keep_alive,
-        _tab: tab,
+        tab,
     };
     let frames = stream::unfold(state, next_frame);
     let body = StreamBody::new(frames)
@@ -290,29 +353,48 @@ pub(crate) fn events(session: &Arc<Session>, query: Option<&str>) -> Response<Ap
     response
 }
 
-/// The tab and URL in an event stream's query, if it names them.
-fn tab_of(query: Option<&str>) -> Result<Option<(TabId, PagePath)>, RequestError> {
+/// A tab as its event stream's query names it: `tab`, `url` (absent when
+/// the page cannot say where it is) and `seq`, the number of the page's
+/// report of that url (0 when absent).
+struct TabQuery {
+    tab: TabId,
+    url: Option<PagePath>,
+    seq: u64,
+}
+
+/// The tab in an event stream's query, if it names one.
+fn tab_of(query: Option<&str>) -> Result<Option<TabQuery>, RequestError> {
     let Some(query) = query else {
         return Ok(None);
     };
     let mut tab = None;
     let mut url = None;
+    let mut seq = None;
     for (name, value) in form_urlencoded::parse(query.as_bytes()) {
         match name.as_ref() {
             "tab" => tab = Some(value.into_owned()),
             "url" => url = Some(value.into_owned()),
+            "seq" => seq = Some(value.into_owned()),
             _ => {}
         }
     }
-    match (tab, url) {
-        (None, None) => Ok(None),
-        (Some(tab), Some(url)) => {
-            let tab = TabId::try_from(tab).map_err(|error| bad(error.to_string()))?;
-            let url = PagePath::try_from(url).map_err(|error| bad(error.to_string()))?;
-            Ok(Some((tab, url)))
-        }
-        (Some(_), None) | (None, Some(_)) => Err(bad("tab and url go together".to_owned())),
-    }
+    let Some(tab) = tab else {
+        return match (url, seq) {
+            (None, None) => Ok(None),
+            (Some(_), _) | (_, Some(_)) => Err(bad("a url or seq needs a tab".to_owned())),
+        };
+    };
+    let tab = TabId::try_from(tab).map_err(|error| bad(error.to_string()))?;
+    let url = url
+        .map(PagePath::try_from)
+        .transpose()
+        .map_err(|error| bad(error.to_string()))?;
+    let seq = seq
+        .map(|seq| seq.parse::<u64>())
+        .transpose()
+        .map_err(|error| bad(format!("seq: {error}")))?
+        .unwrap_or(0);
+    Ok(Some(TabQuery { tab, url, seq }))
 }
 
 /// A tab while its event stream is open.
@@ -324,16 +406,35 @@ struct OpenTab {
 impl Drop for OpenTab {
     fn drop(&mut self) {
         self.session.close_tab(&self.tab);
-        let session = Arc::clone(&self.session);
-        tokio::spawn(async move { session.report().await });
+        self.session.report();
     }
 }
 
 struct Stream {
+    session: Arc<Session>,
     first: Option<Event>,
     receiver: Receiver<Event>,
     keep_alive: Interval,
-    _tab: Option<OpenTab>,
+    tab: Option<OpenTab>,
+}
+
+impl Stream {
+    /// Cursors go only to tabs on their page; everything else to all.
+    fn wants(&self, event: &Event) -> bool {
+        match event {
+            Event::Cursor { url, .. } => self
+                .tab
+                .as_ref()
+                .is_some_and(|open| self.session.tab_url(&open.tab).as_ref() == Some(url)),
+            Event::Share { .. }
+            | Event::Reload { .. }
+            | Event::Presence { .. }
+            | Event::Status { .. }
+            | Event::Delivered { .. }
+            | Event::Answer(_)
+            | Event::Settings(_) => true,
+        }
+    }
 }
 
 async fn next_frame(mut state: Stream) -> Option<(Result<Frame<Bytes>, Infallible>, Stream)> {
@@ -343,7 +444,10 @@ async fn next_frame(mut state: Stream) -> Option<(Result<Frame<Bytes>, Infallibl
     loop {
         tokio::select! {
             event = state.receiver.recv() => match event {
-                Ok(event) => return Some((Ok(event_frame(&event)), state)),
+                Ok(event) if state.wants(&event) => {
+                    return Some((Ok(event_frame(&event)), state));
+                }
+                Ok(_) => {}
                 Err(RecvError::Lagged(skipped)) => {
                     tracing::debug!(skipped, "event stream fell behind");
                 }
@@ -379,14 +483,14 @@ mod bindings {
             settings::{KeyBinding, Keys, KeysFields, SettingsChange, Switch},
         },
         join::{
-            api::{API_VERSION, Limited429, Queued, Status, Submission, Visit},
+            api::{API_VERSION, Limited429, Pointer, Queued, Status, Submission, Visit},
             session::{Answer, Event, PageSettings, View},
             tabs::TabId,
         },
         protocol::{
             comment::Author,
             control::{CommentRef, RefusedReason, StatusLine},
-            presence::{Colour, PagePath, Person},
+            presence::{Colour, CursorSelector, Fraction, PagePath, Person, Position},
         },
         share::body::ErrorBody,
     };
@@ -412,6 +516,10 @@ mod bindings {
             Person::decl(&cfg),
             TabId::decl(&cfg),
             Visit::decl(&cfg),
+            CursorSelector::decl(&cfg),
+            Fraction::decl(&cfg),
+            Position::decl(&cfg),
+            Pointer::decl(&cfg),
             PageSettings::decl(&cfg),
             SettingsChange::decl(&cfg),
             Answer::decl(&cfg),

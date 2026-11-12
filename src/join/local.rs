@@ -72,6 +72,7 @@ async fn handle(request: Request<Incoming>, session: &Arc<Session>) -> Response<
         Ok(Route::Status) => api::status(session),
         Ok(Route::Events) => api::events(session, request.uri().query()),
         Ok(Route::Page) => api::page(request, session).await,
+        Ok(Route::Cursor) => api::cursor(request, session).await,
         Ok(Route::Settings) => api::settings(request, session).await,
         Ok(Route::Proxy) => forward(request, session)
             .await

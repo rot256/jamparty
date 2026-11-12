@@ -39,6 +39,12 @@ impl Error for InvalidRateLimit {}
 
 #[cfg(test)]
 impl RateLimit {
+    /// The steady-state time between two requests.
+    #[must_use]
+    pub(crate) fn interval(self) -> SignedDuration {
+        self.interval
+    }
+
     pub(crate) fn new(capacity: u16, period: SignedDuration) -> Result<Self, InvalidRateLimit> {
         let interval = period
             .checked_div(i32::from(capacity))
@@ -55,11 +61,18 @@ impl RateLimit {
         interval: SignedDuration::from_secs(6),
         burst: SignedDuration::from_secs(54),
     };
-    /// 50 presence updates per 10 s from one connection (the joiner sends
-    /// one per page change, name change or cursor switch).
-    pub(crate) const PRESENCE: Self = Self {
-        interval: SignedDuration::from_millis(200),
-        burst: SignedDuration::from_millis(9800),
+    /// 100 presence updates per 10 s from one connection: past that it
+    /// floods (a joiner coalesces its own to at most 4 per second plus
+    /// what its cursor needs) and is disconnected.
+    pub(crate) const PRESENCE_FLOOD: Self = Self {
+        interval: SignedDuration::from_millis(100),
+        burst: SignedDuration::from_millis(9900),
+    };
+    /// 25 cursor messages per second from one connection (pages send at
+    /// most about 15).
+    pub(crate) const CURSOR: Self = Self {
+        interval: SignedDuration::from_millis(40),
+        burst: SignedDuration::from_millis(960),
     };
     /// 60 comments per minute: everyone's together.
     pub(crate) const GLOBAL: Self = Self {

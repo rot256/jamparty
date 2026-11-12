@@ -8,7 +8,7 @@ use crate::{
             MAX_STATUS_LINE, RefusedReason, ShareMessage, StatusLine,
         },
         decode_line, encode_line,
-        presence::{MAX_PAGE_PATH, Person, Support},
+        presence::{MAX_CURSOR_SELECTOR, MAX_PAGE_PATH, Person, Support},
     },
 };
 
@@ -33,6 +33,8 @@ fn joiner_messages_round_trip() {
         r#"{"version":1,"message":{"type":"comment","ref":"a-B-9","draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
         r#"{"version":1,"message":{"type":"presence","name":"alice","url":"/docs?x=1#y","cursor":"on"}}"#.to_owned(),
         r#"{"version":1,"message":{"type":"presence","name":"alice","url":null,"cursor":"off"}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"cursor","position":{"selector":"main > h1","x":0,"y":10000}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"cursor","position":null}}"#.to_owned(),
     ];
     for line in &lines {
         let parsed = joiner(line).unwrap_or_else(|error| panic!("{line}: {error}"));
@@ -90,6 +92,17 @@ fn invalid_joiner_messages_are_rejected() {
         r#"{"version":1,"message":{"type":"presence","name":"a","url":"/\"","cursor":"on"}}"#.to_owned(),
         r#"{"version":1,"message":{"type":"presence","name":"a","cursor":"maybe"}}"#.to_owned(),
         r#"{"version":1,"message":{"type":"presence","name":"a","cursor":"on","colour":1}}"#.to_owned(),
+        // Cursors: an element and fractions of its box, nothing else.
+        r#"{"version":1,"message":{"type":"cursor","position":{"selector":"h1","x":10001,"y":0}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"cursor","position":{"selector":"h1","x":-1,"y":0}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"cursor","position":{"selector":"","x":1,"y":0}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"cursor","position":{"selector":"h1","x":1,"y":0,"clientX":5}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"cursor","position":{"selector":"h1","x":0.5,"y":0}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"cursor","url":"/","position":null}}"#.to_owned(),
+        format!(
+            r#"{{"version":1,"message":{{"type":"cursor","position":{{"selector":"{}","x":1,"y":0}}}}}}"#,
+            "s".repeat(MAX_CURSOR_SELECTOR + 1)
+        ),
         format!(
             r#"{{"version":1,"message":{{"type":"presence","name":"a","url":"/{}","cursor":"on"}}}}"#,
             "p".repeat(MAX_PAGE_PATH)
@@ -177,6 +190,14 @@ fn share_messages() {
             r#"{"type":"status","line":"agent unavailable"}"#.to_owned(),
         ),
         (ShareMessage::Status { line: None }, r#"{"type":"status","line":null}"#.to_owned()),
+        (
+            ShareMessage::Cursor {
+                key: EndpointKey([0xab; 32]),
+                url: "/a".to_owned().try_into().unwrap(),
+                position: Some(serde_json::from_str(r#"{"selector":"h1","x":1,"y":2}"#).unwrap()),
+            },
+            format!(r#"{{"type":"cursor","key":"{key}","url":"/a","position":{{"selector":"h1","x":1,"y":2}}}}"#),
+        ),
         (
             ShareMessage::Presence {
                 joiners: vec![author.clone()],

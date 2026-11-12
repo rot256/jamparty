@@ -9,8 +9,8 @@ use crate::{
     },
     protocol::{
         comment::{Author, Draft},
-        control::{AckOutcome, CommentRef},
-        presence::Whereabouts,
+        control::{AckOutcome, CommentRef, ShareMessage},
+        presence::{Position, Whereabouts},
     },
     share::hub::{Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, MAX_QUEUED_PER_KEY},
 };
@@ -158,7 +158,7 @@ fn whereabouts(name: &str, url: Option<&str>, cursor: Switch) -> Whereabouts {
 #[test]
 fn presence_updates_rename_and_move_joiners_within_a_rate() {
     let (hub, clock) = hub();
-    let alice = hub.join(author("alice", 1)).unwrap();
+    let alice = hub.join(author("alice", 1)).unwrap().0;
     let _bob = hub.join(author("bob", 2)).unwrap();
     let renamed = alice
         .update(whereabouts("alicia", Some("/a"), Switch::On))
@@ -176,17 +176,30 @@ fn presence_updates_rename_and_move_joiners_within_a_rate() {
     assert_eq!(second.cursor, Switch::Off);
     assert_eq!(hub.presence().first().unwrap().name.to_string(), "alicia");
 
-    // 50 per 10 s: the next ones are dropped and change nothing.
-    for _ in 1..50 {
+    // Every update is recorded, the last one wins: state is never dropped.
+    for index in 1..100 {
+        let url = format!("/r{index}");
         alice
-            .update(whereabouts("alicia", Some("/b"), Switch::On))
+            .update(whereabouts("alicia", Some(&url), Switch::On))
             .unwrap();
     }
     assert_eq!(
-        alice.update(whereabouts("mallory", None, Switch::Off)),
-        Err(Ignored::RateLimited)
+        hub.here()
+            .first()
+            .unwrap()
+            .url
+            .clone()
+            .map(String::from)
+            .as_deref(),
+        Some("/r99")
     );
-    assert_eq!(hub.here().first().unwrap().name.to_string(), "alicia");
+    // Past 100 per 10 s the joiner is flooding: still recorded, but the
+    // connection is to be closed.
+    assert_eq!(
+        alice.update(whereabouts("mallory", None, Switch::Off)),
+        Err(Ignored::Flood)
+    );
+    assert_eq!(hub.here().first().unwrap().name.to_string(), "mallory");
     clock.advance(SignedDuration::from_secs(1));
     assert!(alice.update(whereabouts("al", None, Switch::Off)).is_ok());
 }
@@ -194,8 +207,8 @@ fn presence_updates_rename_and_move_joiners_within_a_rate() {
 #[test]
 fn presence_shows_a_key_as_its_latest_connection_says() {
     let (hub, _) = hub();
-    let first = hub.join(author("alice", 1)).unwrap();
-    let second = hub.join(author("alice", 1)).unwrap();
+    let first = hub.join(author("alice", 1)).unwrap().0;
+    let second = hub.join(author("alice", 1)).unwrap().0;
     second
         .update(whereabouts("alice", Some("/two"), Switch::Off))
         .unwrap();
@@ -213,4 +226,80 @@ fn presence_shows_a_key_as_its_latest_connection_says() {
         panic!("{here:?}");
     };
     assert_eq!(only.url.clone().map(String::from).as_deref(), Some("/two"));
+}
+
+fn position(selector: &str) -> Position {
+    serde_json::from_value(serde_json::json!({"selector": selector, "x": 5000, "y": 10000}))
+        .unwrap()
+}
+
+#[test]
+fn cursors_go_only_to_other_people_on_the_same_page() {
+    let (hub, clock) = hub();
+    let (alice, mut alice_rx) = hub.join(author("alice", 1)).unwrap();
+    let (bob, mut bob_rx) = hub.join(author("bob", 2)).unwrap();
+    let (carol, mut carol_rx) = hub.join(author("carol", 3)).unwrap();
+    // Bob's second connection: his own cursor is not sent back to him.
+    let (bob_again, mut bob_again_rx) = hub.join(author("bob", 2)).unwrap();
+    alice
+        .update(whereabouts("alice", Some("/a"), Switch::Off))
+        .unwrap();
+    carol
+        .update(whereabouts("carol", Some("/c"), Switch::Off))
+        .unwrap();
+    bob_again
+        .update(whereabouts("bob", Some("/a"), Switch::Off))
+        .unwrap();
+
+    // Off (the default) or nowhere yet: nothing is forwarded.
+    assert_eq!(bob.cursor(Some(position("h1"))), Err(Ignored::CursorOff));
+    bob.update(whereabouts("bob", None, Switch::On)).unwrap();
+    assert_eq!(bob.cursor(Some(position("h1"))), Err(Ignored::Nowhere));
+    assert!(alice_rx.try_recv().is_err());
+
+    bob.update(whereabouts("bob", Some("/a"), Switch::On))
+        .unwrap();
+    assert_eq!(bob.cursor(Some(position("h1"))), Ok(1));
+    let Ok(ShareMessage::Cursor {
+        key,
+        url,
+        position: Some(at),
+    }) = alice_rx.try_recv()
+    else {
+        panic!("alice got no cursor");
+    };
+    assert_eq!(key, EndpointKey([2; 32]));
+    assert_eq!(String::from(url), "/a");
+    assert_eq!(at, position("h1"));
+    assert!(carol_rx.try_recv().is_err(), "carol is elsewhere");
+    assert!(bob_rx.try_recv().is_err() && bob_again_rx.try_recv().is_err());
+
+    // Leaving the page is a cursor without a position.
+    assert_eq!(bob.cursor(None), Ok(1));
+    assert!(matches!(
+        alice_rx.try_recv(),
+        Ok(ShareMessage::Cursor { position: None, .. })
+    ));
+
+    // Bob moves to carol's page; then turns his cursor off.
+    bob.update(whereabouts("bob", Some("/c"), Switch::On))
+        .unwrap();
+    assert_eq!(bob.cursor(Some(position("p"))), Ok(1));
+    assert!(carol_rx.try_recv().is_ok());
+    assert!(alice_rx.try_recv().is_err());
+    bob.update(whereabouts("bob", Some("/c"), Switch::Off))
+        .unwrap();
+    assert_eq!(bob.cursor(Some(position("p"))), Err(Ignored::CursorOff));
+    assert!(carol_rx.try_recv().is_err());
+
+    // At most 25 per second.
+    clock.advance(SignedDuration::from_secs(1));
+    bob.update(whereabouts("bob", Some("/c"), Switch::On))
+        .unwrap();
+    let forwarded = (0..40)
+        .filter(|_| bob.cursor(Some(position("p"))).is_ok())
+        .count();
+    assert_eq!(forwarded, 25);
+    clock.advance(SignedDuration::from_secs(1));
+    assert!(bob.cursor(Some(position("p"))).is_ok());
 }

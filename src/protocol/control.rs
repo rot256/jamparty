@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     core::{
-        ids::CommentId,
+        ids::{CommentId, EndpointKey},
         invalid::Invalid,
         name::JoinerName,
         settings::Switch,
@@ -24,7 +24,7 @@ use crate::{
     },
     protocol::{
         comment::{Author, Draft},
-        presence::{PagePath, Person, Support},
+        presence::{PagePath, Person, Position, Support},
     },
 };
 
@@ -75,6 +75,12 @@ pub(crate) enum JoinerMessage {
         url: Option<PagePath>,
         cursor: Switch,
     },
+    /// The joiner's pointer moved to `position`, or (none) left the page.
+    /// Sent only while its cursor switch is on, and only on movement.
+    Cursor {
+        #[serde(default)]
+        position: Option<Position>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +126,15 @@ pub(crate) enum ShareMessage {
         joiners: Vec<Author>,
         #[serde(default)]
         here: Vec<Person>,
+    },
+    /// Joiner `key`'s pointer on page `url` (the recipient's page), or
+    /// (none) it left. Sent only to joiners on that page that announced
+    /// it.
+    Cursor {
+        key: EndpointKey,
+        url: PagePath,
+        #[serde(default)]
+        position: Option<Position>,
     },
 }
 

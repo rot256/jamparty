@@ -1,6 +1,7 @@
 //! Who is here and where (docs/ui.md): the joiner tells the share its
 //! name, the page it is on and whether its cursor is shown; the share
-//! tells everyone, with a colour per person.
+//! tells everyone, with a colour per person, and forwards cursors between
+//! joiners on the same page.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +11,7 @@ use crate::{
         invalid::Invalid,
         name::JoinerName,
         settings::Switch,
+        text::check_line,
     },
     protocol::comment::Author,
 };
@@ -139,11 +141,76 @@ pub(crate) struct Whereabouts {
     pub(crate) cursor: Switch,
 }
 
+pub(crate) const MAX_CURSOR_SELECTOR: usize = 512;
+
+/// The CSS selector of the element under a pointer: 1 to 512 characters,
+/// no control characters.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
+pub(crate) struct CursorSelector(String);
+
+impl TryFrom<String> for CursorSelector {
+    type Error = Invalid;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        check_line(&raw, "a cursor selector", MAX_CURSOR_SELECTOR)?;
+        Ok(Self(raw))
+    }
+}
+
+impl From<CursorSelector> for String {
+    fn from(selector: CursorSelector) -> Self {
+        selector.0
+    }
+}
+
+/// A fraction of an element's width or height, in ten-thousandths (0 to
+/// 10000).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u16", into = "u16")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
+pub(crate) struct Fraction(u16);
+
+pub(crate) const FRACTION_ONE: u16 = 10_000;
+
+impl TryFrom<u16> for Fraction {
+    type Error = Invalid;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        if value <= FRACTION_ONE {
+            Ok(Self(value))
+        } else {
+            Err(Invalid::new(format!("a fraction is 0 to {FRACTION_ONE}")))
+        }
+    }
+}
+
+impl From<Fraction> for u16 {
+    fn from(fraction: Fraction) -> Self {
+        fraction.0
+    }
+}
+
+/// Where a pointer is: an element and the offset in its box. Never raw
+/// viewport coordinates.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct Position {
+    pub(crate) selector: CursorSelector,
+    pub(crate) x: Fraction,
+    pub(crate) y: Fraction,
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         core::ids::EndpointKey,
-        protocol::presence::{Colour, MAX_PAGE_PATH, PALETTE_SIZE, PagePath},
+        protocol::presence::{
+            Colour, CursorSelector, Fraction, MAX_CURSOR_SELECTOR, MAX_PAGE_PATH, PALETTE_SIZE,
+            PagePath,
+        },
     };
 
     #[test]
@@ -177,5 +244,15 @@ mod tests {
         assert!(Colour::try_from(PALETTE_SIZE).is_err());
         let colour = u8::from(Colour::from(EndpointKey([0xff; 32])));
         assert_eq!(colour, 0xff % PALETTE_SIZE);
+    }
+
+    #[test]
+    fn cursor_positions() {
+        assert!(CursorSelector::try_from("main > h1".to_owned()).is_ok());
+        assert!(CursorSelector::try_from(String::new()).is_err());
+        assert!(CursorSelector::try_from("a".repeat(MAX_CURSOR_SELECTOR + 1)).is_err());
+        assert!(CursorSelector::try_from("a\nb".to_owned()).is_err());
+        assert!(Fraction::try_from(10_000).is_ok());
+        assert!(Fraction::try_from(10_001).is_err());
     }
 }
