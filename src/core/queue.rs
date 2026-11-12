@@ -1,13 +1,15 @@
 //! The share's comment queue and delivery state machine.
 //!
-//! Comments wait in order. One batch is in flight at a time: [`start`]
-//! hands out everything waiting, and comments arriving meanwhile form the
-//! next batch. [`finish`] reports the result: `Ok` drops the batch, `Error`
-//! puts it back in front and backs off on the injected clock, `Returned`
-//! puts it back with no backoff (the taker went away before it was
-//! delivered, e.g. a `jamjam recv` that died), `Gone` puts it back and holds
-//! the queue for good (the share must be restarted to deliver elsewhere). No timers here: the caller retries [`start`] at
-//! [`DeliveryQueue::wake_at`].
+//! Comments wait in order. One batch is out at a time: [`start`] hands out
+//! everything waiting, and comments arriving meanwhile form the next
+//! batch. [`finish`] reports the result: `Ok` drops the batch, `Error`
+//! keeps it and backs off on the injected clock, `Returned` keeps it with
+//! no backoff (the taker went away before it was delivered, e.g. a
+//! `jamjam recv` that died), `Gone` keeps it and holds the queue for good
+//! (the share must be restarted to deliver elsewhere). A kept batch is
+//! sent again unchanged, never merged with newer comments, so a target
+//! can tell a retry from new comments. No timers here: the caller retries
+//! [`start`] at [`DeliveryQueue::wake_at`].
 //!
 //! [`start`]: DeliveryQueue::start
 //! [`finish`]: DeliveryQueue::finish
@@ -59,10 +61,11 @@ pub(crate) enum QueueError {
 
 #[derive(Debug)]
 pub(crate) struct DeliveryQueue<T> {
-    /// Not in flight, oldest first.
+    /// Not in a batch yet, oldest first.
     waiting: VecDeque<T>,
-    /// The batch in flight; empty unless the state is `InFlight`.
-    in_flight: Vec<T>,
+    /// The batch out (`InFlight`) or to be sent again unchanged; empty when
+    /// the last one was delivered.
+    batch: Vec<T>,
     state: DeliveryState,
     /// Failures since the last success.
     failures: u32,
@@ -72,7 +75,7 @@ impl<T> Default for DeliveryQueue<T> {
     fn default() -> Self {
         Self {
             waiting: VecDeque::new(),
-            in_flight: Vec::new(),
+            batch: Vec::new(),
             state: DeliveryState::Ready,
             failures: 0,
         }
@@ -95,15 +98,15 @@ impl<T: Clone> DeliveryQueue<T> {
         Self::default()
     }
 
-    /// Undelivered comments, in flight first, then waiting.
+    /// Undelivered comments, the batch first, then waiting.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        self.in_flight.iter().chain(self.waiting.iter())
+        self.batch.iter().chain(self.waiting.iter())
     }
 
     /// Undelivered comments, waiting and in flight.
     #[must_use]
     pub(crate) fn len(&self) -> usize {
-        self.waiting.len() + self.in_flight.len()
+        self.waiting.len() + self.batch.len()
     }
 
     #[cfg(test)]
@@ -135,20 +138,26 @@ impl<T: Clone> DeliveryQueue<T> {
         Ok(())
     }
 
-    /// Takes everything waiting as the next batch, if nothing is in flight,
-    /// the backoff has passed and the target is not gone.
+    /// The batch to send, if nothing is in flight, the backoff has passed
+    /// and the target is not gone: the last batch again if it failed,
+    /// otherwise everything waiting.
     pub(crate) fn start(&mut self, now: Timestamp) -> Option<Vec<T>> {
         let may_send = match self.state {
             DeliveryState::Ready => true,
             DeliveryState::Retrying { at } => at <= now,
             DeliveryState::InFlight | DeliveryState::Held => false,
         };
-        if !may_send || self.waiting.is_empty() {
+        if !may_send {
             return None;
         }
-        self.in_flight = self.waiting.drain(..).collect();
+        if self.batch.is_empty() {
+            if self.waiting.is_empty() {
+                return None;
+            }
+            self.batch = self.waiting.drain(..).collect();
+        }
         self.state = DeliveryState::InFlight;
-        Some(self.in_flight.clone())
+        Some(self.batch.clone())
     }
 
     /// Records the in-flight batch's result; returns the delivered items
@@ -161,12 +170,11 @@ impl<T: Clone> DeliveryQueue<T> {
         if self.state != DeliveryState::InFlight {
             return Err(QueueError::NotInFlight);
         }
-        let batch = std::mem::take(&mut self.in_flight);
         match result {
             DeliveryResult::Ok => {
                 self.failures = 0;
                 self.state = DeliveryState::Ready;
-                return Ok(batch);
+                return Ok(std::mem::take(&mut self.batch));
             }
             DeliveryResult::Error => {
                 self.failures = self.failures.saturating_add(1);
@@ -177,9 +185,6 @@ impl<T: Clone> DeliveryQueue<T> {
             }
             DeliveryResult::Returned => self.state = DeliveryState::Ready,
             DeliveryResult::Gone => self.state = DeliveryState::Held,
-        }
-        for item in batch.into_iter().rev() {
-            self.waiting.push_front(item);
         }
         Ok(Vec::new())
     }

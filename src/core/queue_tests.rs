@@ -35,7 +35,7 @@ fn one_batch_in_flight_and_arrivals_form_the_next() {
 }
 
 #[test]
-fn errors_back_off_and_retry_in_order() {
+fn errors_back_off_and_retry_the_same_batch() {
     let mut queue = DeliveryQueue::new();
     queue.push(1).unwrap();
     queue.start(t0()).unwrap();
@@ -43,12 +43,18 @@ fn errors_back_off_and_retry_in_order() {
     assert_eq!(queue.finish(DeliveryResult::Error, t0()), Ok(vec![]));
     assert_eq!(queue.wake_at(), Some(t0() + secs(1)));
     assert_eq!(queue.start(t0()), None);
-    assert_eq!(queue.start(t0() + secs(1)), Some(vec![1, 2]));
+    // Unchanged: the comment that arrived meanwhile waits for the next.
+    assert_eq!(queue.start(t0() + secs(1)), Some(vec![1]));
     queue.finish(DeliveryResult::Error, t0() + secs(1)).unwrap();
     assert_eq!(queue.wake_at(), Some(t0() + secs(3)));
-    queue.start(t0() + secs(3)).unwrap();
-    queue.finish(DeliveryResult::Ok, t0() + secs(3)).unwrap();
+    assert_eq!(queue.start(t0() + secs(3)), Some(vec![1]));
+    assert_eq!(
+        queue.finish(DeliveryResult::Ok, t0() + secs(3)),
+        Ok(vec![1])
+    );
     assert_eq!(queue.state(), DeliveryState::Ready);
+    assert_eq!(queue.start(t0() + secs(3)), Some(vec![2]));
+    queue.finish(DeliveryResult::Ok, t0() + secs(3)).unwrap();
     // Success resets the backoff.
     queue.push(3).unwrap();
     queue.start(t0() + secs(3)).unwrap();
@@ -73,7 +79,7 @@ fn returned_batches_come_back_without_backoff() {
     queue.push(2).unwrap();
     assert_eq!(queue.finish(DeliveryResult::Returned, t0()), Ok(vec![]));
     assert_eq!(queue.state(), DeliveryState::Ready);
-    assert_eq!(queue.start(t0()), Some(vec![1, 2]));
+    assert_eq!(queue.start(t0()), Some(vec![1]));
 }
 
 #[test]
@@ -134,7 +140,9 @@ proptest! {
         // out, failures since the last success, earliest retry, gone.
         let mut accepted: Vec<u64> = Vec::new();
         let mut delivered = 0usize;
-        let mut in_flight: Option<usize> = None;
+        // The size of the batch out or kept for a retry; whether it is out.
+        let mut batch: Option<usize> = None;
+        let mut in_flight = false;
         let mut failures = 0u32;
         let mut retry_at: Option<Timestamp> = None;
         let mut gone = false;
@@ -162,31 +170,36 @@ proptest! {
                     }
                 },
                 Op::Start => {
-                    let may = in_flight.is_none()
+                    let may = !in_flight
                         && !gone
                         && retry_at.is_none_or(|at| at <= now)
                         && undelivered > 0;
                     match queue.start(now) {
-                        Some(batch) => {
+                        Some(sent) => {
                             prop_assert!(may);
-                            // Everything undelivered, in order, nothing skipped.
-                            prop_assert_eq!(batch.as_slice(), accepted.get(delivered..).unwrap());
-                            in_flight = Some(batch.len());
+                            // A failed batch again unchanged, else everything
+                            // undelivered; in order, nothing skipped.
+                            let end = batch.map_or(accepted.len(), |size| delivered + size);
+                            prop_assert_eq!(sent.as_slice(), accepted.get(delivered..end).unwrap());
+                            batch = Some(sent.len());
+                            in_flight = true;
                         }
                         None => prop_assert!(!may),
                     }
                 }
                 Op::Finish(result) => {
                     let outcome = queue.finish(result, now);
-                    let Some(size) = in_flight.take() else {
+                    let (true, Some(size)) = (in_flight, batch) else {
                         prop_assert_eq!(outcome, Err(QueueError::NotInFlight));
                         continue;
                     };
+                    in_flight = false;
                     let done = outcome.unwrap();
                     match result {
                         DeliveryResult::Ok => {
                             prop_assert_eq!(done.as_slice(), accepted.get(delivered..delivered + size).unwrap());
                             delivered += size;
+                            batch = None;
                             failures = 0;
                             retry_at = None;
                         }
@@ -213,7 +226,7 @@ proptest! {
             // No loss, cap, and the state matches the model.
             prop_assert_eq!(queue.len(), accepted.len() - delivered);
             prop_assert!(queue.len() <= MAX_QUEUED);
-            let expected = if in_flight.is_some() {
+            let expected = if in_flight {
                 DeliveryState::InFlight
             } else if gone {
                 DeliveryState::Held

@@ -199,6 +199,9 @@ async fn an_http_error_backs_off_on_the_clock_then_delivers() {
     // The HTTP error stays in the share's log.
     assert_eq!(String::from(status), RETRYING);
     assert_eq!(fake.calls_to("t3_thread_send").len(), 1);
+    // A comment arriving meanwhile goes in a batch of its own.
+    let later = DRAFT.replace("Bigger, please", "Later");
+    assert_eq!(post_comment(&alice, &later).await.status, 202);
 
     clock.advance(SignedDuration::from_secs(1));
     share.hub().wake();
@@ -208,7 +211,29 @@ async fn an_http_error_backs_off_on_the_clock_then_delivers() {
     )
     .await
     .unwrap();
-    assert_eq!(fake.calls_to("t3_thread_send").len(), 2);
+    let sends = fake.calls_to("t3_thread_send");
+    let [failed, retried, next] = sends.as_slice() else {
+        panic!("{sends:?}");
+    };
+    // The retry is the same message under the same key.
+    assert_eq!(retried.arguments.message, failed.arguments.message);
+    assert_eq!(
+        retried.arguments.client_request_id,
+        failed.arguments.client_request_id
+    );
+    assert_ne!(
+        next.arguments.client_request_id,
+        failed.arguments.client_request_id
+    );
+    assert!(next.arguments.message.as_deref().unwrap().contains("Later"));
+    assert!(
+        !retried
+            .arguments
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Later")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

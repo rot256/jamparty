@@ -173,8 +173,8 @@ impl T3Delivery {
     /// string says what went wrong. A thread T3 no longer has, or no longer
     /// takes messages for, is `Gone`.
     pub(crate) async fn deliver(&self, batch: &[Comment]) -> (DeliveryResult, String) {
-        for message in messages(&self.header, batch) {
-            let key = request_key(&message);
+        for (index, message) in messages(&self.header, batch).into_iter().enumerate() {
+            let key = request_key(batch, index);
             let input = SendInput {
                 thread_id: &self.thread,
                 message: &message,
@@ -233,17 +233,23 @@ fn messages(header: &str, batch: &[Comment]) -> Vec<String> {
     messages
 }
 
-/// T3's idempotency key for a message: retrying the same message after a
-/// lost reply does not post it twice.
-fn request_key(message: &str) -> String {
-    let digest = Sha256::digest(message.as_bytes());
-    format!("jamjam-{}", HEXLOWER.encode(&digest))
+/// T3's idempotency key for message `index` of `batch`: from the batch's
+/// comment ids and the index, so a retry of the batch (sent again
+/// unchanged, split the same way) does not post a message twice.
+fn request_key(batch: &[Comment], index: usize) -> String {
+    let mut hasher = Sha256::new();
+    for comment in batch {
+        hasher.update(comment.id.to_string().as_bytes());
+        hasher.update(b"\n");
+    }
+    hasher.update(index.to_string().as_bytes());
+    format!("jamjam-{}", HEXLOWER.encode(&hasher.finalize()))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        adapters::t3::{MAX_MESSAGE, header, messages},
+        adapters::t3::{MAX_MESSAGE, header, messages, request_key},
         core::{ids::CommentId, rng::SystemRng},
         protocol::comment::{Author, Comment, Draft},
     };
@@ -281,5 +287,18 @@ mod tests {
             assert!(message.starts_with(&header));
         }
         assert!(messages(&header, &[]).is_empty());
+    }
+
+    #[test]
+    fn request_keys_follow_the_batch_and_the_index() {
+        let batch = [comment("one"), comment("two")];
+        assert_eq!(request_key(&batch, 0), request_key(&batch.clone(), 0));
+        assert_ne!(request_key(&batch, 0), request_key(&batch, 1));
+        let [first, _] = &batch;
+        assert_ne!(
+            request_key(&batch, 0),
+            request_key(std::slice::from_ref(first), 0)
+        );
+        assert!(request_key(&batch, 0).starts_with("jamjam-"));
     }
 }
