@@ -152,17 +152,27 @@ class Joined:
     port: int
 
 
-def environment(home: Path) -> dict[str, str]:
+def runtime_dir(home: Path) -> Path:
     # Unix socket paths are short: keep the runtime directory out of the
     # (long) pytest directory.
     digest = hashlib.sha256(str(home).encode()).hexdigest()[:10]
-    runtime = Path(tempfile.gettempdir()) / f"jj-{digest}"
+    return Path(tempfile.gettempdir()) / f"jj-{digest}"
+
+
+def environment(home: Path) -> dict[str, str]:
     return {
         **os.environ,
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / "config"),
-        "XDG_RUNTIME_DIR": str(runtime),
+        "XDG_RUNTIME_DIR": str(runtime_dir(home)),
     }
+
+
+@pytest.fixture(autouse=True)
+def remove_runtime_dir(tmp_path: Path) -> Iterator[None]:
+    """Removes the test's runtime directory, which lives outside tmp_path."""
+    yield
+    shutil.rmtree(runtime_dir(tmp_path), ignore_errors=True)
 
 
 def jamjam(home: Path, *arguments: str) -> str:
