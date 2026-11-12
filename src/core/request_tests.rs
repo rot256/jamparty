@@ -246,6 +246,28 @@ fn cross_site_requests_are_refused() {
 }
 
 #[test]
+fn reads_with_another_origin_are_refused() {
+    let local = local();
+    for origin in [Some("null"), Some(OTHER_ORIGIN)] {
+        for facts in [fetch(Method::Get, "/"), bare(Method::Head, STATUS_PATH)] {
+            let facts = RequestFacts { origin, ..facts };
+            assert_eq!(local.decide(&facts), Err(Refusal::BadOrigin), "{origin:?}");
+        }
+    }
+    let own = RequestFacts {
+        origin: Some(ORIGIN),
+        ..fetch(Method::Get, STATUS_PATH)
+    };
+    assert_eq!(local.decide(&own), Ok(Route::Status));
+    // Navigations are allowed from anywhere, with their Origin.
+    let navigation = RequestFacts {
+        origin: Some(OTHER_ORIGIN),
+        ..nav("/", "cross-site")
+    };
+    assert_eq!(local.decide(&navigation), Ok(Route::Proxy));
+}
+
+#[test]
 fn writes_and_upgrades_need_the_exact_origin() {
     let local = local();
     let origins = [

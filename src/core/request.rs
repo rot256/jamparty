@@ -8,7 +8,8 @@
 //! - Every other request needs `Sec-Fetch-Site: same-origin`, or no
 //!   `Sec-Fetch-Site` at all (non-browser clients).
 //! - Non-GET/HEAD requests and upgrades also need `Origin` to be exactly
-//!   `http://<sid>.localhost:<port>`.
+//!   `http://<sid>.localhost:<port>`; other requests with an `Origin` need
+//!   that one too.
 //!
 //! Paths are matched exactly as received (no decoding or normalisation):
 //! only the exact reserved paths are the joiner's own, everything else
@@ -144,7 +145,11 @@ impl LocalOrigin {
                 Method::Get | Method::Head => facts.upgrade == Upgrade::Yes,
                 Method::Post | Method::Other => true,
             };
-            if writes && facts.origin != Some(self.origin.as_str()) {
+            let origin_ok = match facts.origin {
+                Some(origin) => origin == self.origin,
+                None => !writes,
+            };
+            if !origin_ok {
                 return Err(Refusal::BadOrigin);
             }
         }
