@@ -4,7 +4,7 @@
 use std::{
     fs::{self, DirBuilder, OpenOptions},
     io::{ErrorKind, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -25,10 +25,22 @@ pub(crate) fn default_path() -> Result<PathBuf, BoxError> {
     Ok(config.join("jamjam").join("key"))
 }
 
-/// Reads the key at `path`, creating it first if it does not exist.
+/// Reads the key at `path`, creating it first if it does not exist. A key
+/// others may read or write is refused.
 pub(crate) fn load_or_create(path: &Path) -> Result<SecretKey, BoxError> {
     match fs::read_to_string(path) {
-        Ok(text) => parse(&text).map_err(|error| format!("{}: {error}", path.display()).into()),
+        Ok(text) => {
+            let mode = fs::metadata(path)?.mode();
+            if mode & 0o077 != 0 {
+                return Err(format!(
+                    "{} is open to other users (mode {:o}); chmod 600 it, or delete it for a new key",
+                    path.display(),
+                    mode & 0o777
+                )
+                .into());
+            }
+            parse(&text).map_err(|error| format!("{}: {error}", path.display()).into())
+        }
         Err(error) if error.kind() == ErrorKind::NotFound => create(path),
         Err(error) => Err(format!("could not read {}: {error}", path.display()).into()),
     }
@@ -74,6 +86,11 @@ mod tests {
         assert_eq!(first.public(), again.public());
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let error = load_or_create(&path).unwrap_err().to_string();
+        assert!(error.contains("chmod 600"), "{error}");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(load_or_create(&path).is_ok());
         std::fs::write(&path, "nonsense").unwrap();
         assert!(load_or_create(&path).is_err());
     }
