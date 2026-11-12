@@ -77,8 +77,9 @@ relay otherwise. The relay only forwards end-to-end encrypted QUIC.
   reveals nothing secret.
 - `jamjam code --ssh` prints the same public key as an OpenSSH line,
   `ssh-ed25519 AAAA... jamjam@<label>`, for publishing on GitHub (below).
-- A host process uses a fresh iroh key per run. Joiners learn it from the
-  ticket and pin it: a joiner only talks to the host its ticket names.
+- A share uses a fresh iroh key per run, held in memory only; its public
+  key is the ticket. A joiner only talks to the share whose key it was
+  given, which the iroh handshake proves.
 
 ## Adding people
 
@@ -162,13 +163,21 @@ user's own processes can drive their shares.
 
 ## Tickets
 
-`jamjam share` prints a ticket: `jamjamt1-<base32>` encoding the host's
-iroh node id, its relay URL and direct addresses, and a session id (80
-random bits, new per run). Invite and party codes are tickets with a
-secret appended (marked single-use or multi-use).
-A ticket is not a secret: holding it lets you try to connect, and the
-host refuses keys not on its access list. A new run gives a new ticket; links
-need not be stable.
+The ticket is the share's public key and nothing else. Each `jamjam
+share` run generates a fresh iroh key pair, keeps it in memory only, and
+prints its public key (iroh's own encoding of the node id). When the share
+stops, the key is gone and the ticket is dead; a new run has a new one.
+
+- Joiners find the share through iroh's address lookup (on by default: the
+  share publishes its relay and addresses under its key; lookups are
+  signed by that key, so they cannot be forged) and its relays. Nothing
+  else is needed to connect.
+- The key also names the session on the joiner's side: `<sid>` is the
+  first 16 characters of the lowercase base32 SHA-256 of the key, a valid
+  hostname label.
+- A ticket is not a secret: holding it lets you try to connect, and the
+  share refuses keys not on its access list. Invite and party codes are
+  the ticket plus a secret (marked single-use or multi-use).
 
 ## Transport
 
@@ -192,14 +201,16 @@ need not be stable.
   joiner disappears from presence within the idle timeout; a lost host is
   shown in the joiner's page.
 - Reconnection: the joiner reconnects with backoff to the same host
-  (same ticket); a restarted host has a new ticket.
-- Relays: iroh's default public relays to start with; `JAMJAM_RELAY`
-  (or the config) selects a self-hosted `iroh-relay` instead.
+  (same key); a restarted share has a new key, so a new ticket.
+- Relays and address lookup: iroh's defaults (n0's public relays and
+  address lookup) to start with; `JAMJAM_RELAY` (or the config) selects a
+  self-hosted `iroh-relay` instead. Tests turn both off and use direct
+  addresses.
 
 ## The joiner's local server
 
-The browser talks to `http://<sid>.localhost:<port>/`: `<sid>` is the
-session id from the ticket, the port is chosen at random and bound on
+The browser talks to `http://<sid>.localhost:<port>/`: `<sid>` is
+derived from the ticket (see Tickets), the port is chosen at random and bound on
 `127.0.0.1` only.
 
 - One hostname per session: browsers separate cookies by host, not by
