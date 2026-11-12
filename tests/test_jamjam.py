@@ -94,15 +94,23 @@ def upstream_server() -> Iterator[str]:
 class Process:
     """A jamjam process whose output lines are collected as they arrive."""
 
-    def __init__(self, arguments: list[str], env: dict[str, str]) -> None:
+    def __init__(
+        self, arguments: list[str], env: dict[str, str], stdin: str | None = None
+    ) -> None:
         self.process: subprocess.Popen[str] = subprocess.Popen(
             [str(BINARY), *arguments],
             cwd=ROOT,
             env=env,
+            stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
+        if stdin is not None:
+            pipe = self.process.stdin
+            assert pipe is not None
+            _ = pipe.write(stdin)
+            pipe.close()
         self.lines: queue.Queue[str] = queue.Queue()
         self.seen: list[str] = []
         threading.Thread(target=self._read, daemon=True).start()
@@ -203,8 +211,13 @@ def share(home: Path, *source: str) -> Iterator[Shared]:
 def join_process(
     home: Path, shared: Shared, token: str, name: str = "alice"
 ) -> Iterator[Process]:
-    arguments = ["join", token, "--no-open", "--name", name]
-    process = Process([*arguments, "--share-addr", shared.address], environment(home))
+    # The token goes on stdin, as `jamjam join -` reads it: out of argv.
+    arguments = ["join", "-", "--no-open", "--name", name]
+    process = Process(
+        [*arguments, "--share-addr", shared.address],
+        environment(home),
+        stdin=f"{token}\n",
+    )
     try:
         yield process
     finally:

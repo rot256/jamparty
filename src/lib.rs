@@ -10,8 +10,8 @@ mod tests;
 use std::{
     error::Error,
     ffi::OsString,
-    io::{self, Read},
-    net::SocketAddr,
+    io::{self, BufRead, Read},
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     process::Stdio,
     time::Duration,
@@ -32,7 +32,7 @@ use crate::{
     core::{
         ids::{CommentId, Sid},
         name::JoinerName,
-        token::PartyToken,
+        token::{PartyToken, TokenError},
     },
     join::{JoinConfig, Joiner},
     protocol::control::AnswerText,
@@ -84,8 +84,10 @@ enum Command {
 
     /// Join a share and open it in the browser.
     Join {
-        /// The party token printed by `jamjam serve` or `jamjam proxy`.
-        token: PartyToken,
+        /// The party token printed by `jamjam serve` or `jamjam proxy`, or
+        /// `-` to read it from stdin (out of `ps` and shell history).
+        #[arg(value_parser = parse_token)]
+        token: TokenArg,
         /// Display name shown next to your comments (default: user@host).
         #[arg(long)]
         name: Option<JoinerName>,
@@ -148,20 +150,46 @@ struct Delivery {
     command: Vec<OsString>,
 }
 
+/// Where `jamjam join` gets its token.
+#[derive(Clone, Debug)]
+enum TokenArg {
+    Given(PartyToken),
+    /// `-`: the first line of stdin.
+    Stdin,
+}
+
+fn parse_token(raw: &str) -> Result<TokenArg, String> {
+    if raw == "-" {
+        Ok(TokenArg::Stdin)
+    } else {
+        raw.parse()
+            .map(TokenArg::Given)
+            .map_err(|error: TokenError| error.to_string())
+    }
+}
+
+impl TokenArg {
+    fn resolve(self, stdin: impl BufRead) -> Result<PartyToken, BoxError> {
+        match self {
+            Self::Given(token) => Ok(token),
+            Self::Stdin => {
+                let mut line = String::new();
+                stdin.take(1024).read_line(&mut line)?;
+                Ok(line
+                    .parse()
+                    .map_err(|error| format!("the token on stdin: {error}"))?)
+            }
+        }
+    }
+}
+
 /// Which running share `recv` and `send` talk to.
 #[derive(Debug, Args)]
 struct Which {
-    /// The share's id (printed at startup) or its token; needed only when
-    /// several shares run.
-    #[arg(long, value_name = "ID", value_parser = parse_share)]
+    /// The share's id (printed at startup); needed only when several
+    /// shares run.
+    #[arg(long, value_name = "ID")]
     share: Option<Sid>,
-}
-
-fn parse_share(raw: &str) -> Result<Sid, String> {
-    match raw.parse::<PartyToken>() {
-        Ok(token) => Ok(token.share.sid()),
-        Err(_) => raw.parse(),
-    }
 }
 
 pub async fn run(cli: Cli) -> Result<(), BoxError> {
@@ -200,7 +228,10 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
             name,
             no_open,
             share_addr,
-        } => join(token, name, no_open, share_addr).await,
+        } => {
+            let token = token.resolve(io::stdin().lock())?;
+            join(token, name, no_open, share_addr).await
+        }
         Command::Agent { kind } => {
             match kind {
                 None => print!("{}", guides::LIST),
@@ -261,6 +292,12 @@ fn target(
             .ok()
             .filter(|url| matches!(url.scheme_str(), Some("http" | "https")))
             .ok_or_else(|| format!("--t3-url {url} is not an http:// or https:// URL"))?;
+        if url.scheme_str() == Some("http") && !url.host().is_some_and(is_loopback) {
+            return Err(format!(
+                "--t3-url {url}: plain http:// only to this machine (localhost, 127.0.0.1, [::1]); use https://"
+            )
+            .into());
+        }
         let token_file = t3_token_file
             .ok_or("the t3 target needs a file holding the T3 token: pass --t3-token-file")?;
         let thread = match thread {
@@ -289,6 +326,13 @@ fn target(
         "T3CODE_THREAD_ID is set, but without --t3-url comments wait for jamjam recv".to_owned()
     });
     Ok((Target::Recv, note))
+}
+
+/// Whether a URL's host is this machine.
+fn is_loopback(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 fn net_config(discovery: Discovery) -> Result<NetConfig, BoxError> {

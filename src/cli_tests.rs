@@ -3,7 +3,7 @@ use std::{ffi::OsString, time::Duration};
 use clap::{CommandFactory, Parser};
 
 use crate::{
-    Cli, Command, Delivery,
+    Cli, Command, Delivery, TokenArg,
     agent::guides,
     share::delivery::{CommandTarget, Target},
     target,
@@ -27,6 +27,19 @@ fn parses_the_commands() {
         Some(Command::Join { no_open: true, .. })
     ));
     assert!(Cli::try_parse_from(["jamjam", "join", "nonsense"]).is_err());
+    // `-` reads the token from stdin, keeping it out of argv.
+    let piped = Cli::try_parse_from(["jamjam", "join", "-"]).unwrap();
+    let Some(Command::Join { token: piped, .. }) = piped.command else {
+        panic!("not join");
+    };
+    let read = piped
+        .resolve(format!("{token}\nrest\n").as_bytes())
+        .unwrap();
+    assert_eq!(read.to_string(), token);
+    let error = TokenArg::Stdin
+        .resolve(b"nonsense\n".as_slice())
+        .unwrap_err();
+    assert!(error.to_string().contains("stdin"), "{error}");
     assert!(Cli::try_parse_from(["jamjam", "join", &token, "--name", "a b"]).is_err());
     assert!(Cli::try_parse_from(["jamjam", "http://127.0.0.1:8000"]).is_err());
     assert!(Cli::try_parse_from(["jamjam"]).unwrap().command.is_none());
@@ -49,9 +62,10 @@ fn agent_commands_parse_and_stay_out_of_help() {
     assert_eq!(message.as_deref(), Some("hi"));
     assert_eq!(anchor.map(|id| id.to_string()).as_deref(), Some(comment));
     assert_eq!(which.share.map(|id| id.to_string()).as_deref(), Some(id));
-    // A token names its share too.
-    let recv = Cli::try_parse_from(["jamjam", "recv", "--share", &token()]).unwrap();
+    let recv = Cli::try_parse_from(["jamjam", "recv", "--share", id]).unwrap();
     assert!(matches!(recv.command, Some(Command::Recv { which }) if which.share.is_some()));
+    // Only the id: a token does not belong in argv.
+    assert!(Cli::try_parse_from(["jamjam", "recv", "--share", &token()]).is_err());
     assert!(Cli::try_parse_from(["jamjam", "recv", "--share", "../x"]).is_err());
     assert!(Cli::try_parse_from(["jamjam", "send", "hi", "--anchor", "1"]).is_err());
     assert!(Cli::try_parse_from(["jamjam", "agent", "claude"]).is_ok());
@@ -96,12 +110,15 @@ fn delivery_options_choose_the_target() {
     assert!(note.is_none());
     let (command, _) = choose(&["--command-timeout", "5", "--", "agent"], None).unwrap();
     assert!(matches!(command, Target::Command(c) if c.timeout == Duration::from_secs(5)));
-    let both = choose(&["--t3-url", "http://t3/mcp", "--", "agent"], None);
+    let both = choose(
+        &["--t3-url", "http://127.0.0.1:3773/mcp", "--", "agent"],
+        None,
+    );
     assert!(both.unwrap_err().to_string().contains("not both"));
 
     let t3 = [
         "--t3-url",
-        "http://t3/mcp",
+        "http://127.0.0.1:3773/mcp",
         "--t3-token-file",
         "/run/t3-token",
     ];
@@ -111,7 +128,7 @@ fn delivery_options_choose_the_target() {
     };
     assert_eq!(from_env.thread, "thread-1");
     assert_eq!(from_env.site, "/srv/site");
-    assert_eq!(from_env.url.to_string(), "http://t3/mcp");
+    assert_eq!(from_env.url.to_string(), "http://127.0.0.1:3773/mcp");
     let given = [&t3[..], &["--thread", "thread-2"]].concat();
     let (Target::T3(given), _) = choose(&given, Some("thread-1")).unwrap() else {
         panic!("not t3");
@@ -122,7 +139,9 @@ fn delivery_options_choose_the_target() {
     let missing = |args: &[&str], env: Option<&str>| choose(args, env).unwrap_err().to_string();
     assert!(missing(&t3, None).contains("--thread"));
     assert!(missing(&["--thread", "t"], None).contains("--t3-url"));
-    assert!(missing(&["--t3-url", "http://t3/mcp"], Some("t")).contains("--t3-token-file"));
+    assert!(
+        missing(&["--t3-url", "http://127.0.0.1:3773/mcp"], Some("t")).contains("--t3-token-file")
+    );
     let ftp = [
         "--t3-url",
         "ftp://t3",
@@ -132,6 +151,27 @@ fn delivery_options_choose_the_target() {
         "t",
     ];
     assert!(missing(&ftp, None).contains("http"));
+    // Plain http only to this machine.
+    let remote = |url: &str| {
+        let args = ["--t3-url", url, "--t3-token-file", "f", "--thread", "t"];
+        choose(&args, None).map(|_| ())
+    };
+    assert!(
+        remote("http://t3/mcp")
+            .unwrap_err()
+            .to_string()
+            .contains("https://")
+    );
+    assert!(remote("http://10.0.0.1/mcp").is_err());
+    assert!(remote("http://localhost.evil.test/mcp").is_err());
+    for local in [
+        "https://t3/mcp",
+        "http://localhost:3773/mcp",
+        "http://127.0.0.2/mcp",
+        "http://[::1]:3773/mcp",
+    ] {
+        assert!(remote(local).is_ok(), "{local}");
+    }
 }
 
 #[test]
