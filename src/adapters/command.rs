@@ -1,9 +1,14 @@
 //! The `command` target: runs the argv given after `--` once per batch,
 //! the batch as NDJSON on its stdin; exit status 0 means delivered. A run
-//! that outlasts its timeout is killed and counts as failed.
+//! that outlasts its timeout is killed, with everything it started (it
+//! runs in a process group of its own), and counts as failed.
 
 use std::{ffi::OsString, io::ErrorKind, process::Stdio, time::Duration};
 
+use nix::{
+    sys::signal::{Signal, killpg},
+    unistd::Pid,
+};
 use tokio::{io::AsyncWriteExt, process::Command};
 
 use crate::{core::queue::DeliveryResult, protocol::comment::Comment};
@@ -22,6 +27,7 @@ pub(crate) async fn deliver(
     let mut child = match Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
+        .process_group(0)
         .kill_on_drop(true)
         .spawn()
     {
@@ -47,6 +53,10 @@ pub(crate) async fn deliver(
             input.push(b'\n');
         }
     }
+    let group = child
+        .id()
+        .and_then(|id| i32::try_from(id).ok())
+        .map(Pid::from_raw);
     let stdin = child.stdin.take();
     let run = async {
         if let Some(mut stdin) = stdin {
@@ -65,6 +75,9 @@ pub(crate) async fn deliver(
         ),
         Ok(Err(error)) => (DeliveryResult::Error, format!("{name}: {error}")),
         Err(_) => {
+            if let Some(group) = group {
+                let _ = killpg(group, Signal::SIGKILL);
+            }
             let _ = child.kill().await;
             (
                 DeliveryResult::Error,
@@ -73,6 +86,39 @@ pub(crate) async fn deliver(
                     timeout.as_secs()
                 ),
             )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
+
+    use crate::{adapters::command::deliver, core::queue::DeliveryResult};
+
+    #[tokio::test]
+    async fn a_timeout_kills_what_the_command_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid = dir.path().join("pid");
+        let argv = [
+            "sh".into(),
+            "-c".into(),
+            r#"sleep 30 & echo $! > "$0"; wait"#.into(),
+            pid.clone().into(),
+        ];
+        let (result, detail) = deliver(&argv, Duration::from_millis(300), &[]).await;
+        assert_eq!(result, DeliveryResult::Error, "{detail}");
+        let pid: i32 = std::fs::read_to_string(&pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while kill(Pid::from_raw(pid), None) != Err(Errno::ESRCH) {
+            assert!(Instant::now() < deadline, "the background sleep survived");
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 }
