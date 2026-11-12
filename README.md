@@ -1,13 +1,14 @@
 # nabe
 
+nabe (鍋, "NAH-beh"): the hot pot everyone at the table shares.
+
 nabe lets an agent share a site it is working on with a few people. They
 join from their own machine, point at the page and comment; the comments
 reach the agent's session. It is the multi-user successor of
 [komtar](https://github.com/rot256/komtar), peer to peer over
 [iroh](https://iroh.computer): there is no nabe server. See
-[DESIGN.md](DESIGN.md) for the design and the implementation plan; delivery
-to the agent (`nabe recv`, `nabe send`, T3) is not built yet. nabe was
-called jamjam during design.
+[DESIGN.md](DESIGN.md) for the design and the implementation plan. Agents
+start with `nabe agent`. nabe was called jamjam during design.
 
 ## Installation
 
