@@ -2,9 +2,11 @@
 
 use http_body_util::{BodyExt, Full};
 use iroh::endpoint::VarInt;
+use tokio::net::UnixStream;
 
 use crate::{
     adapters::endpoint::generate_key,
+    agent,
     core::{ids::EndpointKey, rng::SystemRng},
     tests::harness::{
         DRAFT, connected, fixture_dir, get, join, joiner_with_key, local, post_comment, send,
@@ -152,4 +154,35 @@ async fn the_joiner_reconnects_after_losing_the_connection() {
     assert_eq!(get(&joiner, "/").await.status, 200);
     until("presence to settle", || share.presence().len() == 1).await;
     assert_eq!(post_comment(&joiner, DRAFT).await.status, 202);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnecting_joiner_learns_what_was_delivered_meanwhile() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let joiner = join(&share, "alice").await;
+    assert_eq!(post_comment(&joiner, DRAFT).await.status, 202);
+    let mut view = joiner.watch();
+    assert_eq!(view.borrow().pending, 1);
+
+    joiner
+        .connection()
+        .unwrap()
+        .close(VarInt::from_u32(0), b"test drop");
+    within("the disconnect", view.wait_for(|view| !view.connected))
+        .await
+        .unwrap();
+    // Delivered while the joiner is away (it waits a second to reconnect).
+    let stream = UnixStream::connect(share.socket_path()).await.unwrap();
+    agent::recv(stream, &mut Vec::new()).await.unwrap();
+    until("the delivery", || share.queued().is_empty()).await;
+    assert!(!view.borrow().connected, "reconnected too early to tell");
+    assert_eq!(view.borrow().pending, 1);
+
+    within(
+        "reconnection with the delivered state",
+        view.wait_for(|view| view.connected && view.pending == 0 && view.undelivered.is_empty()),
+    )
+    .await
+    .unwrap();
 }

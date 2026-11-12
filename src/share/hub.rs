@@ -130,6 +130,17 @@ impl Hub {
         messages
     }
 
+    /// The ids of `author`'s comments not delivered yet.
+    #[must_use]
+    pub(crate) fn undelivered_by(&self, author: &Author) -> Vec<CommentId> {
+        self.lock()
+            .queue
+            .iter()
+            .filter(|comment| comment.author.fingerprint == author.fingerprint)
+            .map(|comment| comment.id)
+            .collect()
+    }
+
     /// Rate-limits and queues a comment from `joiner`, signed as `author`.
     pub(crate) fn comment(&self, joiner: EndpointKey, author: &Author, draft: Draft) -> AckOutcome {
         let mut inner = self.lock();

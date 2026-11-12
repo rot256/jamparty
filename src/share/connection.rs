@@ -113,6 +113,7 @@ async fn joined(
     let mut broadcasts = shared.hub.subscribe();
     let mut greeting = vec![ShareMessage::Admitted {
         you: author.clone(),
+        undelivered: shared.hub.undelivered_by(author),
     }];
     if let Some(reload) = shared.site.reload() {
         greeting.push(ShareMessage::Reload {

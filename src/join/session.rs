@@ -182,14 +182,28 @@ impl Session {
             .clone()
     }
 
-    /// The share admitted us on `control`.
-    pub(crate) fn connected(&self, control: Arc<Control>, you: Author) {
+    /// The share admitted us on `control`; of our comments it still holds
+    /// only `undelivered`, the others were delivered while we were away.
+    pub(crate) fn connected(&self, control: Arc<Control>, you: Author, undelivered: &[CommentId]) {
         *self.control.lock().unwrap_or_else(PoisonError::into_inner) = Some(control);
+        let mut delivered = Vec::new();
+        self.update_mine(|mine| {
+            mine.retain(|id| {
+                let held = undelivered.contains(id);
+                if !held {
+                    delivered.push(*id);
+                }
+                held
+            });
+        });
         self.view.send_modify(|view| {
             view.connected = true;
             view.you = Some(you);
         });
         self.emit(Event::Share { connected: true });
+        if !delivered.is_empty() {
+            self.emit(Event::Delivered { ids: delivered });
+        }
     }
 
     /// The connection is gone (or never came up).

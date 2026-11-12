@@ -96,7 +96,6 @@ impl<T: Clone> DeliveryQueue<T> {
     }
 
     /// Undelivered comments, in flight first, then waiting.
-    #[cfg(test)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
         self.in_flight.iter().chain(self.waiting.iter())
     }

@@ -108,8 +108,8 @@ fn share_messages() {
     };
     let cases = [
         (
-            ShareMessage::Admitted { you: author.clone() },
-            r#"{"type":"admitted","you":{"name":"alice@laptop","fingerprint":"ababababab"}}"#.to_owned(),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()] },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab"}},"undelivered":["{ID}"]}}"#),
         ),
         (
             ShareMessage::Refused { reason: RefusedReason::WrongSecret },

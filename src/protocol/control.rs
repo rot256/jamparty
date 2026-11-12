@@ -62,8 +62,14 @@ pub(crate) enum JoinerMessage {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ShareMessage {
-    /// The hello was accepted; `you` is how the joiner's comments are signed.
-    Admitted { you: Author },
+    /// The hello was accepted; `you` is how the joiner's comments are
+    /// signed, `undelivered` which of its comments the share still holds
+    /// (any others it had queued were delivered meanwhile).
+    Admitted {
+        you: Author,
+        #[serde(default)]
+        undelivered: Vec<CommentId>,
+    },
     /// The hello was refused; the share closes the connection after this.
     Refused { reason: RefusedReason },
     /// What became of the joiner's comment `ref`.

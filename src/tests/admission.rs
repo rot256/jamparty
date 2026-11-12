@@ -121,10 +121,11 @@ async fn right_secret_is_admitted_then_served() {
         .await
         .unwrap()
         .unwrap();
-    let ShareMessage::Admitted { you } = admitted.message else {
+    let ShareMessage::Admitted { you, undelivered } = admitted.message else {
         panic!("expected admission, got {admitted:?}");
     };
     assert_eq!(you.name.to_string(), "mallory");
+    assert!(undelivered.is_empty());
     let answered = String::from_utf8(try_request(&connection).await).unwrap();
     assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
     assert!(answered.contains("Fixture"));

@@ -83,11 +83,11 @@ async fn attempt(dial: &Dial, session: &Session) -> Ended {
     if let Err(error) = lines::write(&mut send, &hello).await {
         return Ended::Failed(error);
     }
-    let you = match lines::read::<Envelope<ShareMessage>, _>(&mut recv).await {
+    let (you, undelivered) = match lines::read::<Envelope<ShareMessage>, _>(&mut recv).await {
         Ok(Some(Envelope {
             version: _,
-            message: ShareMessage::Admitted { you },
-        })) => you,
+            message: ShareMessage::Admitted { you, undelivered },
+        })) => (you, undelivered),
         Ok(Some(Envelope {
             version: _,
             message: ShareMessage::Refused { reason },
@@ -104,7 +104,7 @@ async fn attempt(dial: &Dial, session: &Session) -> Ended {
         }
     };
     let control = Arc::new(Control::new(connection, send));
-    session.connected(Arc::clone(&control), you);
+    session.connected(Arc::clone(&control), you, &undelivered);
     receive(&mut recv, &control, session).await;
     control.connection.close(VarInt::from_u32(0), b"bye");
     Ended::Lost
