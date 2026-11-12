@@ -128,12 +128,42 @@ text. Rows:
   client sends none); addressed answers reach only the recipient;
   `--anchor` defaults to the author; ambiguous `--to` is refused; settings
   file written 0600 and read back.
-- Browser (Chromium, Firefox): pill with dot, expand and collapse, comment
-  list states; gear panel switches and keys; rebinding including Escape and
-  a refused duplicate; comment mode off leaves right-click alone; two
-  joiners see each other's cursors only on the same route of a small SPA
-  fixture; name prompt shown once, then remembered across a new share;
-  `to you` answer seen by one joiner and not the other.
+- Browser: **every feature in this file is covered by Playwright**, in
+  Chromium and Firefox, against the real binaries (one share, several
+  `jampot join` processes, each with its own home directory and its own
+  browser context). A feature is not done until its Playwright test passes.
+  Single-joiner cases:
+  - pill with the dot inside; colour follows the state (stop the share:
+    grey; cut the joiner's event stream: amber; back: green);
+  - expand and collapse; the list shows queued, delivered (after
+    `jampot recv`), and not sent with a working `send again`;
+  - gear panel: both switches by click and by key; keys ignored while a
+    text field has focus; rebinding (new key works, old one doesn't,
+    Escape cancels, a taken key is refused); comment mode off leaves
+    right-click and `/` to the page;
+  - name prompt on first join; not shown again after a restart of share
+    and joiner (read from disk); a change under the gear updates presence;
+  - settings survive a new share (same home directory).
+
+  Multi-client cases (two or three joiners at once, named alice, bob,
+  carol):
+  - presence: `N here` and the avatars update as joiners connect, rename
+    and leave, in every page;
+  - cursors: bob turns his on, alice sees bob's cursor and name on the
+    same URL and it follows bob's pointer; carol on another URL sees none;
+    on a small SPA fixture, a client-side route change by bob makes his
+    cursor appear for carol and disappear for alice; bob turns it off:
+    it disappears everywhere, and the share receives no further cursor
+    messages from him (asserted on the share side);
+  - a cursor anchored to an element that only exists for bob is not drawn
+    for alice;
+  - comments: alice's and bob's comments each appear only in their own
+    list; delivered state reaches only the author;
+  - addressed replies: `jampot send --to alice` shows `to you` for alice
+    and nothing for bob; `--anchor` on bob's comment reaches only bob; a
+    broadcast reaches everyone;
+  - reconnect: one joiner drops and returns; the others' presence and
+    cursors update, and its unsent comments go out.
 
 ## Open question
 
