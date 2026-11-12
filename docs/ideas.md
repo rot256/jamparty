@@ -38,10 +38,23 @@ Why it is attractive:
 
 Open points:
 
-- A simpler variant without an SSH server: the share sends a challenge that
-  includes the joiner's iroh key; john signs it with `ssh-keygen -Y sign`
-  (SSH signatures, using the agent) and returns the signature; the share
-  verifies it against `github.com/john.keys`. Same trust, far less code.
+- A simpler variant without an SSH server (preferred if this is built): an
+  SSH signature (OpenSSH "SSHSIG", what `ssh-keygen -Y sign` makes).
+  - The share sends a challenge: its iroh key, the joiner's iroh key, a
+    random nonce and a timestamp. john's jampot signs it in the SSHSIG
+    namespace `jampot` (a signature in that namespace is useless as a git
+    commit or file signature, and vice versa) and returns it; the share
+    verifies it against john's keys and binds the joiner's iroh key to john.
+  - Same trust as the SSH login, far less code, and the binding of the
+    iroh key is inside the signed data.
+  - All in the binary: verification with RustCrypto's `ssh-key` crate
+    (parses `.keys` lines; verifies SSHSIG for Ed25519, ECDSA, RSA and the
+    `sk-` hardware variants); signing through the user's ssh-agent over
+    `SSH_AUTH_SOCK` (small protocol; works for hardware keys, the agent
+    prompts for the touch); an unencrypted key file can be signed with
+    directly. Gaps: a passphrase-protected key not in an agent needs a
+    passphrase prompt; a hardware key not in any agent would need libfido2,
+    so fall back to running `ssh-keygen -Y sign` or ask for `ssh-add`.
 - Binding: the iroh key must be bound inside the authenticated exchange
   (signed, or sent on the SSH channel) so a man in the middle cannot swap
   it.
@@ -55,8 +68,11 @@ Open points:
   may have just added it). The cost: a key removed from GitHub is still
   accepted until the TTL runs out; a manual refresh (or a short TTL) covers
   the "key leaked" case.
-- Logins can be renamed; storing GitHub's numeric user id (from the API)
-  alongside the login avoids a re-registered name inheriting access.
+- Logins can be renamed and re-registered: store GitHub's numeric user id
+  (`api.github.com/users/<login>`, field `id`) with the login and the cached
+  keys, and match on the id. If a login later resolves to a different id,
+  treat it as a different person (drop the cache and any association) and
+  say so.
 - How this combines with the party token: token to reach the share, SSH or
   signature to get a verified name (and perhaps per-person access).
 
