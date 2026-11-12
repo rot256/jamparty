@@ -54,7 +54,7 @@ One binary, two roles:
   browser client injected), receives comments, delivers them locally and
   broadcasts answers.
 - **Joiner** (`jamjam join <token>`): connects to the share, runs a local
-  HTTP server on `127.0.0.1` for the joiner's browser, forwards each
+  HTTP server on loopback (`127.0.0.1` and `[::1]`) for the joiner's browser, forwards each
   request over iroh, and serves jamjam's own endpoints (comments, answers,
   reload, presence) locally from its connection.
 
@@ -90,7 +90,8 @@ stops, both are gone and the token is dead; a new run has a new token.
 - `jamjam join <token> [--name <name>]` presents the secret and a display
   name (default: the user and host name, at most 40 characters of
   `[A-Za-z0-9._@+-]`). The name is self-chosen and unverified; comments
-  show it next to a short fingerprint of the joiner's key.
+  carry the joiner's full key and show the name next to its short
+  fingerprint. `jamjam join -` reads the token from stdin instead.
 
 ## CLI
 
@@ -101,7 +102,7 @@ For people:
 | `jamjam` | Print a short overview (fixed text, below) |
 | `jamjam serve [dir]` | Share a static directory (default: the current one); print the party token; run until stopped |
 | `jamjam proxy <url>` | Share a running dev server; print the party token; run until stopped |
-| `jamjam join <token> [--name <name>]` | Connect, start the local server, open the browser, run until stopped |
+| `jamjam join <token> [--name <name>]` | Connect, start the local server, open the browser, run until stopped (`-` for the token: read it from stdin) |
 
 Bare `jamjam` prints, always the same:
 
@@ -120,7 +121,9 @@ Delivery options on `serve` and `proxy` (options only, no config file):
 - `--t3-url <mcp url>` and `--t3-token-file <file>`, with `--thread <id>`
   (or `T3CODE_THREAD_ID` if set): the `t3` target, chosen when `--t3-url`
   or `--thread` is given. The token is passed as a file, never as an
-  argument (arguments show in `ps` and shell history).
+  argument (arguments show in `ps` and shell history). Plain `http://`
+  is refused unless the host is this machine (`localhost`, `127.0.0.0/8`,
+  `[::1]`).
 - `-- <command> [args...]`: the `command` target; `--command-timeout
   <secs>` (default 60) bounds each run.
 - Neither: the `recv` target. If `T3CODE_THREAD_ID` is set, the startup
@@ -143,12 +146,13 @@ For agents, hidden from `jamjam --help`:
 
 `recv` and `send` reach the running share through a Unix socket in the
 user's runtime directory (`$XDG_RUNTIME_DIR/jamjam/` or
-`~/.cache/jamjam/run/`, mode 0700, owned by the user, else refused), one
-per share (`<id>.sock`, mode 0600, removed when the share stops): only the
-user's own processes can drive their shares. They talk to the only running
-share; when several run they fail, listing the ids, and take
-`--share <id>` (the id is the share's `<sid>`, printed at startup; the token
-works too).
+`~/.cache/jamjam/run/`, mode 0700, owned by the user, else refused by
+both ends), one per share (`<id>.sock`, mode 0600, removed when the share
+stops): only the user's own processes can drive their shares. Both ends
+also check that the other runs as the same user (peer credentials).
+They talk to the only running share; when several run they fail, listing
+the ids, and take `--share <id>` (the id is the share's `<sid>`, printed
+at startup; not the token, which does not belong in arguments).
 
 `serve` and `proxy` print, besides the token: a one-line warning that
 anyone with the token can see the site and send comments to the agent, the
@@ -205,7 +209,10 @@ the binary and matches its version.
 ## The joiner's local server
 
 The browser talks to `http://<sid>.localhost:<port>/`: `<sid>` comes from
-the token, the port is chosen at random and bound on `127.0.0.1` only.
+the token, the port is chosen at random and bound on loopback only, on
+`127.0.0.1` and `[::1]` both (`localhost` may resolve to either), so no
+other local user can take the other side; a port taken on `[::1]` is
+given up for another (without IPv6 loopback, `127.0.0.1` alone).
 
 - One hostname per session: browsers separate cookies by host, not by
   port, so `<sid>.localhost` keeps different sessions' cookies, storage
@@ -219,8 +226,9 @@ the token, the port is chosen at random and bound on `127.0.0.1` only.
   to localhost: top-level document navigations (GET/HEAD with
   `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`) are allowed
   from anywhere; every other request needs `Sec-Fetch-Site: same-origin`
-  (or none, for non-browser clients), and non-GET requests and upgrades
-  need an exact `Origin` match; responses carry
+  (or none, for non-browser clients), non-GET requests and upgrades
+  need an exact `Origin` match, and any other request carrying an
+  `Origin` needs it to match too; responses carry
   `Content-Security-Policy: frame-ancestors 'self'`.
 - Reserved paths under `/_jamjam/` are answered by the joiner itself:
   `api/comments` (POST, JSON), `api/status` (once on load),
@@ -240,14 +248,18 @@ documented.
 ## Comments and delivery
 
 - The joiner posts a comment over the control stream. The share attaches
-  `author` (the joiner's name and key fingerprint, from its admission) and
-  an id, and queues it (cap 500). Rate limit: 10 comments per minute per
-  joiner key.
+  `author` (the joiner's name, key and key fingerprint, from its
+  admission) and an id, and queues it (cap 500, at most 100 per joiner
+  key). Rate limits: 10 comments per minute per joiner key, 60 per minute
+  in all. The page names each comment with a `ref`; the share queues a
+  `ref` once per key, so "send again" after a lost acknowledgement does
+  not post it twice.
 - The share delivers in batches: one delivery in flight; comments arriving
   meanwhile form the next batch. On success it marks them delivered and
-  tells the joiners (shown in the page). On failure it retries with
-  backoff; if the target reports itself gone, it sets the status line and
-  keeps the comments queued (restart the share to deliver elsewhere).
+  tells the joiners (shown in the page). On failure it retries the same
+  batch, unchanged, with backoff; if the target reports itself gone, it
+  sets the status line and keeps the comments queued (restart the share
+  to deliver elsewhere).
 - If the joiner loses its connection, comments it could not hand to the
   share stay in the page as "not sent", with "send again".
 - A batch is one JSON object per comment, with length caps: `id`,
@@ -279,8 +291,9 @@ Targets (chosen with `serve`/`proxy` options, see CLI):
     `thread_not_sendable`) holds the comments; other failures back off.
 - **`command`**: the argv after `--`, the batch as NDJSON on stdin; exit 0
   means delivered, another status is a failure (backoff); a run longer
-  than `--command-timeout` is killed and is a failure; a command that
-  cannot be started (not found, not executable) is gone.
+  than `--command-timeout` is killed with its whole process group (it
+  runs in one of its own) and is a failure; a command that cannot be
+  started (not found, not executable) is gone.
 
 ## Answers and presence
 
@@ -318,14 +331,27 @@ line).
   `proxy` say so when they print the token. Share it only with people you would
   give that; for others, use a `command` target that hands comments to a
   sandboxed agent. Stopping the share revokes the token.
-- **Names are unverified.** A joiner picks its own name; the key
-  fingerprint next to it is what is stable. Verified identities come with
-  the access control in Later.
+- **The token in arguments.** `jamjam join <token>` puts the token in
+  the process's arguments, which other local users can see (`ps`) and the
+  shell keeps in its history; `jamjam join -` reads it from stdin
+  instead. `recv` and `send` take only the share id.
+- **Token holders are bounded, not trusted.** Each can hold only so much
+  of the share: connections (64 in all, 4 per key), streams and buffers
+  per connection, queue space (100 comments per key) and comment rate
+  (10 per minute per key, 60 in all). Before admission a connection gets
+  even less (see Details).
+- **Names are unverified.** A joiner picks its own name; its key is what
+  is stable (comments carry the full key; the short fingerprint shown
+  next to the name is for people, 40 bits, not for telling keys apart).
+  Verified identities come with the access control in Later.
 - **The share serves only what it is told to**: the directory (no
-  dotfiles) or the one dev server URL given, and nothing before a joiner is
+  dotfiles, also not through symlinks, and nothing a symlink leads to
+  outside it) or the one dev server URL given, under its base path (`.`
+  and `..` path segments are refused), and nothing before a joiner is
   admitted. It never proxies elsewhere.
 - **The joiner's local server is reachable by any local process and any
-  website the joiner visits.** Loopback binding, the exact Host check and
+  website the joiner visits.** Loopback binding (both addresses), the
+  exact Host check and
   the cross-site rules above contain that: other sites cannot read the
   session, post comments as the joiner, frame it, or reach it through DNS
   rebinding. Local processes of the same user can, as they can anything
@@ -362,38 +388,60 @@ Kept out of the first version on purpose; the protocol leaves room:
   text form); fingerprints are the first 5 bytes in hex (iroh's
   `fmt_short`). The party secret is 26 lowercase base32 characters
   (canonical spelling only); whitespace around a pasted token is trimmed.
+  A comment's `author` is `{name, fingerprint, key}`; presence lists each
+  key once.
 - Default joiner name: `user@host` with characters outside the alphabet
   dropped, cut to 40, `joiner` if nothing is left.
 - Delivery backoff: 1 s doubling to 60 s, reset on success; a failed batch
-  is retried together with newer comments; "gone" holds until restart
-  while new comments still queue up to the cap.
+  is retried unchanged (newer comments wait for the next batch); "gone"
+  holds until restart while new comments still queue up to the cap.
 - Joiner's local server: only the three exact reserved paths are the
   joiner's own; a wrong method or an upgrade on them is 405; for
   non-navigation requests only `Sec-Fetch-Site: same-origin` or no header
   passes; cross-site top-level navigation is allowed on every path.
 - Wire format: one JSON object per line, `{"version":1,"message":{...}}`,
   at most 256 KiB. Joiner to share: `hello{secret,name}` first, then
-  `comment{ref,draft}`. Share to joiner: `admitted{you, undelivered}`, `refused{reason}`
-  (`wrong_secret`, `bad_hello`), `comment_ack{ref,outcome}` (`queued`,
-  `rate_limited`, `queue_full`), `answer`, `delivered{ids}`,
-  `reload{revision}`, `status{line}`, `presence{joiners}`. Joiner messages
-  are parsed strictly; unknown fields in share messages are ignored.
+  `comment{ref,draft}` (`ref`: the page's id for the comment, 1 to 64
+  characters of `[A-Za-z0-9-]`; the share remembers the last 1000 by
+  key). Share to joiner: `admitted{you, undelivered}`, `refused{reason}`
+  (`wrong_secret`, `bad_hello`, `full`), `comment_ack{ref,outcome}`
+  (`queued{id}`, `delivered{id}` for a `ref` sent again after its comment
+  was delivered, `rate_limited`, `queue_full`), `answer`,
+  `delivered{ids}`, `reload{revision}`, `status{line}`,
+  `presence{joiners}`. Joiner messages are parsed strictly; unknown fields
+  in share messages are ignored. The joiner writes its control stream
+  from one task, so a request given up never leaves half a line.
 - Admission: the first stream the joiner opens is the control stream; the
-  share reads its hello within 10 s and accepts no other stream before
-  admitting. A refusal is a `refused` line and then a connection close
-  with code 1 and the reason (`wrong_secret`, `bad_hello`) as the close
-  reason, so the joiner sees it either way. A refused joiner stops
-  (`jamjam join` exits with the reason); any other loss reconnects with
-  the delivery backoff (1 s doubling to 60 s). On admission the share sends
+  share must have its hello within 10 s of the connection arriving (one
+  deadline for handshake, stream and hello) and accepts no other stream
+  before admitting. A refusal is a `refused` line and then a connection
+  close with code 1 and the reason (`wrong_secret`, `bad_hello`, `full`)
+  as the close reason, so the joiner sees it either way. A refused joiner
+  stops (`jamjam join` exits with the reason), except for `full`, which
+  it retries; any other loss reconnects with the delivery backoff (1 s
+  doubling to 60 s).
+- QUIC limits on the share: no unidirectional streams; 1 MiB receive
+  window per stream. Before admission one bidirectional stream and a
+  64 KiB connection receive window; at most 32 connections wait for
+  admission at once, more are refused. On admission 64 streams and a
+  4 MiB window. At most 64 admitted connections, 4 per joiner key (beyond
+  that: `full`). The joiner accepts no streams at all. On admission the share sends
   `admitted`, the current `reload` revision (directories only), then
   presence to everyone. A joiner that falls behind the share's broadcasts
   is disconnected and reconnects.
 - Live-reload revisions count from 0; the injected client script carries
   the revision its page was served at (`client.js?live=<n>`).
 - Client injection needs a `Content-Length` of at most 2 MB; chunked
-  (streamed) HTML passes through untouched.
-- Joiner endpoints: `api/comments` takes a draft (`page`, `selector`,
-  `selectedText`, `comment`; nothing else) and answers 202 `{id, pending}`,
+  (streamed) HTML passes through untouched. Reading stops at 2 MB even if
+  the body runs past its length.
+- Both hyper servers (the share's request streams, the joiner's local
+  server) give a request head 30 s; accept loops pause 100 ms after an
+  error. The proxy refuses paths with `.` or `..` segments (also
+  percent-encoded) with 400 and drops hop-by-hop headers both ways
+  (keeping what an upgrade needs).
+- Joiner endpoints: `api/comments` takes the page's `ref` and a draft
+  (`page`, `selector`, `selectedText`, `comment`; nothing else) and
+  answers 202 `{id, pending}` (also for a `ref` sent before),
   429 `{error, retryAfterSecs}`, or 503 when the share is unreachable or
   its queue is full (`pending`: this joiner's comments not yet delivered).
   `api/status` is `{connected, refused, you, joiners, revision, status,
@@ -403,10 +451,11 @@ Kept out of the first version on purpose; the protocol leaves room:
   `Content-Security-Policy: frame-ancestors 'self'` header rather than
   replacing the site's own.
 - Delivery: one task per share. A batch a `recv` took but did not confirm
-  (it went away before printing) goes back with no backoff (the queue's
-  `Returned` result). The status line follows the queue: none when ready,
-  "delivery failed (...); retrying in Ns" while backing off, "the agent is
-  gone (...); comments are kept until the share restarts" when held.
+  (it went away before printing, or did not confirm within 30 s) goes
+  back with no backoff (the queue's `Returned` result). The status line
+  follows the queue: none when ready, "delivery failing, retrying" while
+  backing off, "agent unavailable; comments are kept until the share
+  restarts" when held. What went wrong is only in the share's log.
 - Runtime socket: one JSON line per message in the control envelope.
   Client `recv`, share `comment{comment}` per comment and `end`, client
   `printed`; client `send{message, anchor?}`, share `sent` or
@@ -425,8 +474,8 @@ Kept out of the first version on purpose; the protocol leaves room:
   and `answers` in `api/status`, and send `answer` and `ping` events.
 - `JAMJAM_RELAY` (a relay URL) replaces n0's relays on both sides and keeps
   n0's address lookup.
-- Reconnection: `admitted` lists the joiner's comments (by key
-  fingerprint) the share still holds; the joiner counts the rest of its
+- Reconnection: `admitted` lists the joiner's comments (by its full key)
+  the share still holds; the joiner counts the rest of its
   pending comments as delivered (comments delivered while it was away).
 - T3 MCP, as in T3 Code v0.1.9 (tag `v0.1.9`, commit `24e7747`): the
   endpoint is effect's `McpServer.layerHttp` (`/mcp`, protocol
@@ -449,12 +498,16 @@ Kept out of the first version on purpose; the protocol leaves room:
   archived thread is `thread_not_sendable`
   (`apps/server/src/mcp/OrchestratorMcpService.ts`). jamjam reads with
   `limit: 1`, sends with `mode: 'queue'` and `clientRequestId` =
-  `jamjam-<sha256 of the message>` (a retry after a lost reply is not
-  posted twice), and splits a batch too long for one message into
+  `jamjam-<sha256 of the batch's comment ids and the message's index>`
+  (a retry after a lost reply, of the same batch split the same way, is
+  not posted twice), and splits a batch too long for one message into
   several. The token file is read for every request; HTTP requests time
   out after 60 s. T3 sets `T3CODE_THREAD_ID` per provider session to
   that session's thread (`packages/provider-acp/src/server/adapter.ts`),
   so a subagent's shell may carry the child thread's id.
+- Runtime socket: a share starting removes the user's own sockets of
+  shares that died; `recv` and `send` never remove anything.
+- The joiner refuses a key file open to group or others (chmod 600 it).
 - Offline use and the browser tests: hidden flags `--local` on
   `serve`/`proxy` (no relays or address lookup, bound on `127.0.0.1`,
   prints the direct address) and `--share-addr <addr>` on `join` (dial that
@@ -517,7 +570,10 @@ Must-have cases:
 - Proxying: SSE, chunked and upgraded streams are not buffered; a dev
   server's HMR works through join.
 - Runtime socket: owned by the user, mode 0600; another user cannot use
-  it.
+  it; both ends check the directory and the peer's user.
+- Limits: before admission only the control stream opens, under one
+  deadline; unadmitted connections, admitted ones (in all and per key),
+  queue space per key and the global comment rate are capped.
 
 ## Implementation plan
 
