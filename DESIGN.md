@@ -96,8 +96,10 @@ login that no longer resolves stops startup.
 Each place that runs jamjam has its own persistent key pair. A person adds
 that key to their account on the front door, once.
 
-1. The server URL is built into the binary (`https://<domain>`, a
-   constant in the source). It changes only when set explicitly:
+1. The server URL is built into the binary: `https://<domain>`, with the
+   domain read at compile time from `domain.txt` in the repository root
+   (`include_str!`, trimmed; a placeholder under `.invalid` until the
+   domain is chosen, so an unconfigured build cannot reach anything). It changes only when set explicitly:
    `--server <url>` or `JAMJAM_SERVER` (tests and self-hosting use this).
    On first contact with a server the CLI fetches
    `<server>/.well-known/jamjam` over HTTPS (the server's iroh node id,
