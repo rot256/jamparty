@@ -76,9 +76,16 @@ text. Rows:
   selector of the element under the pointer plus the pointer's offset as a
   fraction of that element's box. The receiver draws it only if that
   selector resolves in its own page; otherwise not at all.
-- Throttle sending to about 15 updates per second; the receiver
-  interpolates. Fade a cursor after a few seconds without movement; remove
-  it when the joiner leaves the URL, turns the switch off, or disconnects.
+- Send only when the pointer moves: one message per `pointermove`,
+  throttled to at most about 15 per second (the last position in a window
+  is sent, never dropped), and nothing at all while the pointer is still.
+  No timers, no periodic or keep-alive cursor messages. Leaving the page
+  (`pointerleave`, window blur, tab hidden) sends one `cursor` message
+  with no position, so the cursor disappears for others at once.
+- The receiver interpolates between positions and fades a cursor after a
+  few seconds without an update (its own timer, nothing sent); it removes
+  it on the no-position message, when the joiner leaves the URL, turns
+  the switch off, or disconnects.
 - Never shown in the comment dialog's target highlight or captured into
   comments.
 
@@ -155,6 +162,9 @@ text. Rows:
     cursor appear for carol and disappear for alice; bob turns it off:
     it disappears everywhere, and the share receives no further cursor
     messages from him (asserted on the share side);
+  - bob's pointer held still sends nothing (the share receives no cursor
+    messages over several seconds); a burst of movement stays at or under
+    about 15 messages per second and ends on the final position;
   - a cursor anchored to an element that only exists for bob is not drawn
     for alice;
   - comments: alice's and bob's comments each appear only in their own
