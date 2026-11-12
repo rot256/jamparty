@@ -1,4 +1,4 @@
-"""End-to-end tests: real `nabe serve`/`proxy` and `nabe join` processes.
+"""End-to-end tests: real `jampot serve`/`proxy` and `jampot join` processes.
 
 Shares run with `--local` (no relays or address lookup) and joiners dial
 them with `--share-addr`, so nothing leaves the machine.
@@ -28,7 +28,7 @@ from playwright.sync_api import Browser, Page, expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
-BINARY = TARGET_DIR / "debug/nabe"
+BINARY = TARGET_DIR / "debug/jampot"
 SITE = ROOT / "tests/fixtures/site"
 FIXTURE_HTML = (SITE / "index.html").read_bytes()
 TIMEOUT = 20.0
@@ -92,7 +92,7 @@ def upstream_server() -> Iterator[str]:
 
 
 class Process:
-    """A nabe process whose output lines are collected as they arrive."""
+    """A jampot process whose output lines are collected as they arrive."""
 
     def __init__(
         self, arguments: list[str], env: dict[str, str], stdin: str | None = None
@@ -183,8 +183,8 @@ def remove_runtime_dir(tmp_path: Path) -> Iterator[None]:
     shutil.rmtree(runtime_dir(tmp_path), ignore_errors=True)
 
 
-def nabe(home: Path, *arguments: str) -> str:
-    """Runs a short nabe command and returns its output."""
+def jampot(home: Path, *arguments: str) -> str:
+    """Runs a short jampot command and returns its output."""
     result = subprocess.run(
         [str(BINARY), *arguments],
         env=environment(home),
@@ -200,8 +200,8 @@ def nabe(home: Path, *arguments: str) -> str:
 def share(home: Path, *source: str) -> Iterator[Shared]:
     process = Process([*source, "--local"], environment(home))
     try:
-        token = process.wait_for("nabe: token: ")
-        address = process.wait_for("nabe: direct address: ")
+        token = process.wait_for("jampot: token: ")
+        address = process.wait_for("jampot: direct address: ")
         yield Shared(token, address, process)
     finally:
         process.stop()
@@ -211,7 +211,7 @@ def share(home: Path, *source: str) -> Iterator[Shared]:
 def join_process(
     home: Path, shared: Shared, token: str, name: str = "alice"
 ) -> Iterator[Process]:
-    # The token goes on stdin, as `nabe join -` reads it: out of argv.
+    # The token goes on stdin, as `jampot join -` reads it: out of argv.
     arguments = ["join", "-", "--no-open", "--name", name]
     process = Process(
         [*arguments, "--share-addr", shared.address],
@@ -227,7 +227,7 @@ def join_process(
 @contextmanager
 def join(home: Path, shared: Shared, name: str = "alice") -> Iterator[Joined]:
     with join_process(home, shared, shared.token, name) as process:
-        url = process.wait_for("nabe: open ")
+        url = process.wait_for("jampot: open ")
         parts = urlsplit(url)
         assert parts.hostname is not None and parts.port is not None
         joined = Joined(url, parts.netloc, parts.port)
@@ -257,7 +257,7 @@ def wait_connected(joined: Joined) -> None:
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
         try:
-            status, body = request(joined, "/_nabe/api/status")
+            status, body = request(joined, "/_jampot/api/status")
         except OSError:
             status, body = 0, b""
         if status == 200 and cast(dict[str, object], json.loads(body))["connected"]:
@@ -296,8 +296,8 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         status, body = request(joined, "/")
         assert status == 200
         assert b"Fixture page" in body
-        assert b"/_nabe/client.js?live=0" in body
-        status, body = request(joined, "/_nabe/client.js")
+        assert b"/_jampot/client.js?live=0" in body
+        status, body = request(joined, "/_jampot/client.js")
         assert status == 200 and b"api/events" in body
         assert request(joined, "/missing")[0] == 404
 
@@ -312,7 +312,7 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         ).encode()
         posted = request(
             joined,
-            "/_nabe/api/comments",
+            "/_jampot/api/comments",
             method="POST",
             headers={"Content-Type": "application/json", "Origin": "http://evil.test"},
             body=comment,
@@ -320,7 +320,7 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         assert posted[0] == 403
         status, body = request(
             joined,
-            "/_nabe/api/comments",
+            "/_jampot/api/comments",
             method="POST",
             headers={
                 "Content-Type": "application/json",
@@ -337,8 +337,8 @@ def test_a_wrong_token_is_refused(tmp_path: Path) -> None:
         key, _secret = shared.token.split(":")
         wrong = f"{key}:{'a' * 26}"
         with join_process(tmp_path, shared, wrong) as process:
-            _ = process.wait_for("nabe: open ")
-            output = process.wait_for("nabe: the share refused")
+            _ = process.wait_for("jampot: open ")
+            output = process.wait_for("jampot: the share refused")
             assert "token" in output
             assert process.process.wait(timeout=TIMEOUT) == 1
 
@@ -351,7 +351,7 @@ def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:
     ):
         status, body = request(joined, "/")
         assert status == 200
-        assert b"/_nabe/client.js" in body
+        assert b"/_jampot/client.js" in body
         _ = page.goto(joined.url)
         echoed = page.evaluate(
             """() => new Promise((resolve, reject) => {
@@ -372,34 +372,34 @@ def test_right_click_comment_is_queued(tmp_path: Path, page: Page) -> None:
         assert urlsplit(joined.url).hostname is not None
         assert cast(str, urlsplit(joined.url).hostname).endswith(".localhost")
         _ = page.goto(joined.url)
-        badge = page.locator("#nabe #badge")
+        badge = page.locator("#jampot #badge")
         expect(badge).to_have_text("0 queued")
         page.locator("#intro").click(button="right")
-        textarea = page.locator("#nabe textarea")
+        textarea = page.locator("#jampot textarea")
         expect(textarea).to_be_focused()
         textarea.fill("Tighten this paragraph.")
         textarea.press("Enter")
         expect(badge).to_have_text("1 queued")
-        expect(page.locator("#nabe #toast")).to_contain_text("Comment queued")
+        expect(page.locator("#jampot #toast")).to_contain_text("Comment queued")
 
 
-def test_bare_nabe_and_the_agent_guides(tmp_path: Path) -> None:
+def test_bare_jampot_and_the_agent_guides(tmp_path: Path) -> None:
     design = (ROOT / "DESIGN.md").read_text()
-    block = design.split("Bare `nabe` prints, always the same:", 1)[1]
+    block = design.split("Bare `jampot` prints, always the same:", 1)[1]
     overview = block.split("```\n", 2)[1]
-    assert nabe(tmp_path) == overview
-    guides = nabe(tmp_path, "agent")
+    assert jampot(tmp_path) == overview
+    guides = jampot(tmp_path, "agent")
     for kind in ["t3", "claude", "codex", "other"]:
-        assert f"nabe agent {kind}" in guides
-    assert "nabe recv" in nabe(tmp_path, "agent", "claude")
-    assert "--t3-url" in nabe(tmp_path, "agent", "t3")
-    help_text = nabe(tmp_path, "--help")
+        assert f"jampot agent {kind}" in guides
+    assert "jampot recv" in jampot(tmp_path, "agent", "claude")
+    assert "--t3-url" in jampot(tmp_path, "agent", "t3")
+    help_text = jampot(tmp_path, "--help")
     assert "serve" in help_text and "recv" not in help_text
 
 
 def comment_on_intro(page: Page, text: str) -> None:
     page.locator("#intro").click(button="right")
-    textarea = page.locator("#nabe textarea")
+    textarea = page.locator("#jampot textarea")
     expect(textarea).to_be_focused()
     textarea.fill(text)
     textarea.press("Enter")
@@ -417,18 +417,18 @@ def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> 
             _ = alice_page.goto(alice.url)
             _ = bob_page.goto(bob.url)
             comment_on_intro(alice_page, "Shorter, please.")
-            entry = alice_page.locator("#nabe #outbox li")
+            entry = alice_page.locator("#jampot #outbox li")
             expect(entry).to_have_attribute("data-state", "queued")
 
-            output = nabe(tmp_path, "recv")
+            output = jampot(tmp_path, "recv")
             [line] = output.splitlines()
             record = cast(dict[str, object], json.loads(line))
             assert record["comment"] == "Shorter, please."
             assert record["selector"] == "#intro"
             expect(entry).to_have_attribute("data-state", "delivered")
-            expect(alice_page.locator("#nabe #badge")).to_have_text("0 queued")
+            expect(alice_page.locator("#jampot #badge")).to_have_text("0 queued")
 
-            _ = nabe(
+            _ = jampot(
                 tmp_path,
                 "send",
                 "Done: **shorter** now.",
@@ -436,7 +436,7 @@ def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> 
                 str(record["id"]),
             )
             for page in [alice_page, bob_page]:
-                answer = page.locator("#nabe .agent-message")
+                answer = page.locator("#jampot .agent-message")
                 expect(answer).to_contain_text("Done: shorter now.")
                 expect(answer.locator("strong")).to_have_text("shorter")
         finally:
@@ -450,14 +450,14 @@ def test_connection_indicator_and_unsent_comments(tmp_path: Path, page: Page) ->
         join(tmp_path, shared) as joined,
     ):
         _ = page.goto(joined.url)
-        indicator = page.locator("#nabe #connection")
+        indicator = page.locator("#jampot #connection")
         expect(indicator).to_have_attribute("data-state", "green")
         shared.process.stop()
         expect(indicator).to_have_attribute("data-state", "grey")
-        expect(page.locator("#nabe #connection-text")).to_contain_text("unreachable")
+        expect(page.locator("#jampot #connection-text")).to_contain_text("unreachable")
 
         comment_on_intro(page, "Kept for later.")
-        entry = page.locator("#nabe #outbox li")
+        entry = page.locator("#jampot #outbox li")
         expect(entry).to_have_attribute("data-state", "unsent")
         expect(entry.locator("button")).to_have_text("send again")
 
@@ -471,7 +471,7 @@ def test_live_reload_after_a_file_change(tmp_path: Path, page: Page) -> None:
     ):
         _ = page.goto(joined.url)
         expect(page.locator("h1")).to_have_text("Fixture page")
-        expect(page.locator("#nabe #connection")).to_have_attribute(
+        expect(page.locator("#jampot #connection")).to_have_attribute(
             "data-state", "green"
         )
         index = site / "index.html"

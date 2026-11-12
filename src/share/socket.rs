@@ -22,7 +22,7 @@ use crate::{
     share::{delivery::RecvRequest, hub::Hub},
 };
 
-/// How long `nabe recv` has to confirm it printed a batch; after that
+/// How long `jampot recv` has to confirm it printed a batch; after that
 /// the batch goes back to the queue.
 const PRINTED_TIMEOUT: Duration = Duration::from_secs(30);
 /// The pause after a failed accept.
@@ -77,7 +77,7 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: Option<mpsc::Sender<Rec
         AgentRequest::Recv => match recv {
             Some(requests) => return serve_recv(read, write, &requests).await,
             None => AgentReply::Error {
-                error: "this share hands comments to a command, not to nabe recv".to_owned(),
+                error: "this share hands comments to a command, not to jampot recv".to_owned(),
             },
         },
         AgentRequest::Send { message, anchor } => match hub.answer(message, anchor) {

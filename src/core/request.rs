@@ -20,9 +20,9 @@ use crate::core::ids::Sid;
 /// Every response carries `Content-Security-Policy` with this value.
 pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
 
-pub(crate) const COMMENTS_PATH: &str = "/_nabe/api/comments";
-pub(crate) const STATUS_PATH: &str = "/_nabe/api/status";
-pub(crate) const EVENTS_PATH: &str = "/_nabe/api/events";
+pub(crate) const COMMENTS_PATH: &str = "/_jampot/api/comments";
+pub(crate) const STATUS_PATH: &str = "/_jampot/api/status";
+pub(crate) const EVENTS_PATH: &str = "/_jampot/api/events";
 
 /// The request method, as far as the decision cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

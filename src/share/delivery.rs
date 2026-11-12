@@ -1,7 +1,7 @@
 //! Delivery: one task per share takes batches from the hub's queue and
 //! hands them to the target.
 //!
-//! - `recv`: each batch waits for a `nabe recv` on the runtime socket;
+//! - `recv`: each batch waits for a `jampot recv` on the runtime socket;
 //!   it is delivered once that client says it printed it, and returned to
 //!   the queue (no backoff) if the client goes away first.
 //! - `command`: the batch goes to the command's stdin.
@@ -24,7 +24,7 @@ use crate::{
 /// Where comments go.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
-    /// Held for `nabe recv`.
+    /// Held for `jampot recv`.
     Recv,
     /// Piped to a command.
     Command(CommandTarget),
@@ -40,14 +40,14 @@ pub(crate) struct CommandTarget {
     pub(crate) timeout: Duration,
 }
 
-/// A waiting `nabe recv`: the batch goes out on `batch`; `printed`
+/// A waiting `jampot recv`: the batch goes out on `batch`; `printed`
 /// resolves once the client printed it (dropped if it went away).
 pub(crate) struct RecvRequest {
     pub(crate) batch: oneshot::Sender<Vec<Comment>>,
     pub(crate) printed: oneshot::Receiver<()>,
 }
 
-/// Starts delivery; returns where `nabe recv` clients queue up (`None`
+/// Starts delivery; returns where `jampot recv` clients queue up (`None`
 /// unless the target is `recv`).
 pub(crate) fn start(
     target: Target,

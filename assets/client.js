@@ -3,15 +3,15 @@ const COMMENTS_URL = new URL("api/comments", BASE);
 const STATUS_URL = new URL("api/status", BASE);
 const EVENTS_URL = new URL("api/events", BASE);
 const LIVE_REVISION = new URL(import.meta.url).searchParams.get("live");
-const HOST_ID = "nabe";
+const HOST_ID = "jampot";
 const MAX_SELECTED_TEXT = 2000;
 const MAX_TEXT = 4000;
 const MAX_HTML = 8000;
-const DISMISSED_KEY = "nabe-dismissed-v1";
-const OUTBOX_KEY = "nabe-outbox-v1";
+const DISMISSED_KEY = "jampot-dismissed-v1";
+const OUTBOX_KEY = "jampot-outbox-v1";
 const MAX_OUTBOX = 20;
 const WATCHDOG_MS = 35000;
-const AGENT_TARGET_PREFIX = "nabe-agent:";
+const AGENT_TARGET_PREFIX = "jampot-agent:";
 
 const styles = `
   :host {
@@ -469,7 +469,7 @@ function install() {
       <div id="agent-general"></div>
       <div id="agent-anchored"></div>
     </div>
-    <dialog id="nabe-dialog" aria-labelledby="dialog-label">
+    <dialog id="jampot-dialog" aria-labelledby="dialog-label">
       <form>
         <label id="dialog-label" for="comment">Suggest Edit:</label>
         <div id="selection-preview" hidden>
@@ -594,7 +594,7 @@ function install() {
     let text = "Connected";
     if (!sseOpen) {
       state = "amber";
-      text = "Reconnecting to nabe join…";
+      text = "Reconnecting to jampot join…";
     } else if (!shareConnected) {
       state = "grey";
       text = "The share is unreachable";
@@ -767,11 +767,11 @@ function install() {
 
   const followElementLink = (link, event) => {
     const href = link.getAttribute("href") ?? "";
-    if (!href.toLowerCase().startsWith("nabe:")) return false;
+    if (!href.toLowerCase().startsWith("jampot:")) return false;
     event.preventDefault();
     let selector;
     try {
-      selector = decodeURIComponent(href.slice("nabe:".length));
+      selector = decodeURIComponent(href.slice("jampot:".length));
     } catch {
       showToast("Element link is invalid");
       return true;
@@ -826,7 +826,7 @@ function install() {
 
     for (const link of body.querySelectorAll("a")) {
       const href = link.getAttribute("href") ?? "";
-      if (!href.toLowerCase().startsWith("nabe:")) {
+      if (!href.toLowerCase().startsWith("jampot:")) {
         link.target = "_blank";
         link.rel = "noopener noreferrer";
       }
@@ -991,7 +991,7 @@ function install() {
         body: JSON.stringify({ ref, ...draft }),
       });
     } catch {
-      const error = new Error("nabe join is not reachable");
+      const error = new Error("jampot join is not reachable");
       error.unsent = true;
       throw error;
     }

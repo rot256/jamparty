@@ -1,4 +1,4 @@
-//! The joiner (`nabe join`): connects to the share and runs the local
+//! The joiner (`jampot join`): connects to the share and runs the local
 //! HTTP server the browser talks to.
 
 mod api;

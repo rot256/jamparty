@@ -1,5 +1,5 @@
-//! The agent's side: `nabe recv` and `nabe send` over the runtime
-//! socket, and the fixed texts (`nabe`, `nabe agent`).
+//! The agent's side: `jampot recv` and `jampot send` over the runtime
+//! socket, and the fixed texts (`jampot`, `jampot agent`).
 
 pub(crate) mod guides;
 

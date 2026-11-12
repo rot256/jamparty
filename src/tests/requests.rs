@@ -22,7 +22,7 @@ async fn static_files_with_the_client_injected() {
     assert_eq!(page.status, 200);
     assert!(page.body.contains("<h1 id=\"title\">Fixture</h1>"));
     assert!(
-        page.body.contains("/_nabe/client.js?live=0"),
+        page.body.contains("/_jampot/client.js?live=0"),
         "{}",
         page.body
     );
@@ -35,11 +35,11 @@ async fn static_files_with_the_client_injected() {
     assert_eq!(css.status, 200);
     assert_eq!(css.body, "h1 { color: red }");
 
-    let client = get(&joiner, "/_nabe/client.js").await;
+    let client = get(&joiner, "/_jampot/client.js").await;
     assert_eq!(client.status, 200);
     assert!(client.body.contains("api/events"));
 
-    for hidden in ["/.secret", "/%2esecret", "/missing", "/_nabe/other"] {
+    for hidden in ["/.secret", "/%2esecret", "/missing", "/_jampot/other"] {
         assert_eq!(get(&joiner, hidden).await.status, 404, "{hidden}");
     }
 }
@@ -99,7 +99,7 @@ async fn proxied_pages_and_streams_are_not_buffered() {
     let page = get(&joiner, "/").await;
     assert_eq!(page.status, 200);
     assert!(page.body.contains("Fixture"));
-    assert!(page.body.contains("/_nabe/client.js\""), "{}", page.body);
+    assert!(page.body.contains("/_jampot/client.js\""), "{}", page.body);
     assert_eq!(get(&joiner, "/nowhere").await.status, 404);
 
     // The first chunk arrives while the upstream still holds the second.

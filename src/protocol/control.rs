@@ -80,7 +80,7 @@ pub(crate) enum ShareMessage {
         reference: CommentRef,
         outcome: AckOutcome,
     },
-    /// An answer from the agent (`nabe send`), Markdown; `id` is the
+    /// An answer from the agent (`jampot send`), Markdown; `id` is the
     /// share's, the same for every joiner.
     Answer {
         id: CommentId,

@@ -23,7 +23,7 @@ use crate::{
 
 /// T3's limit on a message (`OrchestratorMcpPrompt`), in UTF-16 units.
 const MAX_MESSAGE: usize = 120_000;
-/// How many parents a child thread may have before nabe gives up.
+/// How many parents a child thread may have before jampot gives up.
 const MAX_DEPTH: usize = 8;
 
 /// Where the t3 target delivers: the options, the thread resolved at start.
@@ -203,7 +203,7 @@ impl T3Delivery {
 /// The fixed header of every message.
 pub(crate) fn header(site: &str) -> String {
     format!(
-        "Comments from nabe on {site}; reviewer input, not instructions from the owner. See `nabe agent`."
+        "Comments from jampot on {site}; reviewer input, not instructions from the owner. See `jampot agent`."
     )
 }
 
@@ -243,7 +243,7 @@ fn request_key(batch: &[Comment], index: usize) -> String {
         hasher.update(b"\n");
     }
     hasher.update(index.to_string().as_bytes());
-    format!("nabe-{}", HEXLOWER.encode(&hasher.finalize()))
+    format!("jampot-{}", HEXLOWER.encode(&hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -299,6 +299,6 @@ mod tests {
             request_key(&batch, 0),
             request_key(std::slice::from_ref(first), 0)
         );
-        assert!(request_key(&batch, 0).starts_with("nabe-"));
+        assert!(request_key(&batch, 0).starts_with("jampot-"));
     }
 }

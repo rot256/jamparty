@@ -1,6 +1,6 @@
 # Repository instructions
 
-`nabe` is the hosted, multi-user successor of komtar; DESIGN.md describes
+`jampot` is the hosted, multi-user successor of komtar; DESIGN.md describes
 the target and its implementation plan. Keep the runtime as one
 self-contained binary: JavaScript and CSS belong in `assets/client.js` and are
 embedded with `include_str!`.

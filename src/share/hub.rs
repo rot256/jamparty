@@ -28,7 +28,7 @@ use crate::{
 /// Broadcast messages a slow joiner may fall behind by before it is
 /// disconnected (it reconnects and starts afresh).
 const BROADCAST_CAPACITY: usize = 256;
-/// Comments remembered for `nabe send --anchor`, delivered or not.
+/// Comments remembered for `jampot send --anchor`, delivered or not.
 const MAX_ANCHORS: usize = 1000;
 /// Answers replayed to joiners on admission.
 const MAX_ANSWERS: usize = 100;

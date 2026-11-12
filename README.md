@@ -1,14 +1,13 @@
-# nabe
+# jampot
 
-nabe (鍋, "NAH-beh"): the hot pot everyone at the table shares.
-
-nabe lets an agent share a site it is working on with a few people. They
+jampot lets an agent share a site it is working on with a few people. They
 join from their own machine, point at the page and comment; the comments
 reach the agent's session. It is the multi-user successor of
 [komtar](https://github.com/rot256/komtar), peer to peer over
-[iroh](https://iroh.computer): there is no nabe server. See
+[iroh](https://iroh.computer): there is no jampot server. See
 [DESIGN.md](DESIGN.md) for the design and the implementation plan. Agents
-start with `nabe agent`. nabe was called jamjam during design.
+start with `jampot agent`. jampot was called jamjam during design, and
+briefly nabe.
 
 ## Installation
 
@@ -23,13 +22,13 @@ cargo install --path .
 Share a static directory (pages reload when files change):
 
 ```sh
-nabe serve ./public
+jampot serve ./public
 ```
 
 Or share a running development server:
 
 ```sh
-nabe proxy http://127.0.0.1:5173
+jampot proxy http://127.0.0.1:5173
 ```
 
 Both print a party token. Anyone with the token can see the site and
@@ -37,7 +36,7 @@ comment until the share stops; restart the share to revoke it. Others join
 with:
 
 ```sh
-nabe join <token> [--name <name>]
+jampot join <token> [--name <name>]
 ```
 
 `join` opens `http://<session>.localhost:<port>/` in the browser (Chromium
@@ -48,7 +47,7 @@ or Firefox; Safari does not resolve `*.localhost`). Then:
 3. **Press `/`** for a page-level comment when focus is not in a field.
 4. **Press Enter** to send; Shift+Enter adds a newline.
 
-The joiner keeps its key in `~/.config/nabe/key`; the share shows its
+The joiner keeps its key in `~/.config/jampot/key`; the share shows its
 name next to a fingerprint of that key.
 
 ## Releasing
@@ -64,4 +63,4 @@ The release workflow (`.github/workflows/release.yml`) refuses a tag that
 differs from the `Cargo.toml` version, runs the checks, builds the binaries,
 publishes the crate and creates the GitHub release. Publishing to crates.io
 needs either a `CARGO_REGISTRY_TOKEN` repository secret or crates.io trusted
-publishing configured for `rot256/nabe` and workflow `release.yml`.
+publishing configured for `rot256/jampot` and workflow `release.yml`.

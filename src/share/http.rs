@@ -20,8 +20,8 @@ use crate::share::{
 /// How long a request's head may take to arrive, here and on the joiner's
 /// local server.
 pub(crate) const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
-const RESERVED_PREFIX: &str = "/_nabe/";
-const CLIENT_PATH: &str = "/_nabe/client.js";
+const RESERVED_PREFIX: &str = "/_jampot/";
+const CLIENT_PATH: &str = "/_jampot/client.js";
 pub(crate) const CLIENT_JS: &str = include_str!("../../assets/client.js");
 
 /// What the share serves.
@@ -71,7 +71,7 @@ async fn handle(request: Request<Incoming>, site: Site) -> Response<AppBody> {
     } else if path.starts_with(RESERVED_PREFIX) {
         Err(RequestError::new(
             StatusCode::NOT_FOUND,
-            "reserved nabe resource not found",
+            "reserved jampot resource not found",
         ))
     } else {
         match site {
