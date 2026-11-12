@@ -2,12 +2,12 @@
 
 jampot lets an agent share a site it is working on with a few people. They
 join from their own machine, point at the page and comment; the comments
-reach the agent's session. It is the multi-user successor of
+reach the agent's session, and the agent's answers appear on the page for
+everyone. It is the multi-user successor of
 [komtar](https://github.com/rot256/komtar), peer to peer over
 [iroh](https://iroh.computer): there is no jampot server. See
-[DESIGN.md](DESIGN.md) for the design and the implementation plan. Agents
-start with `jampot agent`. jampot was called jamjam during design, and
-briefly nabe.
+[DESIGN.md](DESIGN.md) for the design and the implementation plan. jampot
+was called jamjam during design, and briefly nabe.
 
 ## Installation
 
@@ -17,7 +17,7 @@ Build and install from a checkout:
 cargo install --path .
 ```
 
-## Usage
+## Sharing
 
 Share a static directory (pages reload when files change):
 
@@ -31,24 +31,56 @@ Or share a running development server:
 jampot proxy http://127.0.0.1:5173
 ```
 
-Both print a party token. Anyone with the token can see the site and
-comment until the share stops; restart the share to revoke it. Others join
-with:
+Both print a party token and a share id. Anyone with the token can see the
+site and comment until the share stops; restart the share to revoke it.
+Comments are prompts to the agent, so hand the token only to people you
+would let instruct it.
+
+Where comments go is chosen with options on `serve` and `proxy`:
+
+- **Nothing** (the default): the share keeps them until the agent runs
+  `jampot recv`, which waits for comments, prints them as NDJSON and exits.
+- **A T3 thread**: `--t3-url <mcp url> --t3-token-file <file>`, with
+  `--thread <id>` or `T3CODE_THREAD_ID`. Each batch is queued in the thread
+  as a new turn.
+- **A command**: `-- <command> [args...]` runs once per batch with the
+  comments as NDJSON on stdin; exit status 0 means delivered.
+  `--command-timeout <secs>` (default 60) bounds each run.
+
+The agent answers on the page with `jampot send [message]` (Markdown, from
+stdin when no message is given); `--anchor <comment id>` places the answer
+next to that comment. `recv` and `send` reach the running share through a
+socket only the same user can use; with several shares running, pass
+`--share <id>`.
+
+Agents set themselves up from `jampot agent`, which lists guides for T3,
+Claude, Codex and others; `jampot agent <kind>` prints one.
+[assets/jampot/SKILL.md](assets/jampot/SKILL.md) is a skill that points
+there.
+
+## Joining
 
 ```sh
 jampot join <token> [--name <name>]
 ```
 
-`join` opens `http://<session>.localhost:<port>/` in the browser (Chromium
-or Firefox; Safari does not resolve `*.localhost`). Then:
+`jampot join -` reads the token from stdin, which keeps it out of `ps` and
+shell history. `join` opens `http://<session>.localhost:<port>/` in the
+browser (Chromium or Firefox; Safari does not resolve `*.localhost`). Then:
 
 1. **Right-click any element** to comment on it.
 2. **Select text first** to include the exact passage.
 3. **Press `/`** for a page-level comment when focus is not in a field.
 4. **Press Enter** to send; Shift+Enter adds a newline.
 
-The joiner keeps its key in `~/.config/jampot/key`; the share shows its
-name next to a fingerprint of that key.
+Your comments are listed in the page as queued, delivered or not sent (with
+"send again"), next to the agent's answers and a connection indicator.
+
+The joiner keeps its key in `~/.config/jampot/key` (mode 0600; a key file
+others can read is refused); the share shows its name next to a
+fingerprint of that key. Connections are direct when possible, otherwise
+through iroh's public relays, which forward only end-to-end encrypted
+traffic.
 
 ## Releasing
 

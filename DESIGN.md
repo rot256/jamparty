@@ -205,9 +205,10 @@ the binary and matches its version.
 - Reconnection: the joiner reconnects with backoff to the same share (same
   token); a restarted share has a new token.
 - Relays and address lookup: iroh's defaults (n0's public relays and
-  address lookup) to start with; `JAMPOT_RELAY` selects a
-  self-hosted `iroh-relay` instead. Tests turn both off and use direct
-  addresses.
+  address lookup); they carry only end-to-end encrypted traffic, so there
+  is no relay of our own to run. `JAMPOT_RELAY` selects a self-hosted
+  `iroh-relay` instead, should one ever be wanted. Tests turn both off and
+  use direct addresses.
 
 ## The joiner's local server
 
@@ -556,8 +557,8 @@ with a raspberry jam layer) and is to be replaced with one for jampot.
 | Layer | What | How |
 |---|---|---|
 | Core unit and property tests | Token, names, request decisions, queue, delivery, rate limits | Pure functions, manual clock, seeded rng, `proptest` |
-| In-process integration | Share and joiners over iroh: admission and refusal, requests, upgrades, comments, answers, presence, reconnection, share stop | Several endpoints in one test process, direct addresses, no relay |
-| Browser | Comments by two joiners, isolation between sessions, cross-site rules, the client, live reload, HMR (real Vite) | pytest and Playwright (Chromium, Firefox) against the real binaries |
+| In-process integration | Share and joiners over iroh: admission and refusal, requests, upgrades, comments, answers, presence, reconnection, share stop; the joiner's Host and cross-site rules | Several endpoints in one test process, direct addresses, no relay |
+| Browser | The client (right-click comments), delivery and answers in two pages, the connection indicator and unsent comments, live reload, WebSockets through `proxy` and `join` | pytest and Playwright (Chromium, Firefox) against the real binaries |
 | T3 | The t3 target against a fake MCP endpoint (JSON and event streams) | In-process fake recording calls |
 | T3 contract | Real `t3_thread_read` / `t3_thread_send` | On the box, one throwaway thread: `JAMPOT_T3_URL=<mcp url> JAMPOT_T3_TOKEN_FILE=<file> JAMPOT_T3_THREAD=<id> cargo test t3_contract -- --nocapture` (skipped without them) |
 
@@ -573,7 +574,7 @@ Must-have cases:
   stream, open an upgrade, or frame the session; top-level navigation from
   another site works.
 - Isolation: two sessions joined in one browser keep cookies and storage
-  apart.
+  apart (spiked by hand, step 2; no automated test yet).
 - Authorship: a comment's author is the name and key from the joiner's
   admission, whatever the comment body claims.
 - Delivery: property test over random sequences of comments, delivery
@@ -581,7 +582,8 @@ Must-have cases:
   batch in flight, backoff, hold when the target is gone, queue cap, rate
   limit.
 - Proxying: SSE, chunked and upgraded streams are not buffered; a dev
-  server's HMR works through join.
+  server's HMR works through join (WebSockets are tested; a real Vite
+  dev server is not yet).
 - Runtime socket: owned by the user, mode 0600; another user cannot use
   it; both ends check the directory and the peer's user.
 - Limits: before admission only the control stream opens, under one
@@ -613,9 +615,9 @@ Must-have cases:
    describes step 7's behaviour).
 7. T3 target against a fake MCP (done; the contract test waits for the
    box), command timeout, delivered state on reconnection.
-8. Install jampot in the `t3` container (infra repo) with its T3 token and
-   T3 token; end-to-end check: share from `t3`, join from the laptop,
-   comment, see it in the thread.
+8. Install jampot in the `t3` container (infra repo) with its T3 MCP URL
+   and token file; run the T3 contract test there; end-to-end check:
+   share from `t3`, join from the laptop, comment, see it in the thread.
 
 ## Crates
 
@@ -626,8 +628,6 @@ existing dependencies for static serving, file watching and Markdown.
 
 ## Open questions
 
-- Relays: iroh's public relays and address lookup, or a self-hosted
-  `iroh-relay` (e.g. on the agent box) from the start?
 - Subagent threads: T3 gives each provider session its own
   `T3CODE_THREAD_ID`; jampot resolves a subagent's thread to its
   top-level one. Whether that is what agents want is for the contract
