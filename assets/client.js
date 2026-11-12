@@ -4,12 +4,12 @@ const STATUS_URL = new URL("api/status", BASE);
 const RELOAD_URL = new URL("api/reload", BASE);
 const MESSAGES_URL = new URL("api/messages", BASE);
 const LIVE_REVISION = new URL(import.meta.url).searchParams.get("live");
-const HOST_ID = "komtar";
+const HOST_ID = "jamjam";
 const MAX_SELECTED_TEXT = 2000;
 const MAX_TEXT = 4000;
 const MAX_HTML = 8000;
-const DISMISSED_KEY = "komtar-dismissed-v1";
-const AGENT_TARGET_PREFIX = "komtar-agent:";
+const DISMISSED_KEY = "jamjam-dismissed-v1";
+const AGENT_TARGET_PREFIX = "jamjam-agent:";
 
 const styles = `
   :host {
@@ -400,7 +400,7 @@ function install() {
       <div id="agent-general"></div>
       <div id="agent-anchored"></div>
     </div>
-    <dialog id="komtar-dialog" aria-labelledby="dialog-label">
+    <dialog id="jamjam-dialog" aria-labelledby="dialog-label">
       <form>
         <label id="dialog-label" for="comment">Suggest Edit:</label>
         <div id="selection-preview" hidden>
@@ -616,11 +616,11 @@ function install() {
 
   const followElementLink = (link, event) => {
     const href = link.getAttribute("href") ?? "";
-    if (!href.toLowerCase().startsWith("komtar:")) return false;
+    if (!href.toLowerCase().startsWith("jamjam:")) return false;
     event.preventDefault();
     let selector;
     try {
-      selector = decodeURIComponent(href.slice("komtar:".length));
+      selector = decodeURIComponent(href.slice("jamjam:".length));
     } catch {
       showToast("Element link is invalid");
       return true;
@@ -675,7 +675,7 @@ function install() {
 
     for (const link of body.querySelectorAll("a")) {
       const href = link.getAttribute("href") ?? "";
-      if (!href.toLowerCase().startsWith("komtar:")) {
+      if (!href.toLowerCase().startsWith("jamjam:")) {
         link.target = "_blank";
         link.rel = "noopener noreferrer";
       }

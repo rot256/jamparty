@@ -36,9 +36,9 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "komtar") | .version')"
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "jamjam") | .version')"
           if [ -z "$version" ] || [ "$version" = "null" ]; then
-            echo "Could not read the komtar package version" >&2
+            echo "Could not read the jamjam package version" >&2
             exit 1
           fi
 
@@ -178,7 +178,7 @@ jobs:
       - name: Verify static Linux binary
         if: runner.os == 'Linux'
         env:
-          BINARY: target/${{ matrix.target }}/release/komtar
+          BINARY: target/${{ matrix.target }}/release/jamjam
         run: |
           file "$BINARY"
           file "$BINARY" | grep -Eq 'statically linked|static-pie linked'
@@ -186,7 +186,7 @@ jobs:
       - name: Verify macOS ARM64 binary
         if: runner.os == 'macOS'
         env:
-          BINARY: target/${{ matrix.target }}/release/komtar
+          BINARY: target/${{ matrix.target }}/release/jamjam
         run: |
           file "$BINARY"
           file "$BINARY" | grep -q 'arm64'
@@ -196,13 +196,13 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           mkdir -p dist
-          tar -C "target/$TARGET/release" -czf "dist/komtar-$TARGET.tar.gz" komtar
-          shasum -a 256 "dist/komtar-$TARGET.tar.gz" > "dist/komtar-$TARGET.tar.gz.sha256"
+          tar -C "target/$TARGET/release" -czf "dist/jamjam-$TARGET.tar.gz" jamjam
+          shasum -a 256 "dist/jamjam-$TARGET.tar.gz" > "dist/jamjam-$TARGET.tar.gz.sha256"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: komtar-${{ matrix.target }}
+          name: jamjam-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 

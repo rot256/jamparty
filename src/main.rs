@@ -1,18 +1,18 @@
 use clap::Parser;
-use komtar::Cli;
+use jamjam::Cli;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "komtar=info".into()),
+                .unwrap_or_else(|_| "jamjam=info".into()),
         )
         .with_target(false)
         .init();
 
-    if let Err(error) = komtar::run(Cli::parse()).await {
-        eprintln!("komtar: {error}");
+    if let Err(error) = jamjam::run(Cli::parse()).await {
+        eprintln!("jamjam: {error}");
         std::process::exit(1);
     }
 }

@@ -1,10 +1,10 @@
 [package]
-name = "komtar"
-version = "0.3.1"
+name = "jamjam"
+version = "0.1.0"
 edition = "2024"
-description = "Development static server and reverse proxy for queuing browser feedback"
+description = "Share a site under development and queue browser feedback for a coding agent"
 license = "MIT"
-repository = "https://github.com/rot256/komtar"
+repository = "https://github.com/rot256/jamjam"
 readme = "README.md"
 keywords = ["browser", "cli", "development", "feedback", "proxy"]
 categories = ["command-line-utilities", "development-tools", "web-programming::http-server"]

@@ -56,19 +56,19 @@ impl FromStr for UpstreamUrl {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "komtar",
+    name = "jamjam",
     version,
     about = "Serve or proxy development sites and queue browser feedback",
     arg_required_else_help = true,
-    after_help = "Workflow:\n  1. Run Komtar and open the printed URL.\n  2. Ask your agent to run `komtar recv`.\n  3. Right-click the page and suggest edits.\n\nRun `komtar agent` for the complete agent workflow."
+    after_help = "Workflow:\n  1. Run jamjam and open the printed URL.\n  2. Ask your agent to run `jamjam recv`.\n  3. Right-click the page and suggest edits.\n\nRun `jamjam agent` for the complete agent workflow."
 )]
 pub struct Cli {
-    /// Address on which komtar accepts browser requests.
+    /// Address on which jamjam accepts browser requests.
     #[arg(long, global = true, default_value = "127.0.0.1:3939")]
     listen: SocketAddr,
 
     /// FIFO to create and use for newline-delimited JSON delivery.
-    #[arg(long, global = true, default_value = ".komtar")]
+    #[arg(long, global = true, default_value = ".jamjam")]
     fifo: PathBuf,
 
     /// Base URL of the HTTP or HTTPS development server (legacy proxy form).
@@ -242,13 +242,13 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
     };
 
     let base_url = format!("http://{listen}");
-    println!("komtar: {mode_message} at {base_url}");
-    println!("komtar: FIFO {}", transport_paths.receive.display());
-    if fifo_path == Path::new(".komtar") {
-        println!("komtar: receive feedback with: komtar recv");
+    println!("jamjam: {mode_message} at {base_url}");
+    println!("jamjam: FIFO {}", transport_paths.receive.display());
+    if fifo_path == Path::new(".jamjam") {
+        println!("jamjam: receive feedback with: jamjam recv");
     } else {
         println!(
-            "komtar: receive feedback with: komtar recv --fifo {}",
+            "jamjam: receive feedback with: jamjam recv --fifo {}",
             fifo_path.display()
         );
     }
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn parses_options_after_the_upstream() {
         let cli = Cli::try_parse_from([
-            "komtar",
+            "jamjam",
             "http://127.0.0.1:8000",
             "--listen",
             "127.0.0.1:0",
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn parses_explicit_proxy_and_serve_commands() {
         let proxy = Cli::try_parse_from([
-            "komtar",
+            "jamjam",
             "proxy",
             "http://127.0.0.1:8000",
             "--listen",
@@ -304,7 +304,7 @@ mod tests {
 
         let temporary = tempfile::tempdir().expect("temp directory");
         let serve = Cli::try_parse_from([
-            "komtar",
+            "jamjam",
             "--fifo",
             "feedback.pipe",
             "serve",
@@ -319,14 +319,14 @@ mod tests {
     #[test]
     fn rejects_conflicting_or_missing_sources() {
         let conflicting = Cli::try_parse_from([
-            "komtar",
+            "jamjam",
             "http://127.0.0.1:8000",
             "proxy",
             "http://127.0.0.1:9000",
         ])
         .expect("syntactically valid CLI");
         assert!(RunConfig::try_from(conflicting).is_err());
-        assert!(Cli::try_parse_from(["komtar"]).is_err());
+        assert!(Cli::try_parse_from(["jamjam"]).is_err());
     }
 
     #[test]
@@ -336,7 +336,7 @@ mod tests {
         std::fs::write(&file, "fixture").expect("write fixture");
 
         for path in [file, temporary.path().join("missing")] {
-            let cli = Cli::try_parse_from(["komtar", "serve", path.to_str().expect("UTF-8 path")])
+            let cli = Cli::try_parse_from(["jamjam", "serve", path.to_str().expect("UTF-8 path")])
                 .expect("syntactically valid serve command");
             assert!(RunConfig::try_from(cli).is_err());
         }
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn help_explains_the_agent_workflow() {
         let help = Cli::command().render_long_help().to_string();
-        assert!(help.contains("komtar recv"));
-        assert!(help.contains("komtar agent"));
+        assert!(help.contains("jamjam recv"));
+        assert!(help.contains("jamjam agent"));
     }
 }
