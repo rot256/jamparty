@@ -24,6 +24,7 @@ async fn joiner(share: &Share, name: Option<&str>, settings: &Path) -> Joiner {
         key: generate_key(&SystemRng),
         net: net(),
         share_addrs: share.direct_addrs(),
+        port: None,
     })
     .await
     .unwrap();

@@ -134,6 +134,7 @@ pub(crate) async fn joiner_with_key(
         key,
         net: net(),
         share_addrs: addrs,
+        port: None,
     })
     .await
     .unwrap()

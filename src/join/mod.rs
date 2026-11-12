@@ -50,6 +50,8 @@ pub(crate) struct JoinConfig {
     pub(crate) net: NetConfig,
     /// Direct addresses of the share; empty to use address lookup.
     pub(crate) share_addrs: Vec<SocketAddr>,
+    /// The local port; none for a free one.
+    pub(crate) port: Option<u16>,
 }
 
 /// Ports tried before giving up on one free on both loopback addresses.
@@ -57,10 +59,12 @@ const BIND_ATTEMPTS: usize = 16;
 
 /// Listeners on one port of 127.0.0.1 and [::1] both (`localhost` may
 /// resolve to either), so no other local user can take the IPv6 side.
-/// Without IPv6 loopback, nobody can, and 127.0.0.1 alone will do.
-async fn bind_local() -> Result<Vec<TcpListener>, Report> {
-    for _ in 0..BIND_ATTEMPTS {
-        let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+/// Without IPv6 loopback, nobody can, and 127.0.0.1 alone will do. With
+/// `port`, that port or nothing.
+async fn bind_local(port: Option<u16>) -> Result<Vec<TcpListener>, Report> {
+    let attempts = if port.is_some() { 1 } else { BIND_ATTEMPTS };
+    for _ in 0..attempts {
+        let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, port.unwrap_or(0))).await?;
         let port = v4.local_addr()?.port();
         match TcpListener::bind((Ipv6Addr::LOCALHOST, port)).await {
             Ok(v6) => return Ok(vec![v4, v6]),
@@ -75,7 +79,10 @@ async fn bind_local() -> Result<Vec<TcpListener>, Report> {
             Err(error) => return Err(error.into()),
         }
     }
-    bail!("could not find a port free on both 127.0.0.1 and [::1]")
+    match port {
+        Some(port) => bail!("port {port} is taken on [::1]"),
+        None => bail!("could not find a port free on both 127.0.0.1 and [::1]"),
+    }
 }
 
 /// A running joiner; dropping it stops it.
@@ -97,6 +104,7 @@ impl Joiner {
             key,
             net,
             share_addrs,
+            port,
         } = config;
         let preferences = Preferences {
             saved: settings::load(&path)?,
@@ -104,7 +112,7 @@ impl Joiner {
             given: name,
             default: default_name,
         };
-        let listeners = bind_local().await?;
+        let listeners = bind_local(port).await?;
         let port = listeners
             .first()
             .context("no local listener")?

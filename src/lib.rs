@@ -122,6 +122,10 @@ enum Command {
         /// Dial the share at this address, without relays or address lookup.
         #[arg(long, hide = true)]
         share_addr: Vec<SocketAddr>,
+        /// Serve the session on this local port (the same origin as an
+        /// earlier run with this port and token).
+        #[arg(long, hide = true)]
+        port: Option<u16>,
     },
 
     /// List the guides for agents, or print one.
@@ -261,9 +265,11 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
             name,
             no_open,
             share_addr,
+            port,
         } => {
             let token = token.resolve(io::stdin().lock())?;
-            join(token, name, no_open, share_addr).await
+            let open = if no_open { Open::No } else { Open::Browser };
+            join(token, name, open, share_addr, port).await
         }
         Command::Agent { kind } => {
             match kind {
@@ -445,11 +451,19 @@ async fn share(
     Ok(())
 }
 
+/// Whether `join` opens the browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Open {
+    Browser,
+    No,
+}
+
 async fn join(
     token: PartyToken,
     name: Option<JoinerName>,
-    no_open: bool,
+    open: Open,
     share_addrs: Vec<SocketAddr>,
+    port: Option<u16>,
 ) -> Result<(), Report> {
     let discovery = if share_addrs.is_empty() {
         Discovery::Public
@@ -465,12 +479,14 @@ async fn join(
         key,
         net: net_config(discovery)?,
         share_addrs,
+        port,
     })
     .await?;
     let url = joiner.url();
     println!("jampot: open {url}");
-    if !no_open {
-        open_browser(&url);
+    match open {
+        Open::Browser => open_browser(&url),
+        Open::No => {}
     }
     let mut view = joiner.watch();
     let refused = tokio::select! {
