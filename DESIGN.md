@@ -367,6 +367,9 @@ line).
 
 ## Later
 
+Further brainstorming, explicitly not planned, is collected in
+[docs/ideas.md](docs/ideas.md).
+
 Kept out of the first version on purpose; the protocol leaves room:
 
 - **Access lists** held by the running share, filled from the command
