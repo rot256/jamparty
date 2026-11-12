@@ -76,6 +76,26 @@ Open points:
 - How this combines with the party token: token to reach the share, SSH or
   signature to get a verified name (and perhaps per-person access).
 
+UI sketch (first attempt; the owner is not convinced by it, kept only as a
+starting point). The browser cannot reach the SSH agent, so the joiner
+process signs and the page only shows the result:
+
+- Sharer: `jampot serve --allow john,alice` admits only those GitHub
+  accounts (the token still gets you to the share); its output shows
+  `john ✓ (GitHub)` or `bob (guest)`.
+- Joiner, terminal: `jampot join <token> --github john` signs through the
+  agent (touch for a hardware key), prints `verified as john (GitHub)`, and
+  remembers the login in `settings.json` for the next join; with no
+  matching key in the agent it explains `ssh-add` or adding the key on
+  GitHub.
+- Joiner, page: no name prompt when verified (the name is the login with a
+  small ✓, not editable); a "Verify with GitHub" row in the gear panel
+  (the joiner process does the signing; the page shows "waiting for your
+  key…"); a ✓ badge on verified avatars in "N here", on cursor tags and on
+  comments, so a guest calling himself john is told apart.
+- Agent: a comment's `author` gains `github: {login, id}` when verified;
+  `jampot send --to john` can target the verified person.
+
 ## Cursors across screen sizes
 
 *Idea, 2026-11-13. Refinements to the cursor design in docs/ui.md.*
