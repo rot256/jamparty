@@ -516,6 +516,12 @@ Kept out of the first version on purpose; the protocol leaves room:
   prints the direct address) and `--share-addr <addr>` on `join` (dial that
   address, no relays or address lookup).
 
+## Joiner UI
+
+The overlay on the joiner's page (pill, comment list, control panel,
+cursors, name prompt, addressed replies) is specified in
+[docs/ui.md](docs/ui.md).
+
 ## Logo
 
 Slogan: "Join the potluck." Used in the comment UI and the joiner's start
