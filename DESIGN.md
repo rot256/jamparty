@@ -62,7 +62,7 @@ reviewer's browser
 One binary, two roles:
 
 - **`jamjam server`**: internet-facing behind Caddy. Signs people in,
-  pairs share keys, decides access, routes each session host to its share
+  keeps the added share keys, decides access, routes each session host to its share
   over iroh, queues comments until the share pulls them, relays
   answers to viewers. It holds no credentials for any agent environment
   and never reads project files.
@@ -93,42 +93,42 @@ login that no longer resolves stops startup.
 
 ## Pairing
 
-Each place that runs `jamjam share` has its own key pair. A person
-approves that key once, through GitHub sign-in on the front door.
+Each place that runs jamjam has its own persistent key pair. A person adds
+that key to their account on the front door, once.
 
-1. On first use `jamjam share` (or `jamjam pair`) creates
-   `~/.config/jamjam/key` (mode 0600; the iroh secret key) and connects to
-   the server. An unpaired key may only request pairing.
-2. The server returns a pairing code (8 characters, single use, valid 10
-   minutes, kept in memory). The CLI prints:
-   ```
-   Open https://<domain>/pair/K7QX-2M9D
-   Key fingerprint: 4f1c a90e 77b2 ...   label: t3@mtrx
-   ```
-3. The person opens the link and signs in with GitHub. The page shows the
-   fingerprint and label, says plainly that approving lets this device
-   publish sites under their name, and asks them to compare the
-   fingerprint with their terminal. Approve is a POST with an Origin check.
-4. The server records the key in `keys.json`
-   (`{key, user_id, label, paired, last_seen}`) and tells the waiting CLI.
-   From then on the key works without prompts; the CLI also stores the
-   server's node id, which it pins from then on.
+1. `jamjam init https://<domain>` writes `~/.config/jamjam/config.json`: it
+   fetches `https://<domain>/.well-known/jamjam` over HTTPS (the server's
+   iroh node id, address and relay) and pins that node id. On first use
+   any command creates `~/.config/jamjam/key` (the iroh secret key, mode
+   0600); it persists, so the environment keeps its identity.
+2. `jamjam code` prints this environment's pairing code: its public key
+   with a checksum and the suggested label, e.g.
+   `jamjam1-4f1ca90e77b2...-t3@mtrx`. It is public; printing or pasting
+   it reveals nothing secret.
+3. The person signs in on the front door, opens "Your devices", pastes the
+   code and confirms the label. The server records the key in `keys.json`
+   (`{key, user_id, label, added, last_seen}`).
+4. From then on the environment connects. A key not in `keys.json` is
+   refused during the handshake, with a reason the CLI shows ("this device
+   is not added; run `jamjam code` and add it at https://<domain>/devices").
+   The server accepts nothing from unknown keys: there is no pairing
+   request, code store or approval state on the server.
 
 Rules:
 
-- Only people in the config's `share` list (a subset of `allow`) may
-  approve keys. Commenters cannot publish.
-- A key acts as the person who approved it. Sessions it creates are owned
-  by that person and that key; a key can manage and answer only sessions
-  it created.
-- The front door lists a person's keys ("Your devices": label, last seen)
-  with a revoke button. Revoking closes the key's connection at once and
-  marks its sessions offline. Removing someone from `share` disables all
-  their keys.
-- Pairing phishing (someone sends you their pairing link) is the main
-  risk; the fingerprint check, short single-use codes and the warning text
-  are the defences.
-- Headless environments (CI, a remote box) pair once from any browser.
+- Only people in the config's `share` list (a subset of `allow`) may add
+  keys. Commenters cannot publish.
+- A key acts as the person who added it. Sessions it creates are owned by
+  that person and that key; a key can manage and answer only sessions it
+  created.
+- "Your devices" lists a person's keys (label, last seen) with a remove
+  button. Removing closes the key's connection at once and marks its
+  sessions offline. Removing someone from `share` disables all their keys.
+- The page warns that adding a code lets that device publish sites under
+  the person's name: pasting a code someone else sent you is the phishing
+  risk, and the warning is the defence.
+- Headless environments (CI, a remote box) print their code once and are
+  added from any browser.
 
 ## Sessions
 
@@ -215,7 +215,8 @@ Front door paths:
 | `/s/<seed>` | Entry link: checks access, hands the browser to the session host |
 | `/auth/login`, `/auth/callback` | GitHub sign-in |
 | `/auth/logout` | POST, Origin-checked |
-| `/pair/<code>` | Approve a share key (POST to approve, Origin-checked) |
+| `/devices` | The person's keys: add (paste a pairing code) and remove; POSTs are Origin-checked |
+| `/.well-known/jamjam` | Public: the server's iroh node id, address and relay, for `jamjam init` |
 | `/` | The person's sessions (only those they may open) and devices |
 
 Session host paths:
@@ -290,8 +291,8 @@ Several sessions can be open at once, in different tabs.
   address (from their config); a self-hosted `iroh-relay` is the fallback
   for networks that block UDP. Public n0 relays and discovery are off.
 - Each side pins the other: the server accepts only node ids in
-  `keys.json` (plus pairing requests), the share accepts only the server's
-  node id.
+  `keys.json`, refusing others in the handshake with a reason, and the
+  share accepts only the server's node id.
 - One connection per share process. Streams:
   - **Control** (share opens, one long-lived bidirectional stream):
     newline-delimited JSON requests and responses: create, resume, update
@@ -438,7 +439,8 @@ on unshare or key revocation all of the session's streams are.
 
 | Command | What |
 |---|---|
-| `jamjam pair` | Pair this environment's key (also run on first `share`) |
+| `jamjam init <url>` | Write the config: pin the server's node id from `/.well-known/jamjam` |
+| `jamjam code` | Print this environment's pairing code (its public key; the key is created on first use and kept in `~/.config/jamjam/key`) |
 | `jamjam share <dir or url>` | Create a session and serve it until stopped |
 | `jamjam share --resume <seed> <dir or url>` | Reattach to an existing session |
 | `jamjam unshare <seed>` | End a session |
@@ -558,7 +560,7 @@ behind a trait with a fake in the test suite.
 
 | Module | Contents |
 |---|---|
-| `core/` | Pure, no I/O, no clock or randomness of its own: host parsing, access decisions and routes, cookies (mint and verify), entry tokens, pairing codes, session model and validation, the delivery state machine, the rate limiter |
+| `core/` | Pure, no I/O, no clock or randomness of its own: host parsing, access decisions and routes, cookies (mint and verify), entry tokens, pairing-code parsing, session model and validation, the delivery state machine, the rate limiter |
 | `adapters/` | GitHub, iroh endpoint, filesystem store, T3 MCP, `command` target; each behind a trait |
 | `http/` | The server's axum service (front door and session hosts) and the authentication middleware |
 | `share/` | The share process: komtar's static and proxy serving and injection on hyper (not ported to axum), the control stream, local delivery |
@@ -590,8 +592,8 @@ check in each handler.
   `Route` plus an `Access { user, seed }`; dispatch uses that `Route`, so
   the path is parsed in exactly one place.
 - **Public routes are an explicit list** in `decide` (front door:
-  `/auth/login`, `/auth/callback`; session host: `/_jamjam/enter`; pairing
-  pages require sign-in). A route added later is protected unless it is
+  `/auth/login`, `/auth/callback`, `/.well-known/jamjam`; session host:
+  `/_jamjam/enter`). A route added later is protected unless it is
   added to that list.
 - **Handlers take the decision as an extractor** (`Access`, or `Entry` for
   the public ones), so a handler cannot read the user or session from
@@ -644,8 +646,10 @@ Must-have cases:
   the fallback) without a cookie are all refused.
 - **Entry flow**: tokens single use, 60 s, bound to user, seed and nonce;
   `next` cannot redirect off-host; deep links survive sign-in.
-- **Pairing**: codes single use and 10 minutes; only `share` people approve;
-  a revoked key's connection closes and its sessions go offline.
+- **Pairing**: codes with a bad checksum or for an already added key are
+  rejected; only `share` people add keys; an unknown key is refused in the
+  handshake; a removed key's connection closes and its sessions go
+  offline; `jamjam code` prints the same code across runs.
 - **Delivery**: property test over random sequences of comments, polls,
   acknowledgements (including none, stale and out-of-range), disconnects
   and clock steps: nothing acknowledged is handed out again, nothing
@@ -674,9 +678,21 @@ Must-have cases:
 
 1. Rename: crate, binary, reserved paths, client identifiers, docs;
    komtar's tests pass under the new name.
-2. Spike: `__Host-` cookies on `http://*.localhost` in Chromium and
-   Firefox; iroh in-process with direct addresses (pin the version after a
-   dependency health check).
+2. Spike (done 2026-11-12):
+   - iroh 1.4.1 (healthy: 1.0 since June 2026, frequent releases), pinned.
+     In-process with direct addresses and no relay: an unknown key is
+     refused in the handshake with its reason; ten concurrent HTTP/1.1
+     requests over per-request bi streams (hyper on both ends) run in
+     parallel; an HTTP upgrade carries data both ways; a share killed with
+     SIGKILL is noticed after the idle timeout (1.5 s idle: 1.65 s), and
+     keepalive holds an idle connection open.
+   - Browsers: in Chromium and Firefox `http://*.localhost` is a secure
+     context, `__Host-` cookies set and stay per host, sibling hosts never
+     see each other's cookies. A credentialed fetch from A to B carries B's
+     cookies with `Sec-Fetch-Site: same-site` (confirming the cross-site
+     rules are needed, and that the header is there to enforce them).
+     WebKit does not resolve `*.localhost`: browser tests run in Chromium
+     and Firefox.
 3. `core/` with its unit and property tests, before any I/O.
 4. Share over iroh: control stream, request streams on komtar's hyper
    serving, injection, reconnection; in-process tests with a stub server.
