@@ -13,7 +13,7 @@ use crate::{
     adapters::lines,
     core::ids::CommentId,
     protocol::{
-        agent::{AgentReply, AgentRequest},
+        agent::{Addressee, AgentReply, AgentRequest},
         control::{AnswerText, Envelope},
     },
 };
@@ -45,17 +45,23 @@ pub(crate) async fn recv(stream: UnixStream, out: &mut impl Write) -> Result<usi
     Ok(comments.len())
 }
 
-/// Sends an answer to every joiner, next to comment `anchor` if given.
+/// Sends an answer, next to comment `anchor` if given, to `to` (by
+/// default the anchor's author, else everyone).
 pub(crate) async fn send(
     stream: UnixStream,
     message: AnswerText,
     anchor: Option<CommentId>,
+    to: Option<Addressee>,
 ) -> Result<(), Report> {
     let (read, mut write) = stream.into_split();
     let mut read = BufReader::new(read);
     lines::write(
         &mut write,
-        &Envelope::from(AgentRequest::Send { message, anchor }),
+        &Envelope::from(AgentRequest::Send {
+            message,
+            anchor,
+            to,
+        }),
     )
     .await?;
     let reply = lines::read::<Envelope<AgentReply>, _>(&mut read)

@@ -5,6 +5,7 @@ use clap::{CommandFactory, Parser};
 use crate::{
     Cli, Command, Delivery, TokenArg,
     agent::guides,
+    protocol::agent::Addressee,
     share::delivery::{CommandTarget, Target},
     target,
 };
@@ -49,11 +50,14 @@ fn parses_the_commands() {
 fn agent_commands_parse_and_stay_out_of_help() {
     let id = "tzrjdfymwrg5sqai";
     let comment = "0f8fad5b-d9cb-469f-a165-70867728950e";
-    let send =
-        Cli::try_parse_from(["jampot", "send", "hi", "--anchor", comment, "--share", id]).unwrap();
+    let send = Cli::try_parse_from([
+        "jampot", "send", "hi", "--anchor", comment, "--share", id, "--to", "bob",
+    ])
+    .unwrap();
     let Some(Command::Send {
         message,
         anchor,
+        to,
         which,
     }) = send.command
     else {
@@ -62,6 +66,16 @@ fn agent_commands_parse_and_stay_out_of_help() {
     assert_eq!(message.as_deref(), Some("hi"));
     assert_eq!(anchor.map(|id| id.to_string()).as_deref(), Some(comment));
     assert_eq!(which.share.map(|id| id.to_string()).as_deref(), Some(id));
+    assert_eq!(to, Some(Addressee::Named("bob".parse().unwrap())));
+    let everyone = Cli::try_parse_from(["jampot", "send", "hi", "--to", "all"]).unwrap();
+    assert!(matches!(
+        everyone.command,
+        Some(Command::Send {
+            to: Some(Addressee::Everyone),
+            ..
+        })
+    ));
+    assert!(Cli::try_parse_from(["jampot", "send", "hi", "--to", ""]).is_err());
     let recv = Cli::try_parse_from(["jampot", "recv", "--share", id]).unwrap();
     assert!(matches!(recv.command, Some(Command::Recv { which }) if which.share.is_some()));
     // Only the id: a token does not belong in argv.

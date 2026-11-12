@@ -170,12 +170,17 @@ fn share_messages() {
                 id: ID.parse().unwrap(),
                 message: "Done.".to_owned().try_into().unwrap(),
                 anchor: Some(Anchor { comment: ID.parse().unwrap(), page: "/".to_owned(), selector: "h1".to_owned() }),
+                to: None,
             },
             format!(r#"{{"type":"answer","id":"{ID}","message":"Done.","anchor":{{"comment":"{ID}","page":"/","selector":"h1"}}}}"#),
         ),
         (
-            ShareMessage::Answer { id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None },
+            ShareMessage::Answer { id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None, to: None },
             format!(r#"{{"type":"answer","id":"{ID}","message":"Hi"}}"#),
+        ),
+        (
+            ShareMessage::Answer { id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None, to: Some(EndpointKey([0xab; 32])) },
+            format!(r#"{{"type":"answer","id":"{ID}","message":"Hi","to":"{key}"}}"#),
         ),
         (
             ShareMessage::Delivered { ids: vec![ID.parse().unwrap()] },

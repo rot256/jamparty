@@ -106,12 +106,15 @@ pub(crate) enum ShareMessage {
         outcome: AckOutcome,
     },
     /// An answer from the agent (`jampot send`), Markdown; `id` is the
-    /// share's, the same for every joiner.
+    /// share's, the same for every joiner. With `to`, it is for that key
+    /// alone and sent only to its connections.
     Answer {
         id: CommentId,
         message: AnswerText,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         anchor: Option<Anchor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<EndpointKey>,
     },
     /// These comments reached the target.
     Delivered { ids: Vec<CommentId> },

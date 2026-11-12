@@ -49,7 +49,7 @@ use crate::{
         token::{PartyToken, TokenError},
     },
     join::{JoinConfig, Joiner},
-    protocol::control::AnswerText,
+    protocol::{agent::Addressee, control::AnswerText},
     share::{
         Share, ShareConfig, Source,
         delivery::{CommandTarget, Target},
@@ -139,9 +139,14 @@ enum Command {
     #[command(hide = true)]
     Send {
         message: Option<String>,
-        /// Show the answer next to this comment.
+        /// Show the answer next to this comment (and, without --to, only
+        /// to its author).
         #[arg(long, value_name = "COMMENT ID")]
         anchor: Option<CommentId>,
+        /// Only to this person: a name, `key:<fingerprint>` (or the full
+        /// key) when names collide, or `all` for everyone.
+        #[arg(long, value_name = "NAME")]
+        to: Option<Addressee>,
         #[command(flatten)]
         which: Which,
     },
@@ -275,6 +280,7 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
         Command::Send {
             message,
             anchor,
+            to,
             which,
         } => {
             let message = match message {
@@ -287,7 +293,7 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
             };
             let message = AnswerText::try_from(message)?;
             let stream = runtime::connect(&runtime::default_dir()?, which.share.as_ref()).await?;
-            agent::send(stream, message, anchor).await
+            agent::send(stream, message, anchor, to).await
         }
     }
 }

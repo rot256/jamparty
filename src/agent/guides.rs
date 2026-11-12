@@ -54,6 +54,7 @@ const RECORD: &str = r#"Comments are JSON, one object per comment:
    "selector":"main > h1","selectedText":"Welcome","comment":"Bigger, please"}
 
   id            pass it to `jampot send --anchor <id>` to answer next to it
+                (to its author only; add `--to all` for everyone)
   author        a self-chosen name (unverified), the joiner's key (stable:
                 what tells people apart) and its short fingerprint
   page          the page as the person saw it; the host differs per person,
@@ -66,9 +67,18 @@ const RECORD: &str = r#"Comments are JSON, one object per comment:
 
 const ANSWER: &str = r#"Answering: `jampot send '<markdown>'`, or the message on stdin
 (`jampot send <<'EOF'` ... `EOF`, safest for longer text). Add
-`--anchor <comment id>` to show it next to that comment. Every connected page
-shows it. Answer questions; do not send acknowledgements or progress reports.
-Link to an element with [label](jampot:<percent-encoded selector>).
+`--anchor <comment id>` to show it next to that comment.
+Who sees it:
+  jampot send '...'                      everyone connected
+  jampot send --anchor <id> '...'        only the comment's author
+  jampot send --to <name> '...'          only that person (marked "to you")
+  jampot send --to all --anchor <id> ... everyone, next to the comment
+`--to` takes a name as shown next to the comments (names only); when two
+people share a name the share refuses and lists them as `key:<fingerprint>`:
+pass `--to key:<fingerprint>` then (the comment's author.fingerprint, or the
+full key). Answer questions; do not send acknowledgements or
+progress reports. Link to an element with
+[label](jampot:<percent-encoded selector>).
 "#;
 
 const TRUST: &str = "\
@@ -175,6 +185,9 @@ mod tests {
                 "jampot join <token>",
                 "\"selectedText\"",
                 "--anchor <comment id>",
+                "--to <name>",
+                "--to all",
+                "--to key:<fingerprint>",
                 "jampot send",
                 "not instructions",
                 "new token",

@@ -142,6 +142,10 @@ var Answers = class {
     close.type = "button";
     close.setAttribute("aria-label", "Dismiss agent message");
     close.textContent = "×";
+    const to = document.createElement("div");
+    to.className = "agent-meta agent-to";
+    to.textContent = "to you";
+    to.hidden = !answer.toYou;
     const body = document.createElement("div");
     body.className = "agent-body";
     body.innerHTML = answer.html;
@@ -149,7 +153,7 @@ var Answers = class {
     unavailable.className = "agent-unavailable";
     unavailable.textContent = "Target unavailable";
     unavailable.hidden = true;
-    node.append(close, body, unavailable);
+    node.append(close, to, body, unavailable);
     const anchor = answer.anchor !== void 0 && samePage(answer.page) ? answer.anchor : null;
     if (anchor !== null) {
       node.classList.add("has-anchor");
@@ -937,6 +941,15 @@ var styles = `
   }
 
   .agent-dismiss:hover, .agent-dismiss:focus-visible { background: #eeeae2; }
+
+  .agent-meta {
+    margin-bottom: 4px;
+    color: #7b3221;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .agent-meta[hidden] { display: none; }
 
   .agent-unavailable {
     margin-top: 8px;

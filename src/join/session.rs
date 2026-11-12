@@ -152,6 +152,10 @@ pub(crate) struct Answer {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub(crate) page: Option<String>,
+    /// Addressed to this joiner alone (`jampot send --to`, or an answer to
+    /// its comment); the page says so.
+    #[serde(rename = "toYou")]
+    pub(crate) to_you: bool,
 }
 
 /// One event on `/_jampot/api/events`.
@@ -705,6 +709,7 @@ impl Session {
                 id,
                 message,
                 anchor,
+                to,
             } => {
                 if self
                     .view
@@ -719,11 +724,13 @@ impl Session {
                     Some(anchor) => (Some(anchor.selector), Some(anchor.page)),
                     None => (None, None),
                 };
+                let you = self.view.borrow().you.as_ref().map(|you| you.key);
                 let answer = Answer {
                     id,
                     html: markdown::render(&String::from(message)),
                     anchor,
                     page,
+                    to_you: to.is_some() && to == you,
                 };
                 self.view.send_modify(|view| {
                     if view.answers.len() == MAX_ANSWERS {

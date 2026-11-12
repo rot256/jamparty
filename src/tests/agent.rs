@@ -11,11 +11,18 @@ use tokio::{
 };
 
 use crate::{
+    adapters::endpoint::generate_key,
     agent,
-    core::{ids::CommentId, queue::DeliveryState},
-    protocol::comment::Comment,
+    core::{
+        ids::CommentId,
+        queue::DeliveryState,
+        rng::{SeededRng, SystemRng},
+    },
+    join::Joiner,
+    protocol::{agent::Addressee, comment::Comment},
     tests::harness::{
-        DRAFT, events, fixture_dir, join, next_event, post_comment, share_files, until, within,
+        DRAFT, connected, events, fixture_dir, join, joiner_with_key, next_event, post_comment,
+        share_files, until, within,
     },
 };
 
@@ -31,11 +38,20 @@ async fn recv(path: &Path) -> Vec<Comment> {
 }
 
 async fn send(path: &Path, message: &str, anchor: Option<CommentId>) -> Result<(), String> {
+    send_to(path, message, anchor, Some(Addressee::Everyone)).await
+}
+
+async fn send_to(
+    path: &Path,
+    message: &str,
+    anchor: Option<CommentId>,
+    to: Option<Addressee>,
+) -> Result<(), String> {
     let stream = UnixStream::connect(path).await.unwrap();
     let message = message.to_owned().try_into().unwrap();
-    agent::send(stream, message, anchor)
+    agent::send(stream, message, anchor, to)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| format!("{error:?}"))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -160,7 +176,7 @@ async fn answers_reach_every_joiner_and_later_ones() {
         assert_eq!(answer.page.as_deref(), Some("http://x.localhost/"));
     }
 
-    let unknown = CommentId::generate(&crate::core::rng::SeededRng::new(9));
+    let unknown = CommentId::generate(&SeededRng::new(9));
     let error = send(path, "hi", Some(unknown)).await.unwrap_err();
     assert!(error.contains("no comment"), "{error}");
     send(path, "<script>x</script> plain", None).await.unwrap();
@@ -178,4 +194,179 @@ async fn answers_reach_every_joiner_and_later_ones() {
     let last = view.answers.last().unwrap();
     assert!(last.html.contains("&lt;script&gt;"), "{}", last.html);
     assert!(last.anchor.is_none());
+}
+
+/// The answers `joiner` has, as (text, to you).
+fn answers(joiner: &Joiner) -> Vec<(String, bool)> {
+    joiner
+        .watch()
+        .borrow()
+        .answers
+        .iter()
+        .map(|answer| (answer.html.clone(), answer.to_you))
+        .collect()
+}
+
+fn has(joiner: &Joiner, text: &str) -> bool {
+    answers(joiner).iter().any(|(html, _)| html.contains(text))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn addressed_answers_reach_only_their_recipient() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let alice = join(&share, "alice").await;
+    let bob = join(&share, "bob").await;
+    // Another alice: the name alone is ambiguous now.
+    let key = generate_key(&SystemRng);
+    let other_alice =
+        joiner_with_key(share.token().clone(), share.direct_addrs(), "alice", key).await;
+    connected(&other_alice).await;
+    until("three here", || share.hub().presence().len() == 3).await;
+    let path = share.socket_path();
+
+    let error = send_to(path, "hi", None, Some("alice".parse().unwrap()))
+        .await
+        .unwrap_err();
+    let alice_fp = alice.watch().borrow().you.clone().unwrap().fingerprint;
+    let other_fp = other_alice
+        .watch()
+        .borrow()
+        .you
+        .clone()
+        .unwrap()
+        .fingerprint;
+    assert!(
+        error.contains("several people here are called alice"),
+        "{error}"
+    );
+    assert!(
+        error.contains(&format!("alice (key:{alice_fp})")),
+        "{error}"
+    );
+    assert!(
+        error.contains(&format!("alice (key:{other_fp})")),
+        "{error}"
+    );
+    let error = send_to(path, "hi", None, Some("zed".parse().unwrap()))
+        .await
+        .unwrap_err();
+    assert!(error.contains("nobody called zed is here"), "{error}");
+    assert!(error.contains("bob ("), "{error}");
+
+    // By key when names collide; by name otherwise.
+    send_to(
+        path,
+        "for alice",
+        None,
+        Some(format!("key:{alice_fp}").parse().unwrap()),
+    )
+    .await
+    .unwrap();
+    send_to(path, "for bob", None, Some("bob".parse().unwrap()))
+        .await
+        .unwrap();
+    until("alice's answer", || has(&alice, "for alice")).await;
+    until("bob's answer", || has(&bob, "for bob")).await;
+
+    // An answer to a comment goes to its author by default; `all` and no
+    // anchor go to everyone.
+    assert_eq!(post_comment(&bob, DRAFT).await.status, 202);
+    let id = share.queued().first().unwrap().id;
+    send_to(path, "about your comment", Some(id), None)
+        .await
+        .unwrap();
+    send_to(
+        path,
+        "everyone, anchored",
+        Some(id),
+        Some(Addressee::Everyone),
+    )
+    .await
+    .unwrap();
+    send_to(path, "everyone", None, None).await.unwrap();
+    for joiner in [&alice, &bob, &other_alice] {
+        until("the broadcasts", || {
+            has(joiner, "everyone, anchored") && has(joiner, "<p>everyone</p>")
+        })
+        .await;
+    }
+    until("bob's reply", || has(&bob, "about your comment")).await;
+    assert_eq!(
+        answers(&bob),
+        [
+            ("<p>for bob</p>\n".to_owned(), true),
+            ("<p>about your comment</p>\n".to_owned(), true),
+            ("<p>everyone, anchored</p>\n".to_owned(), false),
+            ("<p>everyone</p>\n".to_owned(), false),
+        ]
+    );
+    assert_eq!(
+        answers(&alice),
+        [
+            ("<p>for alice</p>\n".to_owned(), true),
+            ("<p>everyone, anchored</p>\n".to_owned(), false),
+            ("<p>everyone</p>\n".to_owned(), false),
+        ]
+    );
+    assert!(!has(&other_alice, "for alice"));
+
+    // A later connection of bob's gets bob's answers; carol only the
+    // broadcasts.
+    let carol = join(&share, "carol").await;
+    until("carol's catch-up", || answers(&carol).len() == 2).await;
+    assert!(!has(&carol, "for bob") && !has(&carol, "about your comment"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_cannot_take_a_fingerprint_address() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let alice = join(&share, "alice").await;
+    let other_alice = join(&share, "alice").await;
+    let alice_fp = alice.watch().borrow().you.clone().unwrap().fingerprint;
+    // Mallory names herself after alice's fingerprint.
+    let mallory = join(&share, &alice_fp.to_string()).await;
+    until("four here", || share.hub().presence().len() == 3).await;
+    let path = share.socket_path();
+
+    // The ambiguous name lists the candidates by key.
+    let error = send_to(path, "hi", None, Some("alice".parse().unwrap()))
+        .await
+        .unwrap_err();
+    assert!(error.contains(&format!("key:{alice_fp}")), "{error}");
+
+    // key: addresses the key, never a name.
+    let to_alice: Addressee = format!("key:{alice_fp}").parse().unwrap();
+    send_to(path, "for alice", None, Some(to_alice))
+        .await
+        .unwrap();
+    let alice_key = alice.watch().borrow().you.clone().unwrap().key;
+    let by_key: Addressee = format!("key:{alice_key}").parse().unwrap();
+    send_to(path, "for alice again", None, Some(by_key))
+        .await
+        .unwrap();
+    // A bare name matches names only: here, mallory's.
+    send_to(
+        path,
+        "for mallory",
+        None,
+        Some(alice_fp.to_string().parse().unwrap()),
+    )
+    .await
+    .unwrap();
+    send_to(path, "everyone", None, None).await.unwrap();
+    for joiner in [&alice, &other_alice, &mallory] {
+        until("the broadcast", || has(joiner, "<p>everyone</p>")).await;
+    }
+    assert!(has(&alice, "for alice") && has(&alice, "for alice again"));
+    assert!(!has(&alice, "for mallory"));
+    assert!(!has(&mallory, "for alice"));
+    assert!(has(&mallory, "for mallory"));
+    assert!(!has(&other_alice, "for alice") && !has(&other_alice, "for mallory"));
+
+    // Malformed keys are refused before reaching the share.
+    for bad in ["key:", "key:xyz", "key:0123", "a b"] {
+        assert!(bad.parse::<Addressee>().is_err(), "{bad}");
+    }
 }

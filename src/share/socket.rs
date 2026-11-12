@@ -81,8 +81,12 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: Option<mpsc::Sender<Rec
                 error: "this share hands comments to a command, not to jampot recv".to_owned(),
             },
         },
-        AgentRequest::Send { message, anchor } => match hub.answer(message, anchor) {
-            Ok(()) => AgentReply::Sent,
+        AgentRequest::Send {
+            message,
+            anchor,
+            to,
+        } => match hub.answer(message, anchor, to) {
+            Ok(_) => AgentReply::Sent,
             Err(error) => AgentReply::Error {
                 error: error.to_string(),
             },

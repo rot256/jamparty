@@ -438,6 +438,8 @@ def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> 
                 "Done: **shorter** now.",
                 "--anchor",
                 str(record["id"]),
+                "--to",
+                "all",
             )
             for page in [alice_page, bob_page]:
                 answer = page.locator("#jampot .agent-message")
@@ -506,3 +508,115 @@ def test_a_joiner_with_another_page_api_is_not_used(tmp_path: Path, page: Page) 
         )
         page.wait_for_timeout(500)
         assert not any("/_jampot/api/events" in url for url in requested), requested
+
+
+@contextmanager
+def pages(browser: Browser, *joined: Joined) -> Iterator[list[Page]]:
+    """One browser context (its own storage) and page per joiner, opened."""
+    contexts = [
+        browser.new_context(viewport={"width": 1280, "height": 720}) for _ in joined
+    ]
+    try:
+        opened: list[Page] = []
+        for context, one in zip(contexts, joined, strict=True):
+            page = context.new_page()
+            _ = page.goto(one.url)
+            opened.append(page)
+        yield opened
+    finally:
+        for context in contexts:
+            context.close()
+
+
+def test_addressing_by_key(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "alice2", shared, "alice") as alice2,
+    ):
+        status = cast(
+            dict[str, dict[str, str]],
+            json.loads(request(alice, "/_jampot/api/status")[1]),
+        )
+        fingerprint = status["you"]["fingerprint"]
+        # Mallory names herself after alice's fingerprint.
+        with (
+            join(tmp_path / "mallory", shared, fingerprint) as mallory,
+            pages(browser, alice, alice2, mallory) as (
+                alice_page,
+                alice2_page,
+                mallory_page,
+            ),
+        ):
+            ambiguous = subprocess.run(
+                [str(BINARY), "send", "hi", "--to", "alice"],
+                env=environment(tmp_path),
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+                check=False,
+            )
+            assert ambiguous.returncode == 1
+            assert "several people here are called alice" in ambiguous.stderr
+            assert f"alice (key:{fingerprint})" in ambiguous.stderr
+            _ = jampot(tmp_path, "send", "Only alice.", "--to", f"key:{fingerprint}")
+            _ = jampot(tmp_path, "send", "Everyone.")
+            for page in (alice2_page, mallory_page):
+                messages = page.locator("#jampot .agent-message")
+                expect(messages.filter(has_text="Everyone.")).to_have_count(1)
+                expect(messages.filter(has_text="Only alice.")).to_have_count(0)
+            only = alice_page.locator("#jampot .agent-message", has_text="Only alice.")
+            expect(only.locator(".agent-to")).to_be_visible()
+
+
+def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        comment_on_intro(bob_page, "Is this right?")
+        expect(bob_page.locator("#jampot #badge")).to_have_text("1 queued")
+        [line] = jampot(tmp_path, "recv").splitlines()
+        record = cast(dict[str, object], json.loads(line))
+
+        _ = jampot(tmp_path, "send", "Hello alice", "--to", "alice")
+        _ = jampot(tmp_path, "send", "Yes, it is.", "--anchor", str(record["id"]))
+        _ = jampot(tmp_path, "send", "Everyone: done.")
+
+        def answers(page: Page) -> list[tuple[str, bool]]:
+            messages = page.locator("#jampot .agent-message")
+            # Answers arrive in order: the last one means all are here.
+            expect(messages.filter(has_text="Everyone: done.")).to_have_count(1)
+            return sorted(
+                (
+                    message.locator(".agent-body").inner_text().strip(),
+                    message.locator(".agent-to").is_visible(),
+                )
+                for message in messages.all()
+            )
+
+        assert answers(alice_page) == [
+            ("Everyone: done.", False),
+            ("Hello alice", True),
+        ]
+        assert answers(bob_page) == [("Everyone: done.", False), ("Yes, it is.", True)]
+        to_you = alice_page.locator("#jampot .agent-to").first
+        expect(to_you).to_have_text("to you")
+        expect(to_you).to_have_css("color", "rgb(123, 50, 33)")
+        expect(to_you).to_have_css("font-size", "11px")
+        expect(to_you).to_have_css("font-weight", "700")
+
+        # An ambiguous or unknown name is refused, with the candidates.
+        refused = subprocess.run(
+            [str(BINARY), "send", "hi", "--to", "zed"],
+            env=environment(tmp_path),
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT,
+            check=False,
+        )
+        assert refused.returncode == 1
+        assert "nobody called zed is here" in refused.stderr
+        assert "alice (" in refused.stderr and "bob (" in refused.stderr

@@ -26,6 +26,7 @@ use crate::{
         settings::Switch,
     },
     protocol::{
+        agent::{Addressee, KEY_PREFIX},
         comment::{Author, Comment, Draft},
         control::{AckOutcome, Anchor, AnswerText, CommentRef, ShareMessage, StatusLine},
         presence::{PagePath, Person, Position, Whereabouts},
@@ -79,7 +80,8 @@ struct Inner {
     refs: VecDeque<(EndpointKey, CommentRef, CommentId)>,
     next_connection: u64,
     status: Option<StatusLine>,
-    anchors: VecDeque<Anchor>,
+    /// Recent comments' anchors and authors.
+    anchors: VecDeque<(Anchor, Author)>,
     answers: VecDeque<ShareMessage>,
 }
 
@@ -177,7 +179,6 @@ impl Hub {
     }
 
     /// Who is connected, in order of admission, once per key.
-    #[cfg(test)]
     #[must_use]
     pub(crate) fn presence(&self) -> Vec<Author> {
         self.here()
@@ -216,11 +217,16 @@ impl Hub {
     }
 
     /// What a newly admitted joiner is told besides presence: recent answers
-    /// and the status line.
+    /// (those for everyone, and those for it) and the status line.
     #[must_use]
-    pub(crate) fn catch_up(&self) -> Vec<ShareMessage> {
+    pub(crate) fn catch_up(&self, key: EndpointKey) -> Vec<ShareMessage> {
         let inner = self.lock();
-        let mut messages: Vec<ShareMessage> = inner.answers.iter().cloned().collect();
+        let mut messages: Vec<ShareMessage> = inner
+            .answers
+            .iter()
+            .filter(|answer| for_key(answer, key))
+            .cloned()
+            .collect();
         if let Some(line) = &inner.status {
             messages.push(ShareMessage::Status {
                 line: Some(line.clone()),
@@ -296,7 +302,7 @@ impl Hub {
                 if inner.anchors.len() == MAX_ANCHORS {
                     inner.anchors.pop_front();
                 }
-                inner.anchors.push_back(anchor);
+                inner.anchors.push_back((anchor, author.clone()));
                 if inner.refs.len() == MAX_REFS {
                     inner.refs.pop_front();
                 }
@@ -374,14 +380,23 @@ impl Hub {
         }
     }
 
-    /// Sends an answer to every joiner; `anchor` must be a comment this
-    /// share has seen recently.
+    /// Sends an answer, to everyone or to one person: `to` (resolved among
+    /// the people here) or, without `to`, the author of the `anchor`
+    /// comment. `anchor` must be a comment this share has seen recently.
+    /// Returns who it is for (none: everyone).
     pub(crate) fn answer(
         &self,
         message: AnswerText,
         anchor: Option<CommentId>,
-    ) -> Result<(), Invalid> {
-        let message = {
+        to: Option<Addressee>,
+    ) -> Result<Option<Author>, Invalid> {
+        let named = match &to {
+            Some(person @ (Addressee::Named(_) | Addressee::Key(_))) => {
+                Some(self.addressee(person)?)
+            }
+            Some(Addressee::Everyone) | None => None,
+        };
+        let (message, recipient) = {
             let mut inner = self.lock();
             let anchor = match anchor {
                 None => None,
@@ -389,27 +404,76 @@ impl Hub {
                     inner
                         .anchors
                         .iter()
-                        .find(|anchor| anchor.comment == id)
+                        .find(|(anchor, _)| anchor.comment == id)
                         .cloned()
                         .ok_or_else(|| {
                             Invalid::new(format!("no comment with id {id} on this share"))
                         })?,
                 ),
             };
+            let recipient = match (to, anchor.as_ref()) {
+                (Some(Addressee::Named(_) | Addressee::Key(_)), _) => named,
+                (Some(Addressee::Everyone), _) | (None, None) => None,
+                (None, Some((_, author))) => Some(author.clone()),
+            };
             let message = ShareMessage::Answer {
                 id: CommentId::generate(self.rng.as_ref()),
                 message,
-                anchor,
+                anchor: anchor.map(|(anchor, _)| anchor),
+                to: recipient.as_ref().map(|author| author.key),
             };
             if inner.answers.len() == MAX_ANSWERS {
                 inner.answers.pop_front();
             }
             inner.answers.push_back(message.clone());
-            message
+            (message, recipient)
         };
-        tracing::info!("answer sent");
+        match &recipient {
+            Some(author) => {
+                tracing::info!(to = %author.name, fingerprint = %author.fingerprint, "answer sent");
+            }
+            None => tracing::info!("answer sent to everyone"),
+        }
         self.broadcast(message);
-        Ok(())
+        Ok(recipient)
+    }
+
+    /// The one person here with that name (names only), or that key.
+    fn addressee(&self, to: &Addressee) -> Result<Author, Invalid> {
+        let here = self.presence();
+        let listed = |people: &[&Author]| {
+            people
+                .iter()
+                .map(|author| format!("{} ({KEY_PREFIX}{})", author.name, author.fingerprint))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let (found, wanted): (Vec<&Author>, String) = match to {
+            Addressee::Named(name) => (
+                here.iter().filter(|author| author.name == *name).collect(),
+                format!("called {name}"),
+            ),
+            Addressee::Key(key) => (
+                here.iter().filter(|author| key.matches(author)).collect(),
+                format!("with {}", String::from(to.clone())),
+            ),
+            Addressee::Everyone => return Err(Invalid::new("everyone is not one person")),
+        };
+        match found.as_slice() {
+            [author] => Ok((*author).clone()),
+            [] => {
+                let everyone: Vec<&Author> = here.iter().collect();
+                Err(Invalid::new(if everyone.is_empty() {
+                    format!("nobody {wanted} is here; nobody is connected")
+                } else {
+                    format!("nobody {wanted} is here; here: {}", listed(&everyone))
+                }))
+            }
+            several => Err(Invalid::new(format!(
+                "several people here are {wanted}: {}; pass --to {KEY_PREFIX}<fingerprint>",
+                listed(several)
+            ))),
+        }
     }
 
     /// Presence updates received from all connections so far.
@@ -442,6 +506,24 @@ impl Hub {
     #[must_use]
     pub(crate) fn queued(&self) -> Vec<Comment> {
         self.lock().queue.iter().cloned().collect()
+    }
+}
+
+/// Whether the joiner with `key` gets `message`: answers addressed to
+/// someone else are not sent to it.
+#[must_use]
+pub(crate) fn for_key(message: &ShareMessage, key: EndpointKey) -> bool {
+    match message {
+        ShareMessage::Answer { to: Some(to), .. } => *to == key,
+        ShareMessage::Answer { to: None, .. }
+        | ShareMessage::Admitted { .. }
+        | ShareMessage::Refused { .. }
+        | ShareMessage::CommentAck { .. }
+        | ShareMessage::Delivered { .. }
+        | ShareMessage::Reload { .. }
+        | ShareMessage::Status { .. }
+        | ShareMessage::Presence { .. }
+        | ShareMessage::Cursor { .. } => true,
     }
 }
 

@@ -87,7 +87,12 @@ anchor?: string,
 /**
  * The page that comment was made on.
  */
-page?: string, };
+page?: string, 
+/**
+ * Addressed to this joiner alone (`jampot send --to`, or an answer to
+ * its comment); the page says so.
+ */
+toYou: boolean, };
 
 export type View = { 
 /**

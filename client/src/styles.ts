@@ -166,6 +166,15 @@ export const styles = `
 
   .agent-dismiss:hover, .agent-dismiss:focus-visible { background: #eeeae2; }
 
+  .agent-meta {
+    margin-bottom: 4px;
+    color: #7b3221;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .agent-meta[hidden] { display: none; }
+
   .agent-unavailable {
     margin-top: 8px;
     color: #7b3221;

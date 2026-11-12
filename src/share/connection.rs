@@ -29,7 +29,7 @@ use crate::{
         Shared,
         admission::{REFUSED_CODE, admit, reason_text},
         http::serve_stream,
-        hub::Presence,
+        hub::{Presence, for_key},
     },
 };
 
@@ -180,7 +180,7 @@ async fn joined(
             revision: reload.current(),
         });
     }
-    greeting.extend(shared.hub.catch_up());
+    greeting.extend(shared.hub.catch_up(author.key));
     for message in greeting {
         if lines::write(&mut send, &Envelope::from(message))
             .await
@@ -256,6 +256,8 @@ async fn joined(
                     None => return "control stream closed",
                 },
                 message = broadcasts.recv() => match message {
+                    // Answers for someone else are not this joiner's.
+                    Ok(message) if !for_key(&message, author.key) => continue,
                     Ok(message) => presence.redact(message),
                     Err(RecvError::Lagged(_)) => return "fell behind",
                     Err(RecvError::Closed) => return "share stopped",
