@@ -66,6 +66,17 @@ fn backoff_doubles_up_to_a_minute() {
 }
 
 #[test]
+fn returned_batches_come_back_without_backoff() {
+    let mut queue = DeliveryQueue::new();
+    queue.push(1).unwrap();
+    queue.start(t0()).unwrap();
+    queue.push(2).unwrap();
+    assert_eq!(queue.finish(DeliveryResult::Returned, t0()), Ok(vec![]));
+    assert_eq!(queue.state(), DeliveryState::Ready);
+    assert_eq!(queue.start(t0()), Some(vec![1, 2]));
+}
+
+#[test]
 fn gone_holds_everything() {
     let mut queue = DeliveryQueue::new();
     queue.push(1).unwrap();
@@ -106,6 +117,7 @@ fn op() -> impl Strategy<Value = Op> {
         3 => Just(Op::Start),
         2 => Just(Op::Finish(DeliveryResult::Ok)),
         2 => Just(Op::Finish(DeliveryResult::Error)),
+        1 => Just(Op::Finish(DeliveryResult::Returned)),
         1 => Just(Op::Finish(DeliveryResult::Gone)),
         3 => (0i64..90_000).prop_map(Op::Wait),
     ]
@@ -184,6 +196,10 @@ proptest! {
                             let at = now + backoff(failures);
                             prop_assert_eq!(queue.wake_at(), Some(at));
                             retry_at = Some(at);
+                        }
+                        DeliveryResult::Returned => {
+                            prop_assert!(done.is_empty());
+                            retry_at = None;
                         }
                         DeliveryResult::Gone => {
                             prop_assert!(done.is_empty());

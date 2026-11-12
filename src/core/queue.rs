@@ -3,9 +3,10 @@
 //! Comments wait in order. One batch is in flight at a time: [`start`]
 //! hands out everything waiting, and comments arriving meanwhile form the
 //! next batch. [`finish`] reports the result: `Ok` drops the batch, `Error`
-//! puts it back in front and backs off on the injected clock, `Gone` puts
-//! it back and holds the queue for good (the share must be restarted to
-//! deliver elsewhere). No timers here: the caller retries [`start`] at
+//! puts it back in front and backs off on the injected clock, `Returned`
+//! puts it back with no backoff (the taker went away before it was
+//! delivered, e.g. a `jamjam recv` that died), `Gone` puts it back and holds
+//! the queue for good (the share must be restarted to deliver elsewhere). No timers here: the caller retries [`start`] at
 //! [`DeliveryQueue::wake_at`].
 //!
 //! [`start`]: DeliveryQueue::start
@@ -27,6 +28,9 @@ pub(crate) enum DeliveryResult {
     Ok,
     /// A failure worth retrying.
     Error,
+    /// The batch came back undelivered through no fault of the target
+    /// (a `jamjam recv` died before printing it): no backoff.
+    Returned,
     /// The target reports itself gone (e.g. the thread was deleted).
     Gone,
 }
@@ -92,6 +96,7 @@ impl<T: Clone> DeliveryQueue<T> {
     }
 
     /// Undelivered comments, in flight first, then waiting.
+    #[cfg(test)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
         self.in_flight.iter().chain(self.waiting.iter())
     }
@@ -102,6 +107,7 @@ impl<T: Clone> DeliveryQueue<T> {
         self.waiting.len() + self.in_flight.len()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
@@ -170,6 +176,7 @@ impl<T: Clone> DeliveryQueue<T> {
                     .unwrap_or(Timestamp::MAX);
                 self.state = DeliveryState::Retrying { at };
             }
+            DeliveryResult::Returned => self.state = DeliveryState::Ready,
             DeliveryResult::Gone => self.state = DeliveryState::Held,
         }
         for item in batch.into_iter().rev() {
