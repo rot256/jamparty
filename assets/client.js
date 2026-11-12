@@ -471,7 +471,7 @@ function install() {
     </div>
     <dialog id="jampot-dialog" aria-labelledby="dialog-label">
       <form>
-        <label id="dialog-label" for="comment">Suggest Edit:</label>
+        <label id="dialog-label" for="comment">Comment:</label>
         <div id="selection-preview" hidden>
           <div id="selection-label">Selected text</div>
           <blockquote id="selection-text"></blockquote>
@@ -927,7 +927,7 @@ function install() {
     target,
     event,
     selector = cssSelector(target),
-    label = "Suggest Edit:",
+    label = "Comment:",
   ) => {
     showDialog(captureTarget(target, event, selector), event.clientX, event.clientY, label);
   };
