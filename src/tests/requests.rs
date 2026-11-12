@@ -45,6 +45,31 @@ async fn static_files_with_the_client_injected() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn symlinks_to_dotfiles_or_out_of_the_root_are_not_served() {
+    let dir = fixture_dir();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("other.txt"), "outside").unwrap();
+    std::os::unix::fs::symlink(".secret", dir.path().join("public.txt")).unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/index.html"), "hidden").unwrap();
+    std::os::unix::fs::symlink(".git", dir.path().join("docs")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+    std::os::unix::fs::symlink("style.css", dir.path().join("link.css")).unwrap();
+    let share = share_files(&dir).await;
+    let joiner = join(&share, "alice").await;
+    for refused in [
+        "/public.txt",
+        "/docs/",
+        "/docs/index.html",
+        "/out/other.txt",
+    ] {
+        let reply = get(&joiner, refused).await;
+        assert_eq!(reply.status, 404, "{refused}: {}", reply.body);
+    }
+    assert_eq!(get(&joiner, "/link.css").await.body, "h1 { color: red }");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn live_reload_reaches_the_joiner() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;

@@ -70,15 +70,23 @@ pub(crate) async fn maybe_inject_client(
         ClientMode::Edit => StatusCode::BAD_GATEWAY,
         ClientMode::Live(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    // Bounded: the body is at most its Content-Length, checked above.
-    let bytes = body
-        .collect()
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, "could not read HTML response");
-            RequestError::new(body_error_status, "could not read HTML response")
-        })?
-        .to_bytes();
+    // Bounded, whatever the body turns out to be: its Content-Length was
+    // checked above, and the limit holds even if it lied.
+    let read_error = |message: &str| {
+        tracing::warn!(%message, "could not read HTML response");
+        RequestError::new(body_error_status, "could not read HTML response")
+    };
+    let mut body = body;
+    let mut bytes = Vec::with_capacity(content_length);
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|error| read_error(&error.to_string()))?;
+        if let Ok(data) = frame.into_data() {
+            if bytes.len() + data.len() > MAX_HTML_RESPONSE_BYTES {
+                return Err(read_error("longer than its Content-Length"));
+            }
+            bytes.extend_from_slice(&data);
+        }
+    }
 
     let bytes = inject_client(&bytes, mode);
     annotate_headers(&mut parts.headers, Some(bytes.len()));
@@ -129,7 +137,32 @@ fn inject_client(html: &[u8], mode: ClientMode) -> Bytes {
 
 #[cfg(test)]
 mod tests {
-    use crate::share::inject::{ClientMode, inject_client};
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Method, Response, header};
+
+    use crate::{
+        BoxError,
+        share::inject::{ClientMode, MAX_HTML_RESPONSE_BYTES, inject_client, maybe_inject_client},
+    };
+
+    #[tokio::test]
+    async fn a_body_longer_than_its_length_is_not_buffered() {
+        let body = Full::new(Bytes::from(vec![b'x'; MAX_HTML_RESPONSE_BYTES + 1]))
+            .map_err(|never| -> BoxError { match never {} })
+            .boxed_unsync();
+        let mut response = Response::new(body);
+        response
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, "text/html".parse().unwrap());
+        response
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, "10".parse().unwrap());
+        let refused = maybe_inject_client(response, &Method::GET, ClientMode::Edit)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status, 502);
+    }
 
     #[test]
     fn injects_before_a_case_insensitive_body_close() {

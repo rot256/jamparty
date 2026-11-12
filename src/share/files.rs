@@ -54,9 +54,9 @@ impl Files {
         let resolved = match resolved {
             ResolveResult::Found(file) => {
                 match tokio::fs::canonicalize(root.join(&file.path)).await {
-                    Ok(path) if path.starts_with(root) => ResolveResult::Found(file),
+                    Ok(path) if served(&path, root) => ResolveResult::Found(file),
                     Ok(path) => {
-                        tracing::warn!(path = %path.display(), "refused a symlink outside the root");
+                        tracing::warn!(path = %path.display(), "refused a symlink outside the root or to a dotfile");
                         ResolveResult::NotFound
                     }
                     Err(error) if is_missing_path_error(&error) => ResolveResult::NotFound,
@@ -151,7 +151,7 @@ async fn path_access(request_path: &str, root: &Path) -> Result<Option<StatusCod
         Ok(path) => path,
         Err(error) => return access_error(error),
     };
-    if !path.starts_with(root) {
+    if !served(&path, root) {
         return Ok(Some(StatusCode::NOT_FOUND));
     }
     let metadata = match tokio::fs::metadata(&path).await {
@@ -171,7 +171,7 @@ async fn path_access(request_path: &str, root: &Path) -> Result<Option<StatusCod
         Ok(index) => index,
         Err(error) => return access_error(error),
     };
-    if !index.starts_with(root) {
+    if !served(&index, root) {
         return Ok(Some(StatusCode::NOT_FOUND));
     }
     match tokio::fs::metadata(index).await {
@@ -179,6 +179,13 @@ async fn path_access(request_path: &str, root: &Path) -> Result<Option<StatusCod
         Ok(_) => Ok(Some(StatusCode::NOT_FOUND)),
         Err(error) => access_error(error),
     }
+}
+
+/// Whether a canonical `path` may be served: inside `root`, with no dotfile
+/// or dot-directory on the way (so a symlink cannot lead to one either).
+fn served(path: &Path, root: &Path) -> bool {
+    path.strip_prefix(root)
+        .is_ok_and(|inside| !has_hidden_component(inside))
 }
 
 fn has_hidden_component(path: &Path) -> bool {
@@ -213,7 +220,19 @@ fn is_missing_path_error(error: &std::io::Error) -> bool {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::share::files::{RequestedPath, has_hidden_component};
+    use crate::share::files::{RequestedPath, has_hidden_component, served};
+
+    #[test]
+    fn only_paths_inside_the_root_without_dotfiles_are_served() {
+        let root = PathBuf::from("/srv/.sites/a");
+        assert!(served(&root.join("index.html"), &root));
+        assert!(served(&root.join("css/site.css"), &root));
+        assert!(served(&root, &root));
+        assert!(!served(&root.join(".env"), &root));
+        assert!(!served(&root.join(".git/config"), &root));
+        assert!(!served(&PathBuf::from("/etc/passwd"), &root));
+        assert!(!served(&PathBuf::from("/srv/.sites/ab/x"), &root));
+    }
 
     #[test]
     fn sanitizes_paths_without_leaving_the_root() {
