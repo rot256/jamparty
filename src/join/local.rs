@@ -2,7 +2,7 @@
 //! the core decision, answers jamjam's own paths and forwards everything
 //! else to the share, one iroh stream per request.
 
-use std::{convert::Infallible, sync::Arc};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use hyper::{
     Request, Response, StatusCode,
@@ -11,15 +11,21 @@ use hyper::{
     server::conn::http1,
     service::service_fn,
 };
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::{io::copy_bidirectional, net::TcpListener};
 
 use crate::{
     BoxError,
     core::request::{FRAME_ANCESTORS, Method, Refusal, RequestFacts, Route, Upgrade},
     join::{api, session::Session},
-    share::body::{AppBody, RequestError, map_incoming_response},
+    share::{
+        HEADER_READ_TIMEOUT,
+        body::{AppBody, RequestError, map_incoming_response},
+    },
 };
+
+/// The pause after a failed accept.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Accepts browser connections until the task is dropped.
 pub(crate) async fn serve(listener: TcpListener, session: Arc<Session>) {
@@ -28,6 +34,8 @@ pub(crate) async fn serve(listener: TcpListener, session: Arc<Session>) {
             Ok(accepted) => accepted,
             Err(error) => {
                 tracing::warn!(%error, "local accept failed");
+                // Out of descriptors, say: let it pass rather than spin.
+                tokio::time::sleep(ACCEPT_BACKOFF).await;
                 continue;
             }
         };
@@ -38,6 +46,8 @@ pub(crate) async fn serve(listener: TcpListener, session: Arc<Session>) {
                 async move { Ok::<_, Infallible>(handle(request, &session).await) }
             });
             let served = http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(HEADER_READ_TIMEOUT)
                 .serve_connection(TokioIo::new(stream), service)
                 .with_upgrades()
                 .await;

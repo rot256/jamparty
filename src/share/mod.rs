@@ -41,7 +41,7 @@ use crate::{
     },
 };
 
-pub(crate) use crate::share::admission::REFUSED_CODE;
+pub(crate) use crate::share::{admission::REFUSED_CODE, http::HEADER_READ_TIMEOUT};
 
 /// Connections waiting for admission at once, by default.
 const MAX_UNADMITTED: usize = 32;

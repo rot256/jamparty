@@ -2,12 +2,12 @@
 //! answered from the directory or the dev server, with the client
 //! injected.
 
-use std::convert::Infallible;
+use std::{convert::Infallible, time::Duration};
 
 use hyper::{
     Method, Request, Response, StatusCode, body::Incoming, server::conn::http1, service::service_fn,
 };
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use iroh::endpoint::{RecvStream, SendStream};
 
 use crate::share::{
@@ -17,6 +17,9 @@ use crate::share::{
     proxy::Proxy,
 };
 
+/// How long a request's head may take to arrive, here and on the joiner's
+/// local server.
+pub(crate) const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const RESERVED_PREFIX: &str = "/_jamjam/";
 const CLIENT_PATH: &str = "/_jamjam/client.js";
 pub(crate) const CLIENT_JS: &str = include_str!("../../assets/client.js");
@@ -47,6 +50,8 @@ pub(crate) async fn serve_stream(send: SendStream, recv: RecvStream, site: Site)
         async move { Ok::<_, Infallible>(handle(request, site).await) }
     });
     let served = http1::Builder::new()
+        .timer(TokioTimer::new())
+        .header_read_timeout(HEADER_READ_TIMEOUT)
         .serve_connection(io, service)
         .with_upgrades()
         .await;
