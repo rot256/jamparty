@@ -43,14 +43,14 @@ use crate::{
     model::{CommentDraft, CommentRecord, MAX_REQUEST_BYTES, RequestError},
 };
 
-pub(crate) const RESERVED_PREFIX: &str = "/_komtar/";
-const CLIENT_PATH: &str = "/_komtar/client.js";
-const STATUS_PATH: &str = "/_komtar/api/status";
-const COMMENTS_PATH: &str = "/_komtar/api/comments";
-const MESSAGES_PATH: &str = "/_komtar/api/messages";
-const RELOAD_PATH: &str = "/_komtar/api/reload";
+pub(crate) const RESERVED_PREFIX: &str = "/_jamjam/";
+const CLIENT_PATH: &str = "/_jamjam/client.js";
+const STATUS_PATH: &str = "/_jamjam/api/status";
+const COMMENTS_PATH: &str = "/_jamjam/api/comments";
+const MESSAGES_PATH: &str = "/_jamjam/api/messages";
+const RELOAD_PATH: &str = "/_jamjam/api/reload";
 const MAX_HTML_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const EDIT_SCRIPT: &[u8] = b"\n<script type=\"module\" src=\"/_komtar/client.js\"></script>\n";
+const EDIT_SCRIPT: &[u8] = b"\n<script type=\"module\" src=\"/_jamjam/client.js\"></script>\n";
 const SSE_HEARTBEAT: Duration = Duration::from_secs(15);
 
 type AppBody = UnsyncBoxBody<Bytes, BoxError>;
@@ -248,7 +248,7 @@ async fn handle_reserved(
                 match &state.source {
                     SourceState::Proxy { .. } => Err(RequestError::new(
                         StatusCode::NOT_FOUND,
-                        "reserved komtar resource not found",
+                        "reserved jamjam resource not found",
                     )),
                     SourceState::Live { reload, .. } => Ok(reload_response(reload.subscribe())),
                 }
@@ -257,7 +257,7 @@ async fn handle_reserved(
         _ => Ok(json_response(
             StatusCode::NOT_FOUND,
             &ErrorResponse {
-                error: "reserved komtar resource not found",
+                error: "reserved jamjam resource not found",
             },
         )),
     };
@@ -721,7 +721,7 @@ fn client_script(mode: ClientMode<'_>) -> Cow<'_, [u8]> {
         ClientMode::Edit => Cow::Borrowed(EDIT_SCRIPT),
         ClientMode::Live(revision) => Cow::Owned(
             format!(
-                "\n<script type=\"module\" src=\"/_komtar/client.js?live={revision}\"></script>\n"
+                "\n<script type=\"module\" src=\"/_jamjam/client.js?live={revision}\"></script>\n"
             )
             .into_bytes(),
         ),

@@ -470,7 +470,7 @@ fn verify_open_file(file: &File, path: &Path, kind: TransportKind) -> io::Result
 fn offline_error(error: io::Error) -> io::Error {
     io::Error::new(
         error.kind(),
-        format!("no Komtar server is reading agent messages: {error}"),
+        format!("no jamjam server is reading agent messages: {error}"),
     )
 }
 

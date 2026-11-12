@@ -273,7 +273,7 @@ fn safe_link(destination: &str) -> bool {
             .get(..colon)
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("http" | "https" | "mailto" | "komtar")
+        Some("http" | "https" | "mailto" | "jamjam")
     )
 }
 
@@ -281,14 +281,14 @@ pub(crate) fn agent_guidance() -> Result<String, serde_json::Error> {
     let browser_example = browser_example();
     Ok(format!(
         "Run commands from the same project directory as the server.\n\
-         1. Run `komtar recv`. It intentionally waits indefinitely when no feedback arrives.\n\
+         1. Run `jamjam recv`. It intentionally waits indefinitely when no feedback arrives.\n\
          2. Process every returned browser comment and make the requested edits.\n\
-         3. Reply with `komtar send` only when a comment explicitly asks a question that requires an answer.\n\
-         4. Invoke `komtar recv` directly again after each work batch. Do not wrap it in a shell loop.\n\
+         3. Reply with `jamjam send` only when a comment explicitly asks a question that requires an answer.\n\
+         4. Invoke `jamjam recv` directly again after each work batch. Do not wrap it in a shell loop.\n\
          Never send acknowledgements, progress reports, completion notices, or done messages.\n\
-         For an element-specific answer, reuse the question's nonblank target.selector with `komtar send --anchor CSS_SELECTOR`. A blank selector is a page-level comment and must remain unanchored.\n\
-         Comments on an agent response use an opaque `komtar-agent:` selector; reuse it exactly when anchoring the requested answer.\n\
-         Element links use `[label](komtar:SELECTOR)`. Percent-encode spaces and reserved characters, for example `komtar:%23intro%20.item`.\n\
+         For an element-specific answer, reuse the question's nonblank target.selector with `jamjam send --anchor CSS_SELECTOR`. A blank selector is a page-level comment and must remain unanchored.\n\
+         Comments on an agent response use an opaque `jamjam-agent:` selector; reuse it exactly when anchoring the requested answer.\n\
+         Element links use `[label](jamjam:SELECTOR)`. Percent-encode spaces and reserved characters, for example `jamjam:%23intro%20.item`.\n\
          `send` and `recv` are the normative API. Raw FIFO access is for interoperability/debugging; direct writers must not write concurrently.\n\n\
          `recv` returns unchanged v1 browser feedback as NDJSON. Important fields are `comment`, `page`, and `target`; use `target.selector` when anchoring a requested answer.\n\n\
          Example `recv` record:\n{}\n",
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn markdown_escapes_html_and_rejects_unsafe_links() {
         let html = render_markdown(
-            "- one\n- two\n\n<script>alert(1)</script>\n\n[bad](JavaScript:alert(1)) [data](data:text/html,bad) [good](https://example.com) [element](komtar:%23intro%20.item) ![alt text](https://example.com/image.png)",
+            "- one\n- two\n\n<script>alert(1)</script>\n\n[bad](JavaScript:alert(1)) [data](data:text/html,bad) [good](https://example.com) [element](jamjam:%23intro%20.item) ![alt text](https://example.com/image.png)",
         );
         assert!(html.contains("<ul>"));
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
@@ -362,7 +362,7 @@ mod tests {
         assert!(html.contains("bad"));
         assert!(html.contains("data"));
         assert!(html.contains("href=\"https://example.com\""));
-        assert!(html.contains("href=\"komtar:%23intro%20.item\""));
+        assert!(html.contains("href=\"jamjam:%23intro%20.item\""));
         assert!(html.contains("alt text"));
         assert!(!html.contains("<img"));
     }

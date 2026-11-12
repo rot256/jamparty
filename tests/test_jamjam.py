@@ -1,4 +1,4 @@
-"""HTTP and browser integration tests for Komtar's proxy and static server."""
+"""HTTP and browser integration tests for jamjam's proxy and static server."""
 
 import base64
 import hashlib
@@ -41,13 +41,13 @@ def wait_for_port(process: subprocess.Popen[str], port: int) -> None:
     while time.monotonic() < deadline:
         if process.poll() is not None:
             stdout, _ = process.communicate()
-            pytest.fail(f"komtar exited with {process.returncode}:\n{stdout}")
+            pytest.fail(f"jamjam exited with {process.returncode}:\n{stdout}")
         with socket.socket() as sock:
             sock.settimeout(0.1)
             if sock.connect_ex((HOST, port)) == 0:
                 return
         time.sleep(0.05)
-    pytest.fail(f"komtar did not listen on port {port}")
+    pytest.fail(f"jamjam did not listen on port {port}")
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -145,11 +145,11 @@ def upstream_server() -> Iterator[str]:
 
 
 @contextmanager
-def komtar_process(
+def jamjam_process(
     fifo: Path, *source: str
 ) -> Iterator[tuple[str, subprocess.Popen[str]]]:
     port = available_port()
-    arguments = [str(TARGET_DIR / "debug/komtar"), *source]
+    arguments = [str(TARGET_DIR / "debug/jamjam"), *source]
     arguments.extend(["--listen", f"{HOST}:{port}", "--fifo", str(fifo)])
     process = subprocess.Popen(
         arguments,
@@ -172,8 +172,8 @@ def komtar_process(
 
 
 @contextmanager
-def komtar(fifo: Path, *source: str) -> Iterator[str]:
-    with komtar_process(fifo, *source) as (url, _process):
+def jamjam(fifo: Path, *source: str) -> Iterator[str]:
+    with jamjam_process(fifo, *source) as (url, _process):
         yield url
 
 
@@ -181,7 +181,7 @@ def run_cli(
     *arguments: str, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(TARGET_DIR / "debug/komtar"), *arguments],
+        [str(TARGET_DIR / "debug/jamjam"), *arguments],
         cwd=ROOT,
         input=input_text,
         capture_output=True,
@@ -222,19 +222,19 @@ def page(browser: Browser) -> Iterator[Page]:
 def test_proxy_injects_only_html_and_preserves_http_behavior() -> None:
     with tempfile.TemporaryDirectory() as temporary, upstream_server() as upstream:
         fifo = Path(temporary) / "comments.fifo"
-        with komtar(fifo, "proxy", upstream) as proxy:
+        with jamjam(fifo, "proxy", upstream) as proxy:
             direct = urlopen(upstream).read()
             annotated_response = urlopen(proxy)
             annotated = annotated_response.read()
-            assert b'id="komtar"' not in direct
-            assert b"/_komtar/client.js" in annotated
+            assert b'id="jamjam"' not in direct
+            assert b"/_jamjam/client.js" in annotated
             annotated_head = urlopen(Request(proxy, method="HEAD"))
             assert int(annotated_head.headers["Content-Length"]) == len(annotated)
-            assert b"/_komtar/client.js" in urlopen(proxy + "/without-body").read()
+            assert b"/_jamjam/client.js" in urlopen(proxy + "/without-body").read()
             assert urlopen(proxy + "/asset.bin").read() == bytes(range(256))
             large = urlopen(proxy + "/large").read()
             assert len(large) == 2 * 1024 * 1024 + 1
-            assert b"/_komtar/client.js" not in large
+            assert b"/_jamjam/client.js" not in large
 
             payload = b"method body survives"
             echoed = urlopen(
@@ -255,7 +255,7 @@ def test_proxy_injects_only_html_and_preserves_http_behavior() -> None:
 def test_proxy_forwards_websocket_upgrades(page: Page) -> None:
     with tempfile.TemporaryDirectory() as temporary, upstream_server() as upstream:
         fifo = Path(temporary) / "comments.fifo"
-        with komtar(fifo, upstream) as proxy:
+        with jamjam(fifo, upstream) as proxy:
             echoed = page.evaluate(
                 """(base) => new Promise((resolve, reject) => {
                   const socket = new WebSocket(base.replace('http:', 'ws:') + '/socket');
@@ -278,10 +278,10 @@ def test_browser_queues_selection_context_coordinates_and_multiple_edits(
 ) -> None:
     with tempfile.TemporaryDirectory() as temporary, upstream_server() as upstream:
         fifo = Path(temporary) / "comments.fifo"
-        with komtar(fifo, upstream) as proxy:
+        with jamjam(fifo, upstream) as proxy:
             page.goto(proxy, wait_until="networkidle")
-            expect(page.locator("#komtar")).to_be_attached()
-            expect(page.locator("#komtar #badge")).to_have_text("0 queued")
+            expect(page.locator("#jamjam")).to_be_attached()
+            expect(page.locator("#jamjam #badge")).to_have_text("0 queued")
 
             selected_text = page.evaluate(
                 """() => {
@@ -304,19 +304,19 @@ def test_browser_queues_selection_context_coordinates_and_multiple_edits(
                   return selected;
                 }"""
             )
-            dialog = page.locator("#komtar-dialog")
+            dialog = page.locator("#jamjam-dialog")
             expect(dialog).to_be_visible()
             expect(page.get_by_text("Suggest Edit:", exact=True)).to_be_visible()
-            expect(page.locator("#komtar #selection-text")).to_have_text(selected_text)
-            page.locator("#komtar textarea").fill("Rewrite this sentence.")
-            page.locator("#komtar textarea").press("Enter")
+            expect(page.locator("#jamjam #selection-text")).to_have_text(selected_text)
+            page.locator("#jamjam textarea").fill("Rewrite this sentence.")
+            page.locator("#jamjam textarea").press("Enter")
             expect(dialog).to_be_hidden()
-            expect(page.locator("#komtar #badge")).to_have_text("1 queued")
+            expect(page.locator("#jamjam #badge")).to_have_text("1 queued")
 
             page.locator("#action").click(button="right", position={"x": 5, "y": 4})
-            page.locator("#komtar textarea").fill("Use a clearer label.")
+            page.locator("#jamjam textarea").fill("Use a clearer label.")
             page.get_by_role("button", name="Queue comment").click()
-            expect(page.locator("#komtar #badge")).to_have_text("2 queued")
+            expect(page.locator("#jamjam #badge")).to_have_text("2 queued")
 
             delivered = run_cli("recv", "--fifo", str(fifo))
             assert delivered.returncode == 0, delivered.stderr
@@ -331,20 +331,20 @@ def test_browser_queues_selection_context_coordinates_and_multiple_edits(
             assert records[0]["target"]["selector"] == "#intro"
             assert records[0]["pointer"]["target"]["x"] == pytest.approx(18, abs=1)
             assert records[0]["pointer"]["target"]["y"] == pytest.approx(12, abs=1)
-            expect(page.locator("#komtar #badge")).to_have_text("0 queued")
+            expect(page.locator("#jamjam #badge")).to_have_text("0 queued")
 
 
 def test_clicking_outside_closes_without_queueing(page: Page) -> None:
     with tempfile.TemporaryDirectory() as temporary, upstream_server() as upstream:
         fifo = Path(temporary) / "comments.fifo"
-        with komtar(fifo, upstream) as proxy:
+        with jamjam(fifo, upstream) as proxy:
             page.goto(proxy, wait_until="networkidle")
             page.locator("#intro").click(button="right")
-            dialog = page.locator("#komtar-dialog")
+            dialog = page.locator("#jamjam-dialog")
             expect(dialog).to_be_visible()
             page.mouse.click(1, 1)
             expect(dialog).to_be_hidden()
-            expect(page.locator("#komtar #badge")).to_have_text("0 queued")
+            expect(page.locator("#jamjam #badge")).to_have_text("0 queued")
 
 
 def test_serve_routes_static_files_and_injects_the_live_client() -> None:
@@ -361,15 +361,15 @@ def test_serve_routes_static_files_and_injects_the_live_client() -> None:
         outside = Path(temporary) / "outside.txt"
         outside.write_text("outside", encoding="utf-8")
         (site / "outside.txt").symlink_to(outside)
-        fifo = site / ".komtar"
+        fifo = site / ".jamjam"
 
-        with komtar(fifo, "serve", str(site)) as server:
+        with jamjam(fifo, "serve", str(site)) as server:
             response = urlopen(server)
             body = response.read()
             assert response.headers["Cache-Control"] == "no-store"
-            assert b"/_komtar/client.js?live=" in body
+            assert b"/_jamjam/client.js?live=" in body
             revision = body.split(b"client.js?live=", 1)[1].split(b'"', 1)[0]
-            with urlopen(server + "/_komtar/api/reload", timeout=2) as events:
+            with urlopen(server + "/_jamjam/api/reload", timeout=2) as events:
                 assert events.readline() == b"data: " + revision + b"\n"
             assert urlopen(server + "/plain.txt").read() == b"plain file"
             assert b"Docs" in urlopen(server + "/docs").read()
@@ -382,7 +382,7 @@ def test_serve_routes_static_files_and_injects_the_live_client() -> None:
                 urlopen(server + "/missing")
             assert missing.value.code == 404
             for hidden_path in (
-                "/.komtar",
+                "/.jamjam",
                 "/.env",
                 "/outside.txt",
                 "/plain.txt/nested",
@@ -406,36 +406,36 @@ def test_live_reload_waits_for_an_open_edit_and_keeps_it_queueable(page: Page) -
         index.write_text(
             '<body><h1 id="title">Version one</h1></body>', encoding="utf-8"
         )
-        fifo = site / ".komtar"
+        fifo = site / ".jamjam"
 
-        with komtar(fifo, "serve", str(site)) as server:
+        with jamjam(fifo, "serve", str(site)) as server:
             page.add_init_script(
                 """sessionStorage.setItem(
-                  'komtar-test-loads',
-                  String(Number(sessionStorage.getItem('komtar-test-loads') || '0') + 1),
+                  'jamjam-test-loads',
+                  String(Number(sessionStorage.getItem('jamjam-test-loads') || '0') + 1),
                 );"""
             )
             page.goto(server, wait_until="domcontentloaded")
             expect(page.locator("#title")).to_have_text("Version one")
 
             page.locator("#title").click(button="right")
-            textarea = page.locator("#komtar textarea")
+            textarea = page.locator("#jamjam textarea")
             textarea.fill("Keep this draft while files change.")
             index.write_text(
                 '<body><h1 id="title">Version two</h1></body>', encoding="utf-8"
             )
 
-            expect(page.locator("#komtar #reload-notice")).to_be_visible()
+            expect(page.locator("#jamjam #reload-notice")).to_be_visible()
             expect(textarea).to_have_value("Keep this draft while files change.")
             expect(page.locator("#title")).to_have_text("Version one")
-            assert page.evaluate("sessionStorage.getItem('komtar-test-loads')") == "1"
+            assert page.evaluate("sessionStorage.getItem('jamjam-test-loads')") == "1"
             page.locator("body").click(button="right", position={"x": 2, "y": 2})
             expect(textarea).to_have_value("Keep this draft while files change.")
-            assert page.evaluate("sessionStorage.getItem('komtar-test-loads')") == "1"
+            assert page.evaluate("sessionStorage.getItem('jamjam-test-loads')") == "1"
 
             page.get_by_role("button", name="Queue comment").click()
             expect(page.locator("#title")).to_have_text("Version two")
-            assert page.evaluate("sessionStorage.getItem('komtar-test-loads')") == "2"
+            assert page.evaluate("sessionStorage.getItem('jamjam-test-loads')") == "2"
 
             with ThreadPoolExecutor(max_workers=1) as pool:
                 delivered = pool.submit(fifo.read_text, encoding="utf-8")
@@ -443,15 +443,15 @@ def test_live_reload_waits_for_an_open_edit_and_keeps_it_queueable(page: Page) -
             assert record["comment"] == "Keep this draft while files change."
 
             time.sleep(0.5)
-            assert page.evaluate("sessionStorage.getItem('komtar-test-loads')") == "2"
+            assert page.evaluate("sessionStorage.getItem('jamjam-test-loads')") == "2"
             (site / ".ignored").write_text("hidden change", encoding="utf-8")
             time.sleep(0.5)
-            assert page.evaluate("sessionStorage.getItem('komtar-test-loads')") == "2"
+            assert page.evaluate("sessionStorage.getItem('jamjam-test-loads')") == "2"
             index.write_text(
                 '<body><h1 id="title">Version three</h1></body>', encoding="utf-8"
             )
             expect(page.locator("#title")).to_have_text("Version three")
-            assert page.evaluate("sessionStorage.getItem('komtar-test-loads')") == "3"
+            assert page.evaluate("sessionStorage.getItem('jamjam-test-loads')") == "3"
 
 
 def test_help_agent_guidance_transport_ownership_and_deleted_fifo_shutdown(
@@ -459,12 +459,12 @@ def test_help_agent_guidance_transport_ownership_and_deleted_fifo_shutdown(
 ) -> None:
     help_result = run_cli("--help")
     assert help_result.returncode == 0
-    assert "komtar recv" in help_result.stdout
-    assert "cat .komtar" not in help_result.stdout
+    assert "jamjam recv" in help_result.stdout
+    assert "cat .jamjam" not in help_result.stdout
 
     agent_result = run_cli("agent")
     assert agent_result.returncode == 0
-    assert "Invoke `komtar recv` directly again" in agent_result.stdout
+    assert "Invoke `jamjam recv` directly again" in agent_result.stdout
     assert "Never send acknowledgements" in agent_result.stdout
     assert "target.selector" in agent_result.stdout
     assert "schema" not in agent_result.stdout.lower()
@@ -475,7 +475,7 @@ def test_help_agent_guidance_transport_ownership_and_deleted_fifo_shutdown(
     fifo = tmp_path / "feedback.pipe"
     send_fifo = tmp_path / "feedback.pipe.send"
     lock = tmp_path / "feedback.pipe.lock"
-    with komtar_process(fifo, "serve", str(ROOT / "tests/fixtures/site")) as (
+    with jamjam_process(fifo, "serve", str(ROOT / "tests/fixtures/site")) as (
         _server,
         process,
     ):
@@ -488,12 +488,12 @@ def test_help_agent_guidance_transport_ownership_and_deleted_fifo_shutdown(
 
     assert process.stdout is not None
     output = process.stdout.read()
-    assert "receive feedback with: komtar recv --fifo" in output
+    assert "receive feedback with: jamjam recv --fifo" in output
     assert "was deleted or replaced" in output
     assert not send_fifo.exists()
     assert not lock.exists()
 
-    with komtar_process(fifo, "serve", str(ROOT / "tests/fixtures/site")) as (
+    with jamjam_process(fifo, "serve", str(ROOT / "tests/fixtures/site")) as (
         _server,
         process,
     ):
@@ -511,7 +511,7 @@ def test_recv_ignores_empty_sessions_and_returns_each_batch_unchanged(
     tmp_path: Path,
 ) -> None:
     fifo = tmp_path / "feedback.pipe"
-    command = [str(TARGET_DIR / "debug/komtar"), "recv", "--fifo", str(fifo)]
+    command = [str(TARGET_DIR / "debug/jamjam"), "recv", "--fifo", str(fifo)]
     first = subprocess.Popen(
         command,
         cwd=ROOT,
@@ -584,7 +584,7 @@ def test_recv_ignores_empty_sessions_and_returns_each_batch_unchanged(
 def test_shutdown_signals_remove_owned_transport(tmp_path: Path, shutdown: int) -> None:
     fifo = tmp_path / "feedback.pipe"
     paths = (fifo, Path(f"{fifo}.send"), Path(f"{fifo}.lock"))
-    with komtar_process(fifo, "serve", str(ROOT / "tests/fixtures/site")) as (
+    with jamjam_process(fifo, "serve", str(ROOT / "tests/fixtures/site")) as (
         _server,
         process,
     ):
@@ -596,8 +596,8 @@ def test_shutdown_signals_remove_owned_transport(tmp_path: Path, shutdown: int) 
 
 def test_comment_endpoint_rejects_invalid_requests(tmp_path: Path) -> None:
     fifo = tmp_path / "feedback.pipe"
-    with komtar(fifo, "serve", str(ROOT / "tests/fixtures/site")) as server:
-        endpoint = f"{server}/_komtar/api/comments"
+    with jamjam(fifo, "serve", str(ROOT / "tests/fixtures/site")) as server:
+        endpoint = f"{server}/_jamjam/api/comments"
         cases = (
             (b"{}", "text/plain", 415),
             (b"not json", "application/json", 400),
@@ -620,7 +620,7 @@ def test_comment_endpoint_rejects_invalid_requests(tmp_path: Path) -> None:
         try:
             connection.request(
                 "POST",
-                "/_komtar/api/comments",
+                "/_jamjam/api/comments",
                 body=iter([b"x" * (64 * 1024 + 1)]),
                 headers={"Content-Type": "application/json"},
                 encode_chunked=True,
@@ -636,7 +636,7 @@ def test_send_validation_direct_input_recovery_and_offline_failure(page: Page) -
     with tempfile.TemporaryDirectory() as temporary, upstream_server() as upstream:
         fifo = Path(temporary) / "comments.fifo"
         send_fifo = Path(f"{fifo}.send")
-        with komtar(fifo, upstream) as proxy:
+        with jamjam(fifo, upstream) as proxy:
             page.goto(proxy, wait_until="networkidle")
 
             positional = run_cli(
@@ -659,7 +659,7 @@ def test_send_validation_direct_input_recovery_and_offline_failure(page: Page) -
             )
 
             send_message(fifo, "Valid **Markdown** answer")
-            expect(page.locator("#komtar .agent-message")).to_contain_text(
+            expect(page.locator("#jamjam .agent-message")).to_contain_text(
                 "Valid Markdown answer"
             )
 
@@ -676,7 +676,7 @@ def test_send_validation_direct_input_recovery_and_offline_failure(page: Page) -
                 _ = writer.write(raw)
             expect(
                 page.locator(
-                    "#komtar .agent-message", has_text="Recovered after malformed input"
+                    "#jamjam .agent-message", has_text="Recovered after malformed input"
                 )
             ).to_be_visible()
 
@@ -684,7 +684,7 @@ def test_send_validation_direct_input_recovery_and_offline_failure(page: Page) -
         assert not send_fifo.exists()
         offline = run_cli("send", "--fifo", str(fifo), input_text="No server")
         assert offline.returncode != 0
-        assert "no Komtar server is reading" in offline.stderr
+        assert "no jamjam server is reading" in offline.stderr
 
 
 def test_agent_messages_broadcast_replay_markdown_and_tab_local_dismissal(
@@ -692,7 +692,7 @@ def test_agent_messages_broadcast_replay_markdown_and_tab_local_dismissal(
 ) -> None:
     with tempfile.TemporaryDirectory() as temporary, upstream_server() as upstream:
         fifo = Path(temporary) / "comments.fifo"
-        with komtar(fifo, "proxy", upstream) as proxy:
+        with jamjam(fifo, "proxy", upstream) as proxy:
             first = browser.new_page()
             second = browser.new_page()
             late = browser.new_page()
@@ -702,11 +702,11 @@ def test_agent_messages_broadcast_replay_markdown_and_tab_local_dismissal(
                 send_message(
                     fifo,
                     "Items:\n\n- first\n- second\n\n"
-                    "<script>window.komtarInjected = true</script>\n\n"
+                    "<script>window.jamjamInjected = true</script>\n\n"
                     "[Documentation](https://example.com/docs)",
                 )
                 for open_page in (first, second):
-                    card = open_page.locator("#komtar .agent-message")
+                    card = open_page.locator("#jamjam .agent-message")
                     expect(card).to_contain_text("first")
                     expect(card.locator("li")).to_have_count(2)
                     expect(card.locator("script")).to_have_count(0)
@@ -714,17 +714,17 @@ def test_agent_messages_broadcast_replay_markdown_and_tab_local_dismissal(
                     link = card.get_by_role("link", name="Documentation")
                     expect(link).to_have_attribute("target", "_blank")
                     expect(link).to_have_attribute("rel", "noopener noreferrer")
-                    assert open_page.evaluate("window.komtarInjected") is None
+                    assert open_page.evaluate("window.jamjamInjected") is None
 
                 late.goto(proxy, wait_until="networkidle")
-                expect(late.locator("#komtar .agent-message")).to_contain_text("Items:")
+                expect(late.locator("#jamjam .agent-message")).to_contain_text("Items:")
 
                 first.get_by_role("button", name="Dismiss agent message").click()
-                expect(first.locator("#komtar .agent-message")).to_have_count(0)
-                expect(second.locator("#komtar .agent-message")).to_have_count(1)
+                expect(first.locator("#jamjam .agent-message")).to_have_count(0)
+                expect(second.locator("#jamjam .agent-message")).to_have_count(1)
                 first.reload(wait_until="networkidle")
-                expect(first.locator("#komtar .agent-message")).to_have_count(0)
-                expect(second.locator("#komtar .agent-message")).to_have_count(1)
+                expect(first.locator("#jamjam .agent-message")).to_have_count(0)
+                expect(second.locator("#jamjam .agent-message")).to_have_count(1)
             finally:
                 first.close()
                 second.close()
@@ -734,9 +734,9 @@ def test_agent_messages_broadcast_replay_markdown_and_tab_local_dismissal(
 def test_global_shortcut_and_comments_on_agent_responses(page: Page) -> None:
     with tempfile.TemporaryDirectory() as temporary, upstream_server() as upstream:
         fifo = Path(temporary) / "comments.fifo"
-        with komtar(fifo, upstream) as proxy:
+        with jamjam(fifo, upstream) as proxy:
             page.goto(proxy, wait_until="networkidle")
-            dialog = page.locator("#komtar-dialog")
+            dialog = page.locator("#jamjam-dialog")
 
             _ = page.evaluate(
                 """() => {
@@ -754,10 +754,10 @@ def test_global_shortcut_and_comments_on_agent_responses(page: Page) -> None:
 
             page.keyboard.press("/")
             expect(dialog).to_be_visible()
-            expect(page.locator("#komtar #dialog-label")).to_have_text("Comment:")
-            expect(page.locator("#komtar #selection-preview")).to_be_hidden()
-            page.locator("#komtar textarea").fill("A page-level question")
-            page.locator("#komtar textarea").press("Enter")
+            expect(page.locator("#jamjam #dialog-label")).to_have_text("Comment:")
+            expect(page.locator("#jamjam #selection-preview")).to_be_hidden()
+            page.locator("#jamjam textarea").fill("A page-level question")
+            page.locator("#jamjam textarea").press("Enter")
             expect(dialog).to_be_hidden()
 
             delivered = run_cli("recv", "--fifo", str(fifo))
@@ -783,9 +783,9 @@ def test_global_shortcut_and_comments_on_agent_responses(page: Page) -> None:
             )
             page.keyboard.press("/")
             expect(dialog).to_be_visible()
-            expect(page.locator("#komtar #selection-text")).to_have_text(selected_text)
-            page.locator("#komtar textarea").fill("A question about the selected text")
-            page.locator("#komtar textarea").press("Enter")
+            expect(page.locator("#jamjam #selection-text")).to_have_text(selected_text)
+            page.locator("#jamjam textarea").fill("A question about the selected text")
+            page.locator("#jamjam textarea").press("Enter")
             expect(dialog).to_be_hidden()
 
             delivered = run_cli("recv", "--fifo", str(fifo))
@@ -797,24 +797,24 @@ def test_global_shortcut_and_comments_on_agent_responses(page: Page) -> None:
 
             send_message(fifo, "Initial agent response")
             initial = page.locator(
-                "#komtar .agent-message", has_text="Initial agent response"
+                "#jamjam .agent-message", has_text="Initial agent response"
             )
             expect(initial).to_be_visible()
             message_id = initial.get_attribute("data-message-id")
             assert message_id is not None
             initial.click(button="right", position={"x": 20, "y": 20})
             expect(dialog).to_be_visible()
-            expect(page.locator("#komtar #dialog-label")).to_have_text(
+            expect(page.locator("#jamjam #dialog-label")).to_have_text(
                 "Comment on agent response:"
             )
-            page.locator("#komtar textarea").fill("Can you clarify this response?")
+            page.locator("#jamjam textarea").fill("Can you clarify this response?")
             page.get_by_role("button", name="Queue comment").click()
             expect(dialog).to_be_hidden()
 
             delivered = run_cli("recv", "--fifo", str(fifo))
             assert delivered.returncode == 0, delivered.stderr
             response_record = json.loads(delivered.stdout)
-            response_selector = f"komtar-agent:{message_id}"
+            response_selector = f"jamjam-agent:{message_id}"
             assert response_record["comment"] == "Can you clarify this response?"
             assert response_record["target"]["selector"] == response_selector
             assert "Initial agent response" in response_record["target"]["text"]
@@ -823,7 +823,7 @@ def test_global_shortcut_and_comments_on_agent_responses(page: Page) -> None:
                 fifo, "Clarification attached to the response", response_selector
             )
             clarification = page.locator(
-                "#komtar .agent-message", has_text="Clarification attached"
+                "#jamjam .agent-message", has_text="Clarification attached"
             )
             expect(clarification).to_be_visible()
             assert (
@@ -846,7 +846,7 @@ def test_anchored_stacking_missing_anchor_reattachment_and_element_links(
 ) -> None:
     with tempfile.TemporaryDirectory() as temporary, upstream_server() as upstream:
         fifo = Path(temporary) / "comments.fifo"
-        with komtar(fifo, upstream) as proxy:
+        with jamjam(fifo, upstream) as proxy:
             page.goto(proxy, wait_until="networkidle")
             _ = page.evaluate(
                 """() => {
@@ -862,8 +862,8 @@ def test_anchored_stacking_missing_anchor_reattachment_and_element_links(
 
             send_message(fifo, "First anchored answer", "#intro")
             send_message(fifo, "Second anchored answer", "#intro")
-            first = page.locator("#komtar .agent-message", has_text="First anchored")
-            second = page.locator("#komtar .agent-message", has_text="Second anchored")
+            first = page.locator("#jamjam .agent-message", has_text="First anchored")
+            second = page.locator("#jamjam .agent-message", has_text="Second anchored")
             expect(first).to_be_visible()
             expect(second).to_be_visible()
             assert first.evaluate("node => node.parentElement.id") == "agent-anchored"
@@ -880,7 +880,7 @@ def test_anchored_stacking_missing_anchor_reattachment_and_element_links(
             )
 
             send_message(fifo, "Waiting for a later element", "#later")
-            missing = page.locator("#komtar .agent-message", has_text="Waiting for")
+            missing = page.locator("#jamjam .agent-message", has_text="Waiting for")
             expect(missing.get_by_text("Target unavailable")).to_be_visible()
             assert missing.evaluate("node => node.parentElement.id") == "agent-general"
             _ = page.evaluate(
@@ -893,7 +893,7 @@ def test_anchored_stacking_missing_anchor_reattachment_and_element_links(
             )
             page.wait_for_function(
                 """() => {
-                  const host = document.querySelector('#komtar');
+                  const host = document.querySelector('#jamjam');
                   const card = [...host.shadowRoot.querySelectorAll('.agent-message')]
                     .find((node) => node.textContent.includes('Waiting for'));
                   return card?.parentElement?.id === 'agent-anchored';
@@ -904,10 +904,10 @@ def test_anchored_stacking_missing_anchor_reattachment_and_element_links(
             send_message(
                 fifo,
                 "[Jump to the complex target]"
-                "(komtar:%23complex%5Bdata-kind%3D%22a%20b%22%5D)",
+                "(jamjam:%23complex%5Bdata-kind%3D%22a%20b%22%5D)",
             )
             page.get_by_role("link", name="Jump to the complex target").click()
-            expect(page.locator("#komtar #message-highlight")).to_be_visible()
+            expect(page.locator("#jamjam #message-highlight")).to_be_visible()
             in_view = page.locator("#complex").evaluate(
                 "node => { const rect = node.getBoundingClientRect(); "
                 "return rect.top >= 0 && rect.bottom <= innerHeight; }"
@@ -916,7 +916,7 @@ def test_anchored_stacking_missing_anchor_reattachment_and_element_links(
 
             expect(first).to_have_attribute("tabindex", "0")
             first.click()
-            expect(page.locator("#komtar #message-highlight")).to_be_visible()
+            expect(page.locator("#jamjam #message-highlight")).to_be_visible()
             intro_in_view = page.locator("#intro").evaluate(
                 "node => { const rect = node.getBoundingClientRect(); "
                 "return rect.top >= 0 && rect.bottom <= innerHeight; }"
@@ -934,7 +934,7 @@ def test_anchored_stacking_missing_anchor_reattachment_and_element_links(
 
             send_message(fifo, "Invalid anchor answer", "[")
             invalid_anchor = page.locator(
-                "#komtar .agent-message", has_text="Invalid anchor answer"
+                "#jamjam .agent-message", has_text="Invalid anchor answer"
             )
             expect(invalid_anchor.get_by_text("Target unavailable")).to_be_visible()
             assert (
@@ -944,15 +944,15 @@ def test_anchored_stacking_missing_anchor_reattachment_and_element_links(
 
             send_message(
                 fifo,
-                "[Invalid element link](komtar:%E0%A4%A) "
-                "[Missing element](komtar:%23does-not-exist)",
+                "[Invalid element link](jamjam:%E0%A4%A) "
+                "[Missing element](jamjam:%23does-not-exist)",
             )
             page.get_by_role("link", name="Invalid element link").click()
-            expect(page.locator("#komtar #toast")).to_have_text(
+            expect(page.locator("#jamjam #toast")).to_have_text(
                 "Element link is invalid"
             )
             page.get_by_role("link", name="Missing element").click()
-            expect(page.locator("#komtar #toast")).to_have_text(
+            expect(page.locator("#jamjam #toast")).to_have_text(
                 "Element is unavailable"
             )
 
@@ -965,11 +965,11 @@ def test_static_messages_and_custom_transport_paths_are_hidden_and_ignored(
     index = site / "index.html"
     index.write_text('<body><h1 id="title">Static title</h1></body>', encoding="utf-8")
     fifo = site / "feedback.pipe"
-    with komtar(fifo, "serve", str(site)) as server:
+    with jamjam(fifo, "serve", str(site)) as server:
         page.add_init_script(
             """sessionStorage.setItem(
-              'komtar-static-loads',
-              String(Number(sessionStorage.getItem('komtar-static-loads') || '0') + 1),
+              'jamjam-static-loads',
+              String(Number(sessionStorage.getItem('jamjam-static-loads') || '0') + 1),
             );"""
         )
         page.goto(server, wait_until="networkidle")
@@ -981,13 +981,13 @@ def test_static_messages_and_custom_transport_paths_are_hidden_and_ignored(
         # Let any backend events from constructing the fresh fixture settle, then
         # measure reloads caused specifically by transport activity.
         time.sleep(0.5)
-        _ = page.evaluate("sessionStorage.setItem('komtar-static-loads', '0')")
+        _ = page.evaluate("sessionStorage.setItem('jamjam-static-loads', '0')")
         send_message(fifo, "Static mode answer", "#title")
-        expect(page.locator("#komtar .agent-message")).to_contain_text(
+        expect(page.locator("#jamjam .agent-message")).to_contain_text(
             "Static mode answer"
         )
         time.sleep(0.5)
-        assert page.evaluate("sessionStorage.getItem('komtar-static-loads')") == "0"
+        assert page.evaluate("sessionStorage.getItem('jamjam-static-loads')") == "0"
 
     assert not fifo.exists()
     assert not Path(f"{fifo}.send").exists()

@@ -1,6 +1,7 @@
 # Repository instructions
 
-`komtar` is a development-only Rust reverse proxy. Keep the runtime as one
+`jamjam` is the hosted, multi-user successor of komtar; DESIGN.md describes
+the target and its implementation plan. Keep the runtime as one
 self-contained binary: JavaScript and CSS belong in `assets/client.js` and are
 embedded with `include_str!`.
 
@@ -16,7 +17,6 @@ uv run pytest
 cargo build --release
 ```
 
-Do not add production integration hooks. A project is annotated only when its
-developer deliberately visits the address printed by `komtar`. Preserve the
-version-1 newline-delimited JSON schema unless a breaking format change is
-explicitly requested.
+Do not add production integration hooks. Preserve the version-1
+newline-delimited JSON schema unless a breaking format change is explicitly
+requested.
