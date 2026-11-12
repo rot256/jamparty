@@ -5,7 +5,10 @@ use std::{fmt, str::FromStr};
 use hyper::{
     Request, Response, StatusCode, Uri,
     body::Incoming,
-    header::{self, HOST, LOCATION},
+    header::{
+        self, CONNECTION, HOST, HeaderMap, HeaderName, HeaderValue, LOCATION, TE, TRAILER,
+        TRANSFER_ENCODING, UPGRADE,
+    },
 };
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{
@@ -89,6 +92,7 @@ impl Proxy {
             .then(|| hyper::upgrade::on(&mut request));
         let original_host = request.headers().get(HOST).cloned();
         let (mut parts, body) = request.into_parts();
+        strip_hop_by_hop(&mut parts.headers, downstream_upgrade.is_some());
         let request_method = parts.method.clone();
         parts.uri = upstream_uri(upstream, &parts.uri)?;
         parts.headers.insert(
@@ -117,6 +121,8 @@ impl Proxy {
         })?;
 
         rewrite_redirect(response.headers_mut(), upstream);
+        let upgraded = response.status() == StatusCode::SWITCHING_PROTOCOLS;
+        strip_hop_by_hop(response.headers_mut(), upgraded);
 
         if response.status() == StatusCode::SWITCHING_PROTOCOLS {
             if let Some(downstream_upgrade) = downstream_upgrade {
@@ -148,21 +154,66 @@ impl Proxy {
     }
 }
 
+/// The upstream URL for `incoming`: its path under the upstream's base
+/// path. Paths with `.` or `..` segments (also percent-encoded) are
+/// refused: resolving them could leave the base path.
 fn upstream_uri(upstream: &Url, incoming: &Uri) -> Result<Uri, RequestError> {
+    let bad_path = || RequestError::new(StatusCode::BAD_REQUEST, "invalid request path");
+    let incoming_path = incoming.path();
+    let dot_segment = incoming_path.split('/').any(|segment| {
+        let decoded = percent_encoding::percent_decode_str(segment).collect::<Vec<u8>>();
+        matches!(decoded.as_slice(), b"." | b"..")
+    });
+    if dot_segment {
+        return Err(bad_path());
+    }
     let mut target = upstream.clone();
     let base = upstream.path().trim_end_matches('/');
-    let incoming_path = incoming.path();
     let path = if base.is_empty() {
         incoming_path.to_owned()
     } else {
         format!("{base}{incoming_path}")
     };
     target.set_path(&path);
+    if !target.path().starts_with(upstream.path()) {
+        return Err(bad_path());
+    }
     target.set_query(incoming.query());
     target
         .as_str()
         .parse()
         .map_err(|_| RequestError::new(StatusCode::BAD_GATEWAY, "could not construct upstream URL"))
+}
+
+/// Removes hop-by-hop headers (RFC 9110, 7.6.1) and those `Connection`
+/// names; `upgrade` keeps `Upgrade` and `Connection: upgrade`.
+fn strip_hop_by_hop(headers: &mut HeaderMap, upgrade: bool) {
+    let kept = headers.get(UPGRADE).cloned().filter(|_| upgrade);
+    let named: Vec<HeaderName> = headers
+        .get_all(CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|name| HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .collect();
+    for name in named {
+        headers.remove(name);
+    }
+    for name in [
+        CONNECTION,
+        HeaderName::from_static("keep-alive"),
+        HeaderName::from_static("proxy-connection"),
+        TE,
+        TRAILER,
+        TRANSFER_ENCODING,
+        UPGRADE,
+    ] {
+        headers.remove(name);
+    }
+    if let Some(value) = kept {
+        headers.insert(UPGRADE, value);
+        headers.insert(CONNECTION, HeaderValue::from_static("upgrade"));
+    }
 }
 
 fn rewrite_redirect(headers: &mut header::HeaderMap, upstream: &Url) {
@@ -208,7 +259,67 @@ fn rewrite_redirect(headers: &mut header::HeaderMap, upstream: &Url) {
 mod tests {
     use hyper::header::{HeaderMap, HeaderValue, LOCATION};
 
-    use crate::share::proxy::{UpstreamUrl, rewrite_redirect};
+    use hyper::{StatusCode, Uri};
+
+    use crate::share::proxy::{UpstreamUrl, rewrite_redirect, strip_hop_by_hop, upstream_uri};
+
+    #[test]
+    fn hop_by_hop_headers_are_dropped() {
+        let mut headers = HeaderMap::new();
+        for (name, value) in [
+            ("connection", "keep-alive, x-private"),
+            ("keep-alive", "timeout=5"),
+            ("x-private", "1"),
+            ("te", "trailers"),
+            ("transfer-encoding", "chunked"),
+            ("upgrade", "websocket"),
+            ("x-kept", "1"),
+        ] {
+            headers.insert(name, HeaderValue::from_static(value));
+        }
+        let mut plain = headers.clone();
+        strip_hop_by_hop(&mut plain, false);
+        let names: Vec<&str> = plain.keys().map(|name| name.as_str()).collect();
+        assert_eq!(names, ["x-kept"]);
+
+        strip_hop_by_hop(&mut headers, true);
+        assert_eq!(headers.get("upgrade").unwrap(), "websocket");
+        assert_eq!(headers.get("connection").unwrap(), "upgrade");
+        assert!(headers.get("x-private").is_none());
+        assert_eq!(headers.len(), 3);
+    }
+
+    #[test]
+    fn requests_stay_under_the_base_path() {
+        let upstream = url::Url::parse("http://localhost:3000/app/").unwrap();
+        let target = |path: &str| upstream_uri(&upstream, &path.parse::<Uri>().unwrap());
+        assert_eq!(
+            target("/page?q=1").unwrap().to_string(),
+            "http://localhost:3000/app/page?q=1"
+        );
+        assert_eq!(
+            target("/").unwrap().to_string(),
+            "http://localhost:3000/app/"
+        );
+        assert_eq!(
+            target("/a%2fb/..x").unwrap().to_string(),
+            "http://localhost:3000/app/a%2fb/..x"
+        );
+        for escape in [
+            "/../admin",
+            "/%2e%2e/admin",
+            "/%2E%2e/admin",
+            "/.%2e/admin",
+            "/a/../../admin",
+            "/./x",
+            "/x/%2e",
+        ] {
+            let refused = target(escape).unwrap_err();
+            assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{escape}");
+        }
+        let root = url::Url::parse("http://localhost:3000/").unwrap();
+        assert!(upstream_uri(&root, &"/../etc".parse().unwrap()).is_err());
+    }
 
     #[test]
     fn validates_upstream() {
