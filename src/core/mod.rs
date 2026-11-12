@@ -9,6 +9,7 @@ pub(crate) mod queue;
 pub(crate) mod ratelimit;
 pub(crate) mod request;
 pub(crate) mod rng;
+pub(crate) mod settings;
 pub(crate) mod text;
 pub(crate) mod token;
 pub(crate) mod version;

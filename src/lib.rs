@@ -39,7 +39,7 @@ use zeroize::Zeroizing;
 use crate::{
     adapters::{
         endpoint::{Discovery, NetConfig},
-        keyfile, runtime,
+        keyfile, runtime, settings,
         t3::{self, T3Target},
     },
     agent::guides::{self, Kind},
@@ -450,11 +450,12 @@ async fn join(
     } else {
         Discovery::Direct
     };
-    let name = name.unwrap_or_else(default_name);
     let key = keyfile::load_or_create(&keyfile::default_path()?)?;
     let joiner = Joiner::start(JoinConfig {
         token,
         name,
+        default_name: default_name(),
+        settings: settings::default_path()?,
         key,
         net: net_config(discovery)?,
         share_addrs,

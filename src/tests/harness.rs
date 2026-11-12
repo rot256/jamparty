@@ -1,7 +1,7 @@
 //! In-process shares and joiners over iroh with direct addresses, a
 //! fixture site and a small HTTP client.
 
-use std::{fs, future::Future, net::SocketAddr, ops::Deref, path::PathBuf, time::Duration};
+use std::{env, fs, future::Future, net::SocketAddr, ops::Deref, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -127,13 +127,22 @@ pub(crate) async fn joiner_with_key(
 ) -> Joiner {
     Joiner::start(JoinConfig {
         token,
-        name: name.parse().unwrap(),
+        name: Some(name.parse().unwrap()),
+        default_name: "joiner".parse().unwrap(),
+        settings: settings_path(),
         key,
         net: net(),
         share_addrs: addrs,
     })
     .await
     .unwrap()
+}
+
+/// A settings file in a directory of its own, not created until saved.
+pub(crate) fn settings_path() -> PathBuf {
+    env::temp_dir()
+        .join(format!("jampot-test-{}", uuid::Uuid::new_v4()))
+        .join("settings.json")
 }
 
 /// A joiner of `share`, admitted.
@@ -212,6 +221,17 @@ pub(crate) async fn get(joiner: &Joiner, path: &str) -> Reply {
 
 /// A comment draft on the fixture's title.
 pub(crate) const DRAFT: &str = r##"{"page":"http://x.localhost/","selector":"#title","selectedText":"Fixture","comment":"Bigger, please"}"##;
+
+/// Posts JSON to a joiner endpoint the way the page does.
+pub(crate) async fn post_json(joiner: &Joiner, path: &str, body: &str) -> Reply {
+    let request = local(joiner, "POST", path)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, joiner.origin().origin())
+        .header("sec-fetch-site", "same-origin")
+        .body(Full::new(Bytes::from(body.to_owned())))
+        .unwrap();
+    fetch(joiner, request).await
+}
 
 /// Posts a comment the way the page does, with a fresh `ref` unless
 /// `body` (a JSON object) has one.

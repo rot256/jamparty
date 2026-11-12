@@ -3,8 +3,8 @@ use proptest::prelude::*;
 use crate::core::{
     ids::EndpointKey,
     request::{
-        COMMENTS_PATH, EVENTS_PATH, LocalOrigin, Method, Refusal, RequestFacts, Route, STATUS_PATH,
-        Upgrade,
+        COMMENTS_PATH, EVENTS_PATH, LocalOrigin, Method, Refusal, RequestFacts, Route,
+        SETTINGS_PATH, STATUS_PATH, Upgrade,
     },
 };
 
@@ -85,6 +85,11 @@ fn table() {
         ),
         ("status", fetch(Method::Get, STATUS_PATH), Ok(Route::Status)),
         ("events", fetch(Method::Get, EVENTS_PATH), Ok(Route::Events)),
+        (
+            "settings",
+            fetch(Method::Post, SETTINGS_PATH),
+            Ok(Route::Settings),
+        ),
         ("site post", fetch(Method::Post, "/form"), Ok(Route::Proxy)),
         ("site put", fetch(Method::Other, "/api/x"), Ok(Route::Proxy)),
         (
@@ -136,6 +141,19 @@ fn table() {
             "post status",
             fetch(Method::Post, STATUS_PATH),
             Err(Refusal::MethodNotAllowed),
+        ),
+        (
+            "get settings",
+            fetch(Method::Get, SETTINGS_PATH),
+            Err(Refusal::MethodNotAllowed),
+        ),
+        (
+            "cross-site settings",
+            RequestFacts {
+                sec_fetch_site: Some("cross-site"),
+                ..fetch(Method::Post, SETTINGS_PATH)
+            },
+            Err(Refusal::CrossSite),
         ),
         (
             "head events",

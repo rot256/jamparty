@@ -144,6 +144,7 @@ export class Connection {
         case "answer":
         case "reload":
         case "presence":
+        case "settings":
         case "ping":
           break;
       }

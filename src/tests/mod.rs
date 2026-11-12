@@ -10,5 +10,6 @@ mod harness;
 mod local_rules;
 mod requests;
 mod session;
+mod settings;
 mod t3;
 mod upstream;

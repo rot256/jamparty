@@ -19,8 +19,9 @@ use zeroize::Zeroizing;
 
 use crate::{Report, adapters::endpoint::generate_key, core::rng::SystemRng};
 
-/// Where the joiner key lives, from the environment.
-pub(crate) fn default_path() -> Result<PathBuf, Report> {
+/// jampot's configuration directory (`~/.config/jampot`, or under
+/// `$XDG_CONFIG_HOME`), from the environment.
+pub(crate) fn config_dir() -> Result<PathBuf, Report> {
     let config = match env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
         Some(dir) => PathBuf::from(dir),
         None => {
@@ -28,7 +29,12 @@ pub(crate) fn default_path() -> Result<PathBuf, Report> {
             PathBuf::from(home).join(".config")
         }
     };
-    Ok(config.join("jampot").join("key"))
+    Ok(config.join("jampot"))
+}
+
+/// Where the joiner key lives, from the environment.
+pub(crate) fn default_path() -> Result<PathBuf, Report> {
+    Ok(config_dir()?.join("key"))
 }
 
 /// Reads the key at `path`, creating it first if it does not exist. A key

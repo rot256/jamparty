@@ -13,7 +13,7 @@ use tokio::{io::BufReader, time};
 use crate::{
     Report,
     adapters::{endpoint, lines},
-    core::{name::JoinerName, queue::backoff, token::PartyToken},
+    core::{queue::backoff, token::PartyToken},
     join::session::{Control, Session},
     protocol::control::{Envelope, JoinerMessage, RefusedReason, ShareMessage},
     share::REFUSED_CODE,
@@ -26,7 +26,6 @@ const CLOSE_WAIT: Duration = Duration::from_secs(3);
 pub(crate) struct Dial {
     pub(crate) endpoint: Endpoint,
     pub(crate) token: PartyToken,
-    pub(crate) name: JoinerName,
     /// Direct addresses of the share; empty to use address lookup.
     pub(crate) share_addrs: Vec<SocketAddr>,
 }
@@ -79,7 +78,7 @@ async fn attempt(dial: &Dial, session: &Session) -> Ended {
     let mut recv = BufReader::new(recv);
     let hello = Envelope::from(JoinerMessage::Hello {
         secret: dial.token.secret.clone(),
-        name: dial.name.clone(),
+        name: session.name(),
     });
     if let Err(error) = lines::write(&mut send, &hello).await {
         return Ended::Failed(error);

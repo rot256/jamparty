@@ -91,6 +91,7 @@ function install(): void {
         case "share":
         case "status":
         case "presence":
+        case "settings":
         case "ping":
           break;
       }

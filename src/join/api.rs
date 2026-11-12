@@ -11,14 +11,15 @@ use hyper::{
     body::{Frame, Incoming},
     header::{self, CACHE_CONTROL, CONTENT_TYPE},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{
     sync::broadcast::{Receiver, error::RecvError},
     time::{Instant, Interval, MissedTickBehavior, interval_at},
 };
 
 use crate::{
-    core::ids::CommentId,
+    core::{ids::CommentId, settings::SettingsChange},
+    describe,
     join::session::{Event, Session, View},
     protocol::{
         MAX_LINE_BYTES,
@@ -37,7 +38,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 /// may run another jampot; the client compares this number (from
 /// `api/status`) with its own and refuses to go on when they differ. Bump
 /// it on any change an older client or joiner cannot handle.
-pub(crate) const API_VERSION: u32 = 1;
+pub(crate) const API_VERSION: u32 = 2;
 
 /// `api/status`: the endpoints' version and this jampot's, then the view.
 #[derive(Serialize)]
@@ -88,10 +89,8 @@ pub(crate) async fn comment(request: Request<Incoming>, session: &Session) -> Re
         .unwrap_or_else(Response::from)
 }
 
-async fn submit(
-    request: Request<Incoming>,
-    session: &Session,
-) -> Result<Response<AppBody>, RequestError> {
+/// The JSON body of a page's POST, as `T`.
+async fn read_json<T: DeserializeOwned>(request: Request<Incoming>) -> Result<T, RequestError> {
     let json = request
         .headers()
         .get(CONTENT_TYPE)
@@ -107,16 +106,26 @@ async fn submit(
     let body = Limited::new(request.into_body(), MAX_LINE_BYTES)
         .collect()
         .await
-        .map_err(|_| RequestError::new(StatusCode::PAYLOAD_TOO_LARGE, "comment is too large"))?
+        .map_err(|_| RequestError::new(StatusCode::PAYLOAD_TOO_LARGE, "body is too large"))?
         .to_bytes();
-    let bad = |error: String| RequestError::new(StatusCode::BAD_REQUEST, error);
+    serde_json::from_slice(&body).map_err(|error| bad(error.to_string()))
+}
+
+fn bad(error: String) -> RequestError {
+    RequestError::new(StatusCode::BAD_REQUEST, error)
+}
+
+async fn submit(
+    request: Request<Incoming>,
+    session: &Session,
+) -> Result<Response<AppBody>, RequestError> {
     let Submission {
         reference,
         page,
         selector,
         selected_text,
         comment,
-    } = serde_json::from_slice(&body).map_err(|error| bad(error.to_string()))?;
+    } = read_json(request).await?;
     let draft = Draft::try_from(DraftFields {
         page,
         selector,
@@ -154,6 +163,25 @@ async fn submit(
             ));
         }
     })
+}
+
+/// `POST api/settings`: a change to the settings, saved and sent to every
+/// page; answers the settings as they are now.
+pub(crate) async fn settings(request: Request<Incoming>, session: &Session) -> Response<AppBody> {
+    let changed = match read_json::<SettingsChange>(request).await {
+        Ok(change) => session.change_settings(change).map_err(|error| {
+            tracing::warn!(error = %describe(&error), "could not save the settings");
+            RequestError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not save the settings: {}", describe(&error)),
+            )
+        }),
+        Err(error) => Err(error),
+    };
+    match changed {
+        Ok(settings) => json_response(StatusCode::OK, &settings),
+        Err(error) => error.into(),
+    }
 }
 
 /// `GET api/status`: the session as the joiner sees it.
@@ -240,10 +268,11 @@ mod bindings {
         core::{
             ids::{CommentId, EndpointKey, Fingerprint},
             name::JoinerName,
+            settings::{KeyBinding, Keys, KeysFields, SettingsChange, Switch},
         },
         join::{
             api::{API_VERSION, Limited429, Queued, Status, Submission},
-            session::{Answer, Event, View},
+            session::{Answer, Event, PageSettings, View},
         },
         protocol::{
             comment::Author,
@@ -263,7 +292,13 @@ mod bindings {
             JoinerName::decl(&cfg),
             StatusLine::decl(&cfg),
             RefusedReason::decl(&cfg),
+            Switch::decl(&cfg),
+            KeyBinding::decl(&cfg),
+            KeysFields::decl(&cfg),
+            Keys::decl(&cfg),
             Author::decl(&cfg),
+            PageSettings::decl(&cfg),
+            SettingsChange::decl(&cfg),
             Answer::decl(&cfg),
             View::decl(&cfg),
             Status::decl(&cfg),

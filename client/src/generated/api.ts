@@ -1,7 +1,7 @@
 // Generated from the Rust types by `cargo test` (src/join/api.rs); do not edit.
 // Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings
 
-export const API_VERSION = 1;
+export const API_VERSION = 2;
 
 export type CommentId = string;
 
@@ -17,7 +17,27 @@ export type StatusLine = string;
 
 export type RefusedReason = "wrong_secret" | "bad_hello" | "full";
 
+export type Switch = "on" | "off";
+
+export type KeyBinding = string;
+
+export type KeysFields = { commentMode: KeyBinding, showCursor: KeyBinding, };
+
+export type Keys = { commentMode: KeyBinding, showCursor: KeyBinding, };
+
 export type Author = { name: JoinerName, fingerprint: Fingerprint, key: EndpointKey, };
+
+export type PageSettings = { 
+/**
+ * The name this joiner goes by now.
+ */
+name: JoinerName, 
+/**
+ * No name was chosen yet (none saved, no `--name`): the page asks.
+ */
+askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, };
+
+export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Switch, showCursor?: Switch, };
 
 export type Answer = { id: CommentId, html: string, 
 /**
@@ -61,7 +81,7 @@ undelivered: Array<CommentId>,
 /**
  * Recent answers, oldest first.
  */
-answers: Array<Answer>, };
+answers: Array<Answer>, settings: PageSettings, };
 
 export type Status = { api: number, version: string, 
 /**
@@ -95,9 +115,9 @@ undelivered: Array<CommentId>,
 /**
  * Recent answers, oldest first.
  */
-answers: Array<Answer>, };
+answers: Array<Answer>, settings: PageSettings, };
 
-export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer;
+export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings;
 
 export type Submission = { ref: CommentRef, page: string, selector: string, selectedText: string | null, comment: string, };
 

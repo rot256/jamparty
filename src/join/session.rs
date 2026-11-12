@@ -3,6 +3,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
@@ -17,8 +18,13 @@ use tokio::{
 
 use crate::{
     Report,
-    adapters::lines,
-    core::{ids::CommentId, request::LocalOrigin},
+    adapters::{lines, settings},
+    core::{
+        ids::CommentId,
+        name::JoinerName,
+        request::LocalOrigin,
+        settings::{Keys, Settings, SettingsChange, Switch},
+    },
     join::markdown,
     protocol::{
         comment::{Author, Draft},
@@ -34,7 +40,7 @@ const EVENT_CAPACITY: usize = 256;
 const MAX_ANSWERS: usize = 100;
 
 /// What `/_jampot/api/status` reports.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct View {
     /// Connected to the share and admitted.
@@ -54,6 +60,75 @@ pub(crate) struct View {
     pub(crate) undelivered: Vec<CommentId>,
     /// Recent answers, oldest first.
     pub(crate) answers: Vec<Answer>,
+    pub(crate) settings: PageSettings,
+}
+
+impl View {
+    fn new(settings: PageSettings) -> Self {
+        Self {
+            connected: false,
+            refused: None,
+            you: None,
+            joiners: Vec::new(),
+            revision: None,
+            status: None,
+            pending: 0,
+            undelivered: Vec::new(),
+            answers: Vec::new(),
+            settings,
+        }
+    }
+}
+
+/// The settings as the page sees them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct PageSettings {
+    /// The name this joiner goes by now.
+    pub(crate) name: JoinerName,
+    /// No name was chosen yet (none saved, no `--name`): the page asks.
+    pub(crate) ask_name: bool,
+    pub(crate) keys: Keys,
+    pub(crate) comment_mode: Switch,
+    pub(crate) show_cursor: Switch,
+}
+
+/// The joiner's settings: the saved ones, and the name for this run.
+pub(crate) struct Preferences {
+    /// The settings file.
+    pub(crate) path: PathBuf,
+    pub(crate) saved: Settings,
+    /// `jampot join --name`: this run's name, until one is chosen in the
+    /// page.
+    pub(crate) given: Option<JoinerName>,
+    /// The name when none is given or saved (`user@host`).
+    pub(crate) default: JoinerName,
+}
+
+impl Preferences {
+    fn name(&self) -> JoinerName {
+        self.given
+            .clone()
+            .or_else(|| self.saved.name.clone())
+            .unwrap_or_else(|| self.default.clone())
+    }
+
+    fn page(&self) -> PageSettings {
+        let Settings {
+            name,
+            keys,
+            comment_mode,
+            show_cursor,
+        } = &self.saved;
+        PageSettings {
+            name: self.name(),
+            ask_name: name.is_none() && self.given.is_none(),
+            keys: keys.clone(),
+            comment_mode: *comment_mode,
+            show_cursor: *show_cursor,
+        }
+    }
 }
 
 /// An answer as pages show it: rendered Markdown, and where it belongs.
@@ -94,6 +169,8 @@ pub(crate) enum Event {
         ids: Vec<CommentId>,
     },
     Answer(Answer),
+    /// The settings changed (in this page or another).
+    Settings(PageSettings),
 }
 
 /// How long to wait for the share to acknowledge a comment.
@@ -194,6 +271,7 @@ async fn write_lines(mut writer: SendStream, mut queued: mpsc::Receiver<Envelope
 
 pub(crate) struct Session {
     pub(crate) origin: LocalOrigin,
+    preferences: Mutex<Preferences>,
     view: watch::Sender<View>,
     control: Mutex<Option<Arc<Control>>>,
     events: broadcast::Sender<Event>,
@@ -202,14 +280,48 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(origin: LocalOrigin) -> Self {
+    pub(crate) fn new(origin: LocalOrigin, preferences: Preferences) -> Self {
+        let view = View::new(preferences.page());
         Self {
             origin,
-            view: watch::channel(View::default()).0,
+            preferences: Mutex::new(preferences),
+            view: watch::channel(view).0,
             control: Mutex::new(None),
             events: broadcast::channel(EVENT_CAPACITY).0,
             mine: Mutex::new(HashSet::new()),
         }
+    }
+
+    fn preferences(&self) -> MutexGuard<'_, Preferences> {
+        self.preferences
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The name this joiner goes by now (in its hello, and its comments).
+    pub(crate) fn name(&self) -> JoinerName {
+        self.preferences().name()
+    }
+
+    /// Saves a change from the page and tells every page. A name chosen in
+    /// the page replaces `--name` for the rest of the run.
+    pub(crate) fn change_settings(&self, change: SettingsChange) -> Result<PageSettings, Report> {
+        let page = {
+            let mut preferences = self.preferences();
+            let named = change.name.is_some();
+            // Read, changed and written under a lock: another joiner of
+            // this home may have changed other settings meanwhile.
+            let saved = settings::update(&preferences.path, change)?;
+            preferences.saved = saved;
+            if named {
+                preferences.given = None;
+            }
+            preferences.page()
+        };
+        self.view
+            .send_modify(|view| view.settings.clone_from(&page));
+        self.emit(Event::Settings(page.clone()));
+        Ok(page)
     }
 
     pub(crate) fn view(&self) -> View {

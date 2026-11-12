@@ -71,6 +71,7 @@ async fn handle(request: Request<Incoming>, session: &Session) -> Response<AppBo
         Ok(Route::Comments) => api::comment(request, session).await,
         Ok(Route::Status) => api::status(session),
         Ok(Route::Events) => api::events(session),
+        Ok(Route::Settings) => api::settings(request, session).await,
         Ok(Route::Proxy) => forward(request, session)
             .await
             .unwrap_or_else(Response::from),

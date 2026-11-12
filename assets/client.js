@@ -317,7 +317,7 @@ var Answers = class {
 };
 
 // client/src/generated/api.ts
-var API_VERSION = 1;
+var API_VERSION = 2;
 
 // client/src/api.ts
 var SubmitError = class extends Error {
@@ -496,6 +496,7 @@ var Connection = class {
         case "answer":
         case "reload":
         case "presence":
+        case "settings":
         case "ping":
           break;
       }
@@ -1254,6 +1255,7 @@ function install() {
         case "share":
         case "status":
         case "presence":
+        case "settings":
         case "ping":
           break;
       }

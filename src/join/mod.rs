@@ -10,6 +10,7 @@ mod session;
 use std::{
     io::ErrorKind,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -22,17 +23,25 @@ use tokio::{net::TcpListener, sync::watch, task::JoinSet};
 
 use crate::{
     Report,
-    adapters::endpoint::{Accept, NetConfig, bind},
+    adapters::{
+        endpoint::{Accept, NetConfig, bind},
+        settings,
+    },
     core::{name::JoinerName, request::LocalOrigin, token::PartyToken},
     join::{
         connection::Dial,
-        session::{Session, View},
+        session::{Preferences, Session, View},
     },
 };
 
 pub(crate) struct JoinConfig {
     pub(crate) token: PartyToken,
-    pub(crate) name: JoinerName,
+    /// `--name`: the name for this run, over the saved one.
+    pub(crate) name: Option<JoinerName>,
+    /// The name when none is given or saved.
+    pub(crate) default_name: JoinerName,
+    /// The settings file (`adapters::settings`); read at start.
+    pub(crate) settings: PathBuf,
     /// The joiner's own iroh key.
     pub(crate) key: SecretKey,
     pub(crate) net: NetConfig,
@@ -80,22 +89,32 @@ impl Joiner {
         let JoinConfig {
             token,
             name,
+            default_name,
+            settings: path,
             key,
             net,
             share_addrs,
         } = config;
+        let preferences = Preferences {
+            saved: settings::load(&path)?,
+            path,
+            given: name,
+            default: default_name,
+        };
         let listeners = bind_local().await?;
         let port = listeners
             .first()
             .context("no local listener")?
             .local_addr()?
             .port();
-        let session = Arc::new(Session::new(LocalOrigin::new(&token.share.sid(), port)));
+        let session = Arc::new(Session::new(
+            LocalOrigin::new(&token.share.sid(), port),
+            preferences,
+        ));
         let endpoint = bind(&net, key, Accept::Nothing).await?;
         let dial = Dial {
             endpoint: endpoint.clone(),
             token,
-            name,
             share_addrs,
         };
         let mut tasks = JoinSet::new();

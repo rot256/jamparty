@@ -23,6 +23,7 @@ pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
 pub(crate) const COMMENTS_PATH: &str = "/_jampot/api/comments";
 pub(crate) const STATUS_PATH: &str = "/_jampot/api/status";
 pub(crate) const EVENTS_PATH: &str = "/_jampot/api/events";
+pub(crate) const SETTINGS_PATH: &str = "/_jampot/api/settings";
 
 /// The request method, as far as the decision cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +76,8 @@ pub(crate) enum Route {
     Status,
     /// GET the event stream (SSE).
     Events,
+    /// POST a change to the joiner's settings.
+    Settings,
     /// Forward to the share.
     Proxy,
 }
@@ -173,6 +176,7 @@ fn route(facts: &RequestFacts<'_>) -> Result<Route, Refusal> {
         COMMENTS_PATH => (Route::Comments, Method::Post),
         STATUS_PATH => (Route::Status, Method::Get),
         EVENTS_PATH => (Route::Events, Method::Get),
+        SETTINGS_PATH => (Route::Settings, Method::Post),
         _ => return Ok(Route::Proxy),
     };
     if facts.method == method && facts.upgrade == Upgrade::No {

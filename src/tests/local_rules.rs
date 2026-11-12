@@ -94,11 +94,17 @@ async fn host_and_cross_site_rules() {
         ("sec-fetch-site", "cross-site"),
         ("origin", origin.as_str()),
     ];
-    for headers in [&post_navigate[..], &cross_post[..]] {
-        assert_eq!(
-            send("POST", "/_jampot/api/comments", headers).await.status,
-            403
-        );
+    for path in ["/_jampot/api/comments", "/_jampot/api/settings"] {
+        for headers in [&post_navigate[..], &cross_post[..]] {
+            assert_eq!(send("POST", path, headers).await.status, 403, "{path}");
+        }
+        // Same-origin writes need the exact Origin.
+        let same_site = [("sec-fetch-site", "same-site"), ("origin", origin.as_str())];
+        assert_eq!(send("POST", path, &same_site).await.status, 403, "{path}");
+        let evil = [("origin", "http://evil.example")];
+        assert_eq!(send("POST", path, &evil).await.status, 403, "{path}");
+        // Only POST.
+        assert_eq!(send("GET", path, &[]).await.status, 405, "{path}");
     }
     // Same-origin writes need the exact Origin.
     let same_site_wrong_origin = [("sec-fetch-site", "same-site"), ("origin", origin.as_str())];
