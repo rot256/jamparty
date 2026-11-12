@@ -17,6 +17,7 @@ use crate::{
     BoxError,
     adapters::lines,
     core::{ids::CommentId, request::LocalOrigin},
+    join::markdown,
     protocol::{
         comment::{Author, Draft},
         control::{AckOutcome, Envelope, JoinerMessage, RefusedReason, ShareMessage, StatusLine},
@@ -24,6 +25,8 @@ use crate::{
 };
 
 const EVENT_CAPACITY: usize = 256;
+/// Answers kept for pages that load later.
+const MAX_ANSWERS: usize = 100;
 
 /// What `/_jamjam/api/status` reports.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -41,6 +44,23 @@ pub(crate) struct View {
     pub(crate) status: Option<StatusLine>,
     /// This joiner's comments the share holds undelivered.
     pub(crate) pending: usize,
+    /// Their ids.
+    pub(crate) undelivered: Vec<CommentId>,
+    /// Recent answers, oldest first.
+    pub(crate) answers: Vec<Answer>,
+}
+
+/// An answer as pages show it: rendered Markdown, and where it belongs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct Answer {
+    pub(crate) id: CommentId,
+    pub(crate) html: String,
+    /// The selector of the comment it answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) anchor: Option<String>,
+    /// The page that comment was made on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) page: Option<String>,
 }
 
 /// One event on `/_jamjam/api/events`.
@@ -63,6 +83,7 @@ pub(crate) enum Event {
     Delivered {
         ids: Vec<CommentId>,
     },
+    Answer(Answer),
 }
 
 /// The admitted control stream: writes comments, matches their
@@ -195,12 +216,23 @@ impl Session {
     /// One of our comments was queued under `id`; returns how many are
     /// pending.
     pub(crate) fn queued(&self, id: CommentId) -> usize {
-        let pending = {
-            let mut mine = self.mine.lock().unwrap_or_else(PoisonError::into_inner);
+        self.update_mine(|mine| {
             mine.insert(id);
-            mine.len()
+        })
+    }
+
+    /// Changes the set of our undelivered comments; returns its size.
+    fn update_mine(&self, change: impl FnOnce(&mut HashSet<CommentId>)) -> usize {
+        let undelivered: Vec<CommentId> = {
+            let mut mine = self.mine.lock().unwrap_or_else(PoisonError::into_inner);
+            change(&mut mine);
+            mine.iter().copied().collect()
         };
-        self.view.send_modify(|view| view.pending = pending);
+        let pending = undelivered.len();
+        self.view.send_modify(|view| {
+            view.pending = pending;
+            view.undelivered = undelivered;
+        });
         pending
     }
 
@@ -224,19 +256,44 @@ impl Session {
                 self.emit(Event::Status { line });
             }
             ShareMessage::Delivered { ids } => {
-                let pending = {
-                    let mut mine = self.mine.lock().unwrap_or_else(PoisonError::into_inner);
+                self.update_mine(|mine| {
                     for id in &ids {
                         mine.remove(id);
                     }
-                    mine.len()
-                };
-                self.view.send_modify(|view| view.pending = pending);
+                });
                 self.emit(Event::Delivered { ids });
             }
-            ShareMessage::Answer { .. } => {
-                // Answers reach pages with `jamjam send` (implementation step 6).
-                tracing::debug!("answer received");
+            ShareMessage::Answer {
+                id,
+                message,
+                anchor,
+            } => {
+                if self
+                    .view
+                    .borrow()
+                    .answers
+                    .iter()
+                    .any(|answer| answer.id == id)
+                {
+                    return;
+                }
+                let (anchor, page) = match anchor {
+                    Some(anchor) => (Some(anchor.selector), Some(anchor.page)),
+                    None => (None, None),
+                };
+                let answer = Answer {
+                    id,
+                    html: markdown::render(&String::from(message)),
+                    anchor,
+                    page,
+                };
+                self.view.send_modify(|view| {
+                    if view.answers.len() == MAX_ANSWERS {
+                        view.answers.remove(0);
+                    }
+                    view.answers.push(answer.clone());
+                });
+                self.emit(Event::Answer(answer));
             }
             ShareMessage::Admitted { .. } | ShareMessage::Refused { .. } => {
                 tracing::debug!("unexpected admission message after admission");

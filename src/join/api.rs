@@ -23,7 +23,8 @@ use crate::{
     share::body::{AppBody, RequestError, json_response},
 };
 
-/// SSE keep-alive comment interval.
+/// SSE keep-alive interval: a `ping` event, which pages also use as a
+/// watchdog.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
 /// How long to wait for the share to acknowledge a comment.
@@ -117,7 +118,7 @@ pub(crate) fn status(session: &Session) -> Response<AppBody> {
 }
 
 /// `GET api/events`: the connection state first, then every event, with a
-/// keep-alive comment every 15 s.
+/// `ping` every 15 s.
 pub(crate) fn events(session: &Session) -> Response<AppBody> {
     let receiver = session.subscribe();
     let first = Event::Share {
@@ -162,7 +163,7 @@ async fn next_frame(
                 Err(RecvError::Closed) => return None,
             },
             _ = keep_alive.tick() => {
-                let frame = Frame::data(Bytes::from_static(b": keep-alive\n\n"));
+                let frame = Frame::data(Bytes::from_static(b"data: {\"type\":\"ping\"}\n\n"));
                 return Some((Ok(frame), (None, receiver, keep_alive)));
             }
         }

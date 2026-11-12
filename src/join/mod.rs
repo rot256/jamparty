@@ -4,6 +4,7 @@
 mod api;
 mod connection;
 mod local;
+mod markdown;
 mod session;
 
 use std::{

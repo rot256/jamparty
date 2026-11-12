@@ -1,31 +1,16 @@
 //! Comments, presence, the share stopping and reconnection.
 
-use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::header;
 use iroh::endpoint::VarInt;
 
 use crate::{
     adapters::endpoint::generate_key,
     core::{ids::EndpointKey, rng::SystemRng},
-    join::Joiner,
     tests::harness::{
-        Reply, connected, fetch, fixture_dir, get, join, joiner_with_key, local, send, share_files,
-        until, within,
+        DRAFT, connected, fixture_dir, get, join, joiner_with_key, local, post_comment, send,
+        share_files, until, within,
     },
 };
-
-const DRAFT: &str = r##"{"page":"http://x.localhost/","selector":"#title","selectedText":"Fixture","comment":"Bigger, please"}"##;
-
-async fn post_comment(joiner: &Joiner, body: &str) -> Reply {
-    let request = local(joiner, "POST", "/_jamjam/api/comments")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ORIGIN, joiner.origin().origin())
-        .header("sec-fetch-site", "same-origin")
-        .body(Full::new(Bytes::from(body.to_owned())))
-        .unwrap();
-    fetch(joiner, request).await
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn comments_are_queued_with_the_author_from_admission() {

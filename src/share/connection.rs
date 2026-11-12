@@ -119,6 +119,7 @@ async fn joined(
             revision: reload.current(),
         });
     }
+    greeting.extend(shared.hub.catch_up());
     for message in greeting {
         if lines::write(&mut send, &Envelope::from(message))
             .await

@@ -5,7 +5,11 @@
 //!   joiner's first line is its hello (secret and name); nothing else is
 //!   read or served before the share admits it.
 //! - Requests: HTTP/1.1 on joiner-opened streams (not modelled here).
+//!
+//! [`agent`] is the local runtime socket used by `jamjam recv` and
+//! `jamjam send`.
 
+pub(crate) mod agent;
 pub(crate) mod comment;
 pub(crate) mod control;
 

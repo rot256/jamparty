@@ -4,8 +4,8 @@ use crate::{
         MAX_LINE_BYTES,
         comment::{Author, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT, MAX_SELECTOR},
         control::{
-            AckOutcome, Envelope, JoinerMessage, MAX_STATUS_LINE, RefusedReason, ShareMessage,
-            StatusLine,
+            AckOutcome, Anchor, Envelope, JoinerMessage, MAX_STATUS_LINE, RefusedReason,
+            ShareMessage, StatusLine,
         },
         decode_line, encode_line,
     },
@@ -128,8 +128,16 @@ fn share_messages() {
             r#"{"type":"comment_ack","ref":9,"outcome":{"result":"queue_full"}}"#.to_owned(),
         ),
         (
-            ShareMessage::Answer { message: "Done.".to_owned().try_into().unwrap(), anchor: Some(ID.parse().unwrap()) },
-            format!(r#"{{"type":"answer","message":"Done.","anchor":"{ID}"}}"#),
+            ShareMessage::Answer {
+                id: ID.parse().unwrap(),
+                message: "Done.".to_owned().try_into().unwrap(),
+                anchor: Some(Anchor { comment: ID.parse().unwrap(), page: "/".to_owned(), selector: "h1".to_owned() }),
+            },
+            format!(r#"{{"type":"answer","id":"{ID}","message":"Done.","anchor":{{"comment":"{ID}","page":"/","selector":"h1"}}}}"#),
+        ),
+        (
+            ShareMessage::Answer { id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None },
+            format!(r#"{{"type":"answer","id":"{ID}","message":"Hi"}}"#),
         ),
         (
             ShareMessage::Delivered { ids: vec![ID.parse().unwrap()] },
@@ -168,6 +176,7 @@ fn text_limits() {
     assert!(StatusLine::try_from("s".repeat(MAX_STATUS_LINE)).is_ok());
     assert!(StatusLine::try_from("s".repeat(MAX_STATUS_LINE + 1)).is_err());
     assert!(StatusLine::try_from("a\nb".to_owned()).is_err());
-    let answer = r#"{"version":1,"message":{"type":"answer","message":""}}"#;
+    let answer =
+        format!(r#"{{"version":1,"message":{{"type":"answer","id":"{ID}","message":""}}}}"#);
     assert!(decode_line::<Envelope<ShareMessage>>(answer.as_bytes()).is_err());
 }

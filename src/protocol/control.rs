@@ -72,11 +72,13 @@ pub(crate) enum ShareMessage {
         reference: u64,
         outcome: AckOutcome,
     },
-    /// An answer from the agent (`jamjam send`).
+    /// An answer from the agent (`jamjam send`), Markdown; `id` is the
+    /// share's, the same for every joiner.
     Answer {
+        id: CommentId,
         message: AnswerText,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        anchor: Option<CommentId>,
+        anchor: Option<Anchor>,
     },
     /// These comments reached the target.
     Delivered { ids: Vec<CommentId> },
@@ -86,6 +88,15 @@ pub(crate) enum ShareMessage {
     Status { line: Option<StatusLine> },
     /// Who is connected now.
     Presence { joiners: Vec<Author> },
+}
+
+/// The comment an answer replies to, with where it was made so pages can
+/// place the answer next to it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Anchor {
+    pub(crate) comment: CommentId,
+    pub(crate) page: String,
+    pub(crate) selector: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

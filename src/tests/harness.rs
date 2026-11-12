@@ -1,7 +1,13 @@
 //! In-process shares and joiners over iroh with direct addresses, a
 //! fixture site and a small HTTP client.
 
-use std::{future::Future, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    future::Future,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -15,7 +21,7 @@ use crate::{
     adapters::endpoint::{Accept, Discovery, NetConfig, bind, connect, generate_key},
     core::{rng::SystemRng, token::PartyToken},
     join::{JoinConfig, Joiner},
-    share::{Share, ShareConfig, Source, proxy::UpstreamUrl},
+    share::{Share, ShareConfig, Source, delivery::Target, proxy::UpstreamUrl},
 };
 
 /// Every wait in these tests ends within this.
@@ -30,6 +36,7 @@ pub(crate) fn net() -> NetConfig {
         discovery: Discovery::Direct,
         keep_alive: Duration::from_millis(200),
         idle_timeout: Duration::from_secs(2),
+        relay: None,
     }
 }
 
@@ -58,10 +65,22 @@ pub(crate) fn fixture_dir() -> TempDir {
     dir
 }
 
-pub(crate) async fn share(source: Source) -> Share {
-    let mut config = ShareConfig::new(source, net());
+/// One runtime directory for every share in this process; tests reach a
+/// share through its own socket path.
+fn runtime_dir() -> &'static Path {
+    static DIR: OnceLock<TempDir> = OnceLock::new();
+    DIR.get_or_init(|| tempfile::tempdir().unwrap()).path()
+}
+
+/// A share's configuration for tests: direct addresses, short hello timeout.
+pub(crate) fn config(source: Source, target: Target) -> ShareConfig {
+    let mut config = ShareConfig::new(source, net(), target, runtime_dir().join("run"));
     config.hello_timeout = Duration::from_secs(2);
-    Share::start(config).await.unwrap()
+    config
+}
+
+pub(crate) async fn share(source: Source) -> Share {
+    Share::start(config(source, Target::Recv)).await.unwrap()
 }
 
 pub(crate) async fn share_files(dir: &TempDir) -> Share {
@@ -169,5 +188,46 @@ pub(crate) async fn get(joiner: &Joiner, path: &str) -> Reply {
         joiner,
         local(joiner, "GET", path).body(Full::default()).unwrap(),
     )
+    .await
+}
+
+/// A comment draft on the fixture's title.
+pub(crate) const DRAFT: &str = r##"{"page":"http://x.localhost/","selector":"#title","selectedText":"Fixture","comment":"Bigger, please"}"##;
+
+/// Posts a comment the way the page does.
+pub(crate) async fn post_comment(joiner: &Joiner, body: &str) -> Reply {
+    let request = local(joiner, "POST", "/_jamjam/api/comments")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, joiner.origin().origin())
+        .header("sec-fetch-site", "same-origin")
+        .body(Full::new(Bytes::from(body.to_owned())))
+        .unwrap();
+    fetch(joiner, request).await
+}
+
+/// Opens the joiner's event stream.
+pub(crate) async fn events(joiner: &Joiner) -> Incoming {
+    let request = local(joiner, "GET", "/_jamjam/api/events")
+        .body(Full::default())
+        .unwrap();
+    let response = send(joiner.local_addr(), request).await;
+    assert_eq!(response.status(), 200);
+    response.into_body()
+}
+
+/// The next event of type `kind` on `body`, as its JSON text.
+pub(crate) async fn next_event(body: &mut Incoming, kind: &str) -> String {
+    let needle = format!("\"type\":\"{kind}\"");
+    within(&format!("a {kind} event"), async {
+        loop {
+            let frame = body.frame().await.unwrap().unwrap();
+            let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+            if let Some(data) = text.strip_prefix("data: ")
+                && data.contains(&needle)
+            {
+                return data.trim_end().to_owned();
+            }
+        }
+    })
     .await
 }

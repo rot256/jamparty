@@ -10,7 +10,9 @@ import http.client
 import json
 import os
 import queue
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -140,6 +142,7 @@ class Process:
 class Shared:
     token: str
     address: str
+    process: Process
 
 
 @dataclass(frozen=True)
@@ -150,7 +153,29 @@ class Joined:
 
 
 def environment(home: Path) -> dict[str, str]:
-    return {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / "config")}
+    # Unix socket paths are short: keep the runtime directory out of the
+    # (long) pytest directory.
+    digest = hashlib.sha256(str(home).encode()).hexdigest()[:10]
+    runtime = Path(tempfile.gettempdir()) / f"jj-{digest}"
+    return {
+        **os.environ,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / "config"),
+        "XDG_RUNTIME_DIR": str(runtime),
+    }
+
+
+def jamjam(home: Path, *arguments: str) -> str:
+    """Runs a short jamjam command and returns its output."""
+    result = subprocess.run(
+        [str(BINARY), *arguments],
+        env=environment(home),
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+        check=True,
+    )
+    return result.stdout
 
 
 @contextmanager
@@ -159,14 +184,16 @@ def share(home: Path, *source: str) -> Iterator[Shared]:
     try:
         token = process.wait_for("jamjam: token: ")
         address = process.wait_for("jamjam: direct address: ")
-        yield Shared(token, address)
+        yield Shared(token, address, process)
     finally:
         process.stop()
 
 
 @contextmanager
-def join_process(home: Path, shared: Shared, token: str) -> Iterator[Process]:
-    arguments = ["join", token, "--no-open", "--name", "alice"]
+def join_process(
+    home: Path, shared: Shared, token: str, name: str = "alice"
+) -> Iterator[Process]:
+    arguments = ["join", token, "--no-open", "--name", name]
     process = Process([*arguments, "--share-addr", shared.address], environment(home))
     try:
         yield process
@@ -175,8 +202,8 @@ def join_process(home: Path, shared: Shared, token: str) -> Iterator[Process]:
 
 
 @contextmanager
-def join(home: Path, shared: Shared) -> Iterator[Joined]:
-    with join_process(home, shared, shared.token) as process:
+def join(home: Path, shared: Shared, name: str = "alice") -> Iterator[Joined]:
+    with join_process(home, shared, shared.token, name) as process:
         url = process.wait_for("jamjam: open ")
         parts = urlsplit(url)
         assert parts.hostname is not None and parts.port is not None
@@ -329,3 +356,99 @@ def test_right_click_comment_is_queued(tmp_path: Path, page: Page) -> None:
         textarea.press("Enter")
         expect(badge).to_have_text("1 queued")
         expect(page.locator("#jamjam #toast")).to_contain_text("Comment queued")
+
+
+def test_bare_jamjam_and_the_agent_guides(tmp_path: Path) -> None:
+    design = (ROOT / "DESIGN.md").read_text()
+    block = design.split("Bare `jamjam` prints, always the same:", 1)[1]
+    overview = block.split("```\n", 2)[1]
+    assert jamjam(tmp_path) == overview
+    guides = jamjam(tmp_path, "agent")
+    for kind in ["t3", "claude", "codex", "other"]:
+        assert f"jamjam agent {kind}" in guides
+    assert "jamjam recv" in jamjam(tmp_path, "agent", "claude")
+    assert "--t3-url" in jamjam(tmp_path, "agent", "t3")
+    help_text = jamjam(tmp_path, "--help")
+    assert "serve" in help_text and "recv" not in help_text
+
+
+def comment_on_intro(page: Page, text: str) -> None:
+    page.locator("#intro").click(button="right")
+    textarea = page.locator("#jamjam textarea")
+    expect(textarea).to_be_focused()
+    textarea.fill(text)
+    textarea.press("Enter")
+
+
+def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared, "alice") as alice,
+        join(tmp_path, shared, "bob") as bob,
+    ):
+        alice_page = browser.new_page()
+        bob_page = browser.new_page()
+        try:
+            _ = alice_page.goto(alice.url)
+            _ = bob_page.goto(bob.url)
+            comment_on_intro(alice_page, "Shorter, please.")
+            entry = alice_page.locator("#jamjam #outbox li")
+            expect(entry).to_have_attribute("data-state", "queued")
+
+            output = jamjam(tmp_path, "recv")
+            [line] = output.splitlines()
+            record = cast(dict[str, object], json.loads(line))
+            assert record["comment"] == "Shorter, please."
+            assert record["selector"] == "#intro"
+            expect(entry).to_have_attribute("data-state", "delivered")
+            expect(alice_page.locator("#jamjam #badge")).to_have_text("0 queued")
+
+            _ = jamjam(
+                tmp_path,
+                "send",
+                "Done: **shorter** now.",
+                "--anchor",
+                str(record["id"]),
+            )
+            for page in [alice_page, bob_page]:
+                answer = page.locator("#jamjam .agent-message")
+                expect(answer).to_contain_text("Done: shorter now.")
+                expect(answer.locator("strong")).to_have_text("shorter")
+        finally:
+            alice_page.close()
+            bob_page.close()
+
+
+def test_connection_indicator_and_unsent_comments(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        indicator = page.locator("#jamjam #connection")
+        expect(indicator).to_have_attribute("data-state", "green")
+        shared.process.stop()
+        expect(indicator).to_have_attribute("data-state", "grey")
+        expect(page.locator("#jamjam #connection-text")).to_contain_text("unreachable")
+
+        comment_on_intro(page, "Kept for later.")
+        entry = page.locator("#jamjam #outbox li")
+        expect(entry).to_have_attribute("data-state", "unsent")
+        expect(entry.locator("button")).to_have_text("send again")
+
+
+def test_live_reload_after_a_file_change(tmp_path: Path, page: Page) -> None:
+    site = tmp_path / "site"
+    _ = shutil.copytree(SITE, site)
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(page.locator("h1")).to_have_text("Fixture page")
+        expect(page.locator("#jamjam #connection")).to_have_attribute(
+            "data-state", "green"
+        )
+        index = site / "index.html"
+        _ = index.write_text(index.read_text().replace("Fixture page", "Changed page"))
+        expect(page.locator("h1")).to_have_text("Changed page")

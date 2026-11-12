@@ -1,4 +1,5 @@
 mod adapters;
+mod agent;
 mod core;
 mod join;
 mod protocol;
@@ -6,19 +7,34 @@ mod share;
 #[cfg(test)]
 mod tests;
 
-use std::{error::Error, io, net::SocketAddr, path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    error::Error,
+    ffi::OsString,
+    io::{self, Read},
+    net::SocketAddr,
+    path::PathBuf,
+    process::Stdio,
+    time::Duration,
+};
 
 use clap::{Args, Parser, Subcommand};
+use iroh::RelayUrl;
 use tokio::signal::unix::{SignalKind, signal};
 
 use crate::{
     adapters::{
         endpoint::{Discovery, NetConfig},
-        keyfile,
+        keyfile, runtime,
     },
-    core::{name::JoinerName, token::PartyToken},
+    agent::guides::{self, Kind},
+    core::{
+        ids::{CommentId, Sid},
+        name::JoinerName,
+        token::PartyToken,
+    },
     join::{JoinConfig, Joiner},
-    share::{Share, ShareConfig, Source, proxy::UpstreamUrl},
+    protocol::control::AnswerText,
+    share::{Share, ShareConfig, Source, delivery::Target, proxy::UpstreamUrl},
 };
 
 pub(crate) type BoxError = Box<dyn Error + Send + Sync>;
@@ -30,12 +46,11 @@ const ONLINE_TIMEOUT: Duration = Duration::from_secs(10);
 #[command(
     name = "jamjam",
     version,
-    about = "Share a site under development and collect comments on it",
-    arg_required_else_help = true
+    about = "Share a site under development and collect comments on it"
 )]
 pub struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -47,6 +62,8 @@ enum Command {
         directory: PathBuf,
         #[command(flatten)]
         net: ShareNet,
+        #[command(flatten)]
+        delivery: Delivery,
     },
 
     /// Share a running development server; print the party token.
@@ -55,6 +72,8 @@ enum Command {
         upstream: UpstreamUrl,
         #[command(flatten)]
         net: ShareNet,
+        #[command(flatten)]
+        delivery: Delivery,
     },
 
     /// Join a share and open it in the browser.
@@ -71,6 +90,28 @@ enum Command {
         #[arg(long, hide = true)]
         share_addr: Vec<SocketAddr>,
     },
+
+    /// List the guides for agents, or print one.
+    #[command(hide = true)]
+    Agent { kind: Option<Kind> },
+
+    /// Wait until comments are pending, print them as NDJSON, exit.
+    #[command(hide = true)]
+    Recv {
+        #[command(flatten)]
+        which: Which,
+    },
+
+    /// Answer on the page (Markdown; read from stdin when not given).
+    #[command(hide = true)]
+    Send {
+        message: Option<String>,
+        /// Show the answer next to this comment.
+        #[arg(long, value_name = "COMMENT ID")]
+        anchor: Option<CommentId>,
+        #[command(flatten)]
+        which: Which,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -81,9 +122,50 @@ struct ShareNet {
     local: bool,
 }
 
+/// Where comments go: the t3 target, a command, or (neither) `jamjam recv`.
+#[derive(Debug, Args)]
+struct Delivery {
+    /// T3 thread to deliver comments to (default: $T3CODE_THREAD_ID with --t3-url).
+    #[arg(long)]
+    thread: Option<String>,
+    /// T3's MCP URL (t3 target).
+    #[arg(long, value_name = "URL")]
+    t3_url: Option<String>,
+    /// File holding the T3 token (t3 target).
+    #[arg(long, value_name = "FILE")]
+    t3_token_file: Option<PathBuf>,
+    /// Hand each batch of comments to this command, as NDJSON on its stdin.
+    #[arg(last = true, value_name = "COMMAND")]
+    command: Vec<OsString>,
+}
+
+/// Which running share `recv` and `send` talk to.
+#[derive(Debug, Args)]
+struct Which {
+    /// The share's id (printed at startup) or its token; needed only when
+    /// several shares run.
+    #[arg(long, value_name = "ID", value_parser = parse_share)]
+    share: Option<Sid>,
+}
+
+fn parse_share(raw: &str) -> Result<Sid, String> {
+    match raw.parse::<PartyToken>() {
+        Ok(token) => Ok(token.share.sid()),
+        Err(_) => raw.parse(),
+    }
+}
+
 pub async fn run(cli: Cli) -> Result<(), BoxError> {
-    match cli.command {
-        Command::Serve { directory, net } => {
+    let Some(command) = cli.command else {
+        print!("{}", guides::OVERVIEW);
+        return Ok(());
+    };
+    match command {
+        Command::Serve {
+            directory,
+            net,
+            delivery,
+        } => {
             let root = std::fs::canonicalize(&directory).map_err(|error| {
                 io::Error::new(
                     error.kind(),
@@ -94,11 +176,15 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
                 return Err(format!("{} is not a directory", root.display()).into());
             }
             let what = format!("{} (live reload)", root.display());
-            share(Source::Files(root), &net, &what).await
+            share(Source::Files(root), &net, delivery, &what).await
         }
-        Command::Proxy { upstream, net } => {
+        Command::Proxy {
+            upstream,
+            net,
+            delivery,
+        } => {
             let what = upstream.to_string();
-            share(Source::Proxy(upstream), &net, &what).await
+            share(Source::Proxy(upstream), &net, delivery, &what).await
         }
         Command::Join {
             token,
@@ -106,16 +192,108 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
             no_open,
             share_addr,
         } => join(token, name, no_open, share_addr).await,
+        Command::Agent { kind } => {
+            match kind {
+                None => print!("{}", guides::LIST),
+                Some(kind) => print!("{}", guides::guide(kind)),
+            }
+            Ok(())
+        }
+        Command::Recv { which } => {
+            let stream = runtime::connect(&runtime::default_dir()?, which.share.as_ref()).await?;
+            agent::recv(stream, &mut io::stdout().lock()).await?;
+            Ok(())
+        }
+        Command::Send {
+            message,
+            anchor,
+            which,
+        } => {
+            let message = match message {
+                Some(message) => message,
+                None => {
+                    let mut message = String::new();
+                    io::stdin().read_to_string(&mut message)?;
+                    message
+                }
+            };
+            let message = AnswerText::try_from(message)?;
+            let stream = runtime::connect(&runtime::default_dir()?, which.share.as_ref()).await?;
+            agent::send(stream, message, anchor).await
+        }
     }
 }
 
-async fn share(source: Source, net: &ShareNet, what: &str) -> Result<(), BoxError> {
+/// The target the delivery options select, and a note for the startup
+/// output. jamjam probes nothing: missing pieces are errors naming the
+/// option.
+fn target(delivery: Delivery) -> Result<(Target, Option<String>), BoxError> {
+    let Delivery {
+        thread,
+        t3_url,
+        t3_token_file,
+        command,
+    } = delivery;
+    let t3 = thread.is_some() || t3_url.is_some() || t3_token_file.is_some();
+    if t3 && !command.is_empty() {
+        return Err(
+            "choose the t3 target (--thread, --t3-url) or a command after --, not both".into(),
+        );
+    }
+    if t3 {
+        return Err("the t3 target (--thread, --t3-url, --t3-token-file) is not available in this version yet".into());
+    }
+    if !command.is_empty() {
+        return Ok((Target::Command(command), None));
+    }
+    let note = std::env::var_os("T3CODE_THREAD_ID").map(|_| {
+        "T3CODE_THREAD_ID is set, but without --t3-url comments wait for jamjam recv".to_owned()
+    });
+    Ok((Target::Recv, note))
+}
+
+fn net_config(discovery: Discovery) -> Result<NetConfig, BoxError> {
+    let mut net = NetConfig::new(discovery);
+    if let Some(relay) = std::env::var_os("JAMJAM_RELAY").filter(|relay| !relay.is_empty()) {
+        let relay = relay.to_str().ok_or("JAMJAM_RELAY is not valid UTF-8")?;
+        net.relay = Some(
+            relay
+                .parse::<RelayUrl>()
+                .map_err(|error| format!("JAMJAM_RELAY: {error}"))?,
+        );
+    }
+    Ok(net)
+}
+
+async fn share(
+    source: Source,
+    net: &ShareNet,
+    delivery: Delivery,
+    what: &str,
+) -> Result<(), BoxError> {
     let discovery = if net.local {
         Discovery::Direct
     } else {
         Discovery::Public
     };
-    let share = Share::start(ShareConfig::new(source, NetConfig::new(discovery))).await?;
+    let (target, note) = target(delivery)?;
+    let goes_to = match &target {
+        Target::Recv => "jamjam recv".to_owned(),
+        Target::Command(argv) => format!(
+            "the command {}",
+            argv.iter()
+                .map(|arg| arg.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    };
+    let config = ShareConfig::new(
+        source,
+        net_config(discovery)?,
+        target,
+        runtime::default_dir()?,
+    );
+    let share = Share::start(config).await?;
     if discovery == Discovery::Public
         && tokio::time::timeout(ONLINE_TIMEOUT, share.endpoint().online())
             .await
@@ -125,7 +303,15 @@ async fn share(source: Source, net: &ShareNet, what: &str) -> Result<(), BoxErro
     }
     println!("jamjam: sharing {what}");
     println!("jamjam: token: {}", share.token());
-    println!("jamjam: anyone with the token can see the site and comment until this share stops");
+    println!(
+        "jamjam: warning: anyone with the token can see the site and send comments to the agent until this share stops"
+    );
+    println!("jamjam: share id: {}", share.id());
+    println!("jamjam: comments go to {goes_to}");
+    if let Some(note) = note {
+        println!("jamjam: note: {note}");
+    }
+    println!("jamjam: agents: run jamjam agent for the guides");
     if discovery == Discovery::Direct {
         for addr in share.direct_addrs() {
             println!("jamjam: direct address: {addr}");
@@ -153,7 +339,7 @@ async fn join(
         token,
         name,
         key,
-        net: NetConfig::new(discovery),
+        net: net_config(discovery)?,
         share_addrs,
     })
     .await?;
@@ -218,24 +404,5 @@ async fn shutdown_signal() -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod cli_tests {
-    use clap::Parser;
-
-    use crate::{Cli, Command};
-
-    #[test]
-    fn parses_the_three_commands() {
-        let serve = Cli::try_parse_from(["jamjam", "serve"]).unwrap();
-        assert!(matches!(serve.command, Command::Serve { .. }));
-        let proxy = Cli::try_parse_from(["jamjam", "proxy", "http://127.0.0.1:8000"]).unwrap();
-        assert!(matches!(proxy.command, Command::Proxy { .. }));
-        let token = format!("{}:{}", "ab".repeat(32), "a".repeat(26));
-        let join = Cli::try_parse_from(["jamjam", "join", &token, "--name", "alice", "--no-open"])
-            .unwrap();
-        assert!(matches!(join.command, Command::Join { no_open: true, .. }));
-        assert!(Cli::try_parse_from(["jamjam", "join", "nonsense"]).is_err());
-        assert!(Cli::try_parse_from(["jamjam", "join", &token, "--name", "a b"]).is_err());
-        assert!(Cli::try_parse_from(["jamjam", "http://127.0.0.1:8000"]).is_err());
-        assert!(Cli::try_parse_from(["jamjam"]).is_err());
-    }
-}
+#[path = "cli_tests.rs"]
+mod cli_tests;

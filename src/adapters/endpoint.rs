@@ -4,7 +4,7 @@
 use std::{net::SocketAddr, time::Duration};
 
 use iroh::{
-    Endpoint, EndpointAddr, PublicKey, RelayMode, SecretKey,
+    Endpoint, EndpointAddr, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey,
     endpoint::{Connection, QuicTransportConfig, presets},
 };
 
@@ -27,11 +27,13 @@ pub(crate) enum Discovery {
     Direct,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct NetConfig {
     pub(crate) discovery: Discovery,
     pub(crate) keep_alive: Duration,
     pub(crate) idle_timeout: Duration,
+    /// A self-hosted relay instead of n0's (`JAMJAM_RELAY`); public only.
+    pub(crate) relay: Option<RelayUrl>,
 }
 
 impl NetConfig {
@@ -42,6 +44,7 @@ impl NetConfig {
             discovery,
             keep_alive: Duration::from_secs(15),
             idle_timeout: Duration::from_secs(45),
+            relay: None,
         }
     }
 }
@@ -63,7 +66,11 @@ pub(crate) async fn bind(
         .max_idle_timeout(Some(config.idle_timeout.try_into()?))
         .build();
     let builder = match config.discovery {
-        Discovery::Public => Endpoint::builder(presets::N0),
+        Discovery::Public => match &config.relay {
+            None => Endpoint::builder(presets::N0),
+            Some(url) => Endpoint::builder(presets::N0)
+                .relay_mode(RelayMode::Custom(RelayMap::from(url.clone()))),
+        },
         Discovery::Direct => Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Disabled)
             .clear_address_lookup()

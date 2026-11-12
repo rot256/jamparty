@@ -5,12 +5,14 @@
 mod admission;
 pub(crate) mod body;
 mod connection;
+pub(crate) mod delivery;
 mod files;
 mod http;
 mod hub;
 mod inject;
 mod live;
 pub(crate) mod proxy;
+mod socket;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
@@ -19,14 +21,18 @@ use tokio::task::JoinSet;
 
 use crate::{
     BoxError,
-    adapters::endpoint::{Accept, NetConfig, bind, direct_addrs, generate_key},
+    adapters::{
+        endpoint::{Accept, NetConfig, bind, direct_addrs, generate_key},
+        runtime::{self, SocketFile},
+    },
     core::{
-        clock::SystemClock,
-        ids::EndpointKey,
+        clock::{Clock, SystemClock},
+        ids::{EndpointKey, Sid},
         rng::SystemRng,
         token::{PartySecret, PartyToken},
     },
     share::{
+        delivery::Target,
         files::Files,
         http::Site,
         hub::Hub,
@@ -46,21 +52,33 @@ pub(crate) enum Source {
     Proxy(UpstreamUrl),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct ShareConfig {
     pub(crate) source: Source,
     pub(crate) net: NetConfig,
+    pub(crate) target: Target,
+    /// Where the runtime socket goes.
+    pub(crate) runtime_dir: PathBuf,
     /// How long a new connection has to present its hello.
     pub(crate) hello_timeout: Duration,
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 impl ShareConfig {
     #[must_use]
-    pub(crate) fn new(source: Source, net: NetConfig) -> Self {
+    pub(crate) fn new(
+        source: Source,
+        net: NetConfig,
+        target: Target,
+        runtime_dir: PathBuf,
+    ) -> Self {
         Self {
             source,
             net,
+            target,
+            runtime_dir,
             hello_timeout: Duration::from_secs(10),
+            clock: Arc::new(SystemClock),
         }
     }
 }
@@ -80,6 +98,7 @@ pub(crate) struct Share {
     shared: Arc<Shared>,
     _tasks: JoinSet<()>,
     _watcher: Option<LiveWatcher>,
+    socket: SocketFile,
 }
 
 impl Share {
@@ -88,7 +107,10 @@ impl Share {
         let ShareConfig {
             source,
             net,
+            target,
+            runtime_dir,
             hello_timeout,
+            clock,
         } = config;
         let (site, watcher) = match source {
             Source::Files(root) => {
@@ -103,14 +125,17 @@ impl Share {
             share: EndpointKey::from(key.public()),
             secret: PartySecret::generate(&SystemRng),
         };
+        let (listener, socket) = runtime::listen(&runtime_dir, &token.share.sid())?;
         let endpoint = bind(&net, key, Accept::Jamjam).await?;
         let shared = Arc::new(Shared {
             token,
             site,
-            hub: Hub::new(Arc::new(SystemClock), Arc::new(SystemRng)),
+            hub: Hub::new(clock, Arc::new(SystemRng)),
             hello_timeout,
         });
         let mut tasks = JoinSet::new();
+        let recv = delivery::start(target, Arc::clone(&shared.hub), &mut tasks);
+        tasks.spawn(socket::serve(listener, Arc::clone(&shared.hub), recv));
         tasks.spawn(accept(endpoint.clone(), Arc::clone(&shared)));
         tasks.spawn(connection::forward_reloads(Arc::clone(&shared)));
         Ok(Self {
@@ -118,12 +143,32 @@ impl Share {
             shared,
             _tasks: tasks,
             _watcher: watcher,
+            socket,
         })
     }
 
     #[must_use]
     pub(crate) fn token(&self) -> &PartyToken {
         &self.shared.token
+    }
+
+    /// The id `jamjam recv --share` and `jamjam send --share` take.
+    #[must_use]
+    pub(crate) fn id(&self) -> Sid {
+        self.shared.token.share.sid()
+    }
+
+    /// The runtime socket.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn socket_path(&self) -> &std::path::Path {
+        &self.socket.0
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn hub(&self) -> &Hub {
+        &self.shared.hub
     }
 
     #[must_use]
@@ -151,9 +196,10 @@ impl Share {
         self.shared.hub.presence()
     }
 
-    /// Closes every connection and the endpoint.
+    /// Closes every connection and the endpoint; removes the socket.
     pub(crate) async fn stop(self) {
         self.endpoint.close().await;
+        drop(self.socket);
     }
 }
 

@@ -62,15 +62,15 @@ impl From<Draft> for DraftFields {
 }
 
 /// A queued comment, as delivered to the target (one JSON object each).
-/// Built by the share; only ever serialised.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// Built by the share; read back only by `jamjam recv` from its own share.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Comment {
     pub(crate) id: CommentId,
     pub(crate) author: Author,
     pub(crate) page: String,
     pub(crate) selector: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected_text: Option<String>,
     pub(crate) comment: String,
 }

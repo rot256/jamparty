@@ -176,6 +176,18 @@ impl Sid {
     }
 }
 
+impl FromStr for Sid {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        if raw.len() == SID_LEN && raw.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7')) {
+            Ok(Self(raw.to_owned()))
+        } else {
+            Err("a share id is 16 characters of a-z and 2-7".to_owned())
+        }
+    }
+}
+
 impl fmt::Display for Sid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -193,7 +205,7 @@ mod tests {
     use proptest::prelude::*;
 
     use crate::core::{
-        ids::{CommentId, EndpointKey, Fingerprint},
+        ids::{CommentId, EndpointKey, Fingerprint, Sid},
         rng::SeededRng,
     };
 
@@ -240,6 +252,18 @@ mod tests {
     fn sid_known_answer() {
         // Computed independently with Python's hashlib and base64.
         assert_eq!(EndpointKey([0; 32]).sid().as_str(), "mzuhvlpymk6xo3ep");
+        assert_eq!(
+            "mzuhvlpymk6xo3ep".parse::<Sid>(),
+            Ok(EndpointKey([0; 32]).sid())
+        );
+        for bad in [
+            "",
+            "mzuhvlpymk6xo3e",
+            "../../etc/passwd",
+            "MZUHVLPYMK6XO3EP",
+        ] {
+            assert!(bad.parse::<Sid>().is_err(), "{bad}");
+        }
     }
 
     proptest! {

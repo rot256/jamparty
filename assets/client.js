@@ -8,6 +8,9 @@ const MAX_SELECTED_TEXT = 2000;
 const MAX_TEXT = 4000;
 const MAX_HTML = 8000;
 const DISMISSED_KEY = "jamjam-dismissed-v1";
+const OUTBOX_KEY = "jamjam-outbox-v1";
+const MAX_OUTBOX = 20;
+const WATCHDOG_MS = 35000;
 const AGENT_TARGET_PREFIX = "jamjam-agent:";
 
 const styles = `
@@ -30,11 +33,59 @@ const styles = `
     pointer-events: none;
   }
 
-  #badge {
+  #bar {
     position: fixed;
     right: 14px;
     bottom: 14px;
     z-index: 2147483644;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: none;
+  }
+
+  #connection {
+    width: 12px;
+    height: 12px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    background: #9a958e;
+    box-shadow: 0 1px 6px rgb(0 0 0 / 30%);
+    pointer-events: auto;
+  }
+
+  #connection[data-state="green"] { background: #2f9e44; }
+  #connection[data-state="amber"] { background: #e8a33d; }
+  #connection[data-state="grey"] { background: #9a958e; }
+
+  #outbox {
+    position: fixed;
+    left: 14px;
+    bottom: 14px;
+    z-index: 2147483644;
+    width: min(320px, calc(100vw - 28px));
+    max-height: 40vh;
+    overflow: auto;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: #161616;
+    color: #fff;
+    box-shadow: 0 3px 12px rgb(0 0 0 / 22%);
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  #outbox[hidden] { display: none; }
+  #connection-text { color: #f0c27a; }
+  #connection-text[hidden] { display: none; }
+  #outbox ul { margin: 0; padding: 0; list-style: none; }
+  #outbox li { display: flex; gap: 8px; align-items: baseline; margin-top: 4px; }
+  #outbox .text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #outbox .state { color: #b8b2a9; }
+  #outbox li[data-state="delivered"] .state { color: #8ce99a; }
+  #outbox li[data-state="unsent"] .state { color: #ffa8a8; }
+  #outbox button { padding: 3px 6px; font-size: 11px; }
+
+  #badge {
     padding: 7px 10px;
     border: 1px solid rgb(255 255 255 / 30%);
     border-radius: 999px;
@@ -378,6 +429,18 @@ function capturePageTarget() {
   };
 }
 
+// Whether an answer's comment was made on this page (hosts differ per
+// joiner, so only the path and query count).
+function samePage(page) {
+  if (typeof page !== "string") return true;
+  try {
+    const url = new URL(page);
+    return url.pathname === window.location.pathname && url.search === window.location.search;
+  } catch {
+    return false;
+  }
+}
+
 function responseMessage(value, fallback) {
   return value && typeof value === "object" && typeof value.error === "string"
     ? value.error
@@ -393,7 +456,14 @@ function install() {
     <style>${styles}</style>
     <div id="highlight" aria-hidden="true"></div>
     <div id="message-highlight" aria-hidden="true"></div>
-    <div id="badge" role="status" aria-live="polite">0 queued</div>
+    <div id="bar">
+      <div id="connection" data-state="amber" role="img" aria-label="Connecting" title="Connecting"></div>
+      <div id="badge" role="status" aria-live="polite">0 queued</div>
+    </div>
+    <div id="outbox" hidden>
+      <div id="connection-text" role="status" hidden></div>
+      <ul id="outbox-list"></ul>
+    </div>
     <div id="toast" role="status" aria-live="polite" hidden></div>
     <div id="agent-log" role="log" aria-live="polite" aria-relevant="additions">
       <div id="agent-general"></div>
@@ -423,6 +493,10 @@ function install() {
   const highlight = shadow.querySelector("#highlight");
   const messageHighlight = shadow.querySelector("#message-highlight");
   const badge = shadow.querySelector("#badge");
+  const connection = shadow.querySelector("#connection");
+  const outbox = shadow.querySelector("#outbox");
+  const connectionText = shadow.querySelector("#connection-text");
+  const outboxList = shadow.querySelector("#outbox-list");
   const toast = shadow.querySelector("#toast");
   const agentGeneral = shadow.querySelector("#agent-general");
   const agentAnchored = shadow.querySelector("#agent-anchored");
@@ -437,7 +511,8 @@ function install() {
   const cancel = shadow.querySelector("#cancel");
   const send = shadow.querySelector("#send");
   if (
-    !highlight || !messageHighlight || !badge || !toast || !agentGeneral ||
+    !highlight || !messageHighlight || !badge || !connection || !outbox ||
+    !connectionText || !outboxList || !toast || !agentGeneral ||
     !agentAnchored || !dialog || !dialogLabel || !form || !selectionPreview ||
     !selectionText || !textarea || !status || !reloadNotice || !cancel || !send
   ) {
@@ -460,6 +535,80 @@ function install() {
       return new Set();
     }
   })();
+
+  // Comments this page sent or could not send: `queued` (with the share's
+  // id), `delivered`, or `unsent` (kept, sent again when connected).
+  const loadOutbox = () => {
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(OUTBOX_KEY) ?? "[]");
+      return Array.isArray(stored)
+        ? stored.filter((entry) => entry && typeof entry === "object" && entry.draft)
+        : [];
+    } catch {
+      return [];
+    }
+  };
+  let outboxEntries = loadOutbox();
+  let connectionState = "amber";
+  let sseOpen = false;
+  let shareConnected = false;
+  let statusLine = null;
+
+  const renderOutbox = () => {
+    while (outboxEntries.length > MAX_OUTBOX) {
+      const delivered = outboxEntries.findIndex((entry) => entry.state === "delivered");
+      outboxEntries.splice(delivered === -1 ? 0 : delivered, 1);
+    }
+    try {
+      sessionStorage.setItem(OUTBOX_KEY, JSON.stringify(outboxEntries));
+    } catch {
+      // The list stays in this document if storage is unavailable.
+    }
+    outboxList.replaceChildren(...outboxEntries.map((entry) => {
+      const item = document.createElement("li");
+      item.dataset.state = entry.state;
+      const text = document.createElement("span");
+      text.className = "text";
+      text.textContent = entry.draft.comment;
+      const state = document.createElement("span");
+      state.className = "state";
+      state.textContent = entry.state === "unsent" ? "not sent" : entry.state;
+      item.append(text, state);
+      if (entry.state === "unsent") {
+        const again = document.createElement("button");
+        again.type = "button";
+        again.textContent = "send again";
+        again.addEventListener("click", () => { void resend(entry); });
+        item.append(again);
+      }
+      return item;
+    }));
+    outbox.hidden = outboxEntries.length === 0 && connectionText.hidden;
+  };
+
+  const renderConnection = () => {
+    let state = "green";
+    let text = "Connected";
+    if (!sseOpen) {
+      state = "amber";
+      text = "Reconnecting to jamjam join…";
+    } else if (!shareConnected) {
+      state = "grey";
+      text = "The share is unreachable";
+    } else if (statusLine !== null) {
+      state = "grey";
+      text = statusLine;
+    }
+    const recovered = state === "green" && connectionState !== "green";
+    connectionState = state;
+    connection.dataset.state = state;
+    connection.title = text;
+    connection.setAttribute("aria-label", text);
+    connectionText.textContent = text;
+    connectionText.hidden = state === "green";
+    renderOutbox();
+    if (recovered) void resendAll();
+  };
 
   const setPending = (pending) => {
     badge.textContent = `${pending} queued`;
@@ -652,7 +801,7 @@ function install() {
     unavailable.textContent = "Target unavailable";
     unavailable.hidden = true;
     node.append(close, body, unavailable);
-    const anchor = typeof data.anchor === "string" ? data.anchor : null;
+    const anchor = typeof data.anchor === "string" && samePage(data.page) ? data.anchor : null;
     if (anchor !== null) {
       node.classList.add("has-anchor");
       node.tabIndex = 0;
@@ -826,6 +975,54 @@ function install() {
     openPageDialog();
   }, true);
 
+  // Hands a draft to the joiner: the share's answer, or an error whose
+  // `unsent` says the comment never reached the share.
+  const submitDraft = async (draft) => {
+    let response;
+    try {
+      response = await fetch(COMMENTS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+    } catch {
+      const error = new Error("jamjam join is not reachable");
+      error.unsent = true;
+      throw error;
+    }
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(responseMessage(body, `request failed (${response.status})`));
+      error.unsent = response.status === 503;
+      throw error;
+    }
+    if (!body || typeof body.pending !== "number" || typeof body.id !== "string") {
+      throw new Error("server returned an invalid queue status");
+    }
+    return body;
+  };
+
+  const resend = async (entry) => {
+    if (entry.state !== "unsent") return;
+    entry.state = "sending";
+    renderOutbox();
+    try {
+      const body = await submitDraft(entry.draft);
+      entry.id = body.id;
+      entry.state = "queued";
+      setPending(body.pending);
+    } catch {
+      entry.state = "unsent";
+    }
+    renderOutbox();
+  };
+
+  const resendAll = async () => {
+    for (const entry of outboxEntries.filter((candidate) => candidate.state === "unsent")) {
+      await resend(entry);
+    }
+  };
+
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     if (!captured) return;
@@ -840,27 +1037,28 @@ function install() {
     cancel.disabled = true;
     status.textContent = "Queueing…";
     const context = captured.context;
-    void fetch(COMMENTS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        page: context.page.url,
-        selector: context.target.selector,
-        selectedText: context.target.selectedText,
-        comment,
-      }),
-    })
-      .then(async (response) => {
-        const body = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(responseMessage(body, `request failed (${response.status})`));
-        if (!body || typeof body.pending !== "number") {
-          throw new Error("server returned an invalid queue status");
-        }
+    const draft = {
+      page: context.page.url,
+      selector: context.target.selector,
+      selectedText: context.target.selectedText,
+      comment,
+    };
+    void submitDraft(draft)
+      .then((body) => {
+        outboxEntries.push({ draft, id: body.id, state: "queued" });
+        renderOutbox();
         setPending(body.pending);
         closeDialog();
         showToast(`Comment queued · ${body.pending} pending`);
       })
       .catch((error) => {
+        if (error instanceof Error && error.unsent) {
+          outboxEntries.push({ draft, id: null, state: "unsent" });
+          renderOutbox();
+          closeDialog();
+          showToast("Not sent: kept in the page, sent when the connection is back");
+          return;
+        }
         status.textContent = error instanceof Error ? error.message : "Could not queue comment";
         textarea.focus();
       })
@@ -906,27 +1104,82 @@ function install() {
     }
   };
 
-  void fetch(STATUS_URL)
+  const markDelivered = (ids) => {
+    const delivered = new Set(ids);
+    for (const entry of outboxEntries) {
+      if (entry.state === "queued" && delivered.has(entry.id)) entry.state = "delivered";
+    }
+    renderOutbox();
+  };
+
+  const refreshStatus = () => fetch(STATUS_URL)
     .then(async (response) => {
       if (!response.ok) return;
       const body = await response.json();
       if (typeof body.pending === "number") setPending(body.pending);
+      if (Array.isArray(body.undelivered)) {
+        const undelivered = new Set(body.undelivered);
+        markDelivered(outboxEntries
+          .filter((entry) => entry.state === "queued" && !undelivered.has(entry.id))
+          .map((entry) => entry.id));
+      }
+      if (Array.isArray(body.answers)) body.answers.forEach(addAgentMessage);
+      shareConnected = body.connected === true;
+      statusLine = typeof body.status === "string" ? body.status : null;
+      renderConnection();
       onRevision(body.revision);
     })
     .catch(() => undefined);
 
-  const events = new EventSource(EVENTS_URL);
-  events.addEventListener("message", (event) => {
-    let data;
-    try {
-      data = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    if (!data || typeof data !== "object") return;
-    if (data.type === "answer") addAgentMessage(data);
-    else if (data.type === "reload") onRevision(data.revision);
-  });
+  let events;
+  let lastEvent = Date.now();
+  const connectEvents = () => {
+    events = new EventSource(EVENTS_URL);
+    events.addEventListener("open", () => {
+      sseOpen = true;
+      lastEvent = Date.now();
+      renderConnection();
+      void refreshStatus();
+    });
+    events.addEventListener("error", () => {
+      sseOpen = false;
+      renderConnection();
+    });
+    events.addEventListener("message", (event) => {
+      lastEvent = Date.now();
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (!data || typeof data !== "object") return;
+      if (data.type === "answer") addAgentMessage(data);
+      else if (data.type === "reload") onRevision(data.revision);
+      else if (data.type === "delivered" && Array.isArray(data.ids)) {
+        markDelivered(data.ids);
+        void refreshStatus();
+      } else if (data.type === "status") {
+        statusLine = typeof data.line === "string" ? data.line : null;
+        renderConnection();
+      } else if (data.type === "share") {
+        shareConnected = data.connected === true;
+        renderConnection();
+        if (shareConnected) void refreshStatus();
+      }
+    });
+  };
+  // The joiner pings every 15 s; a silent stream is a dead one.
+  setInterval(() => {
+    if (Date.now() - lastEvent < WATCHDOG_MS) return;
+    events.close();
+    sseOpen = false;
+    renderConnection();
+    lastEvent = Date.now();
+    connectEvents();
+  }, 5000);
+  renderOutbox();
+  connectEvents();
 }
 
 if (document.readyState === "loading") {
