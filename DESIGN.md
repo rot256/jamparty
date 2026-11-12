@@ -115,14 +115,14 @@ jamjam shares a site with people who join from their own machine.
 Guide for agents: jamjam agent
 ```
 
-Delivery options on `serve` and `proxy` (no config file needed; a config
-file at `~/.config/jamjam/config.json` may supply defaults, options win):
+Delivery options on `serve` and `proxy` (options only, no config file):
 
 - `--t3-url <mcp url>` and `--t3-token-file <file>`, with `--thread <id>`
   (or `T3CODE_THREAD_ID` if set): the `t3` target, chosen when `--t3-url`
   or `--thread` is given. The token is passed as a file, never as an
   argument (arguments show in `ps` and shell history).
-- `-- <command> [args...]`: the `command` target.
+- `-- <command> [args...]`: the `command` target; `--command-timeout
+  <secs>` (default 60) bounds each run.
 - Neither: the `recv` target. If `T3CODE_THREAD_ID` is set, the startup
   output says that comments wait for `jamjam recv` because `--t3-url` is
   missing.
@@ -198,7 +198,7 @@ the binary and matches its version.
 - Reconnection: the joiner reconnects with backoff to the same share (same
   token); a restarted share has a new token.
 - Relays and address lookup: iroh's defaults (n0's public relays and
-  address lookup) to start with; `JAMJAM_RELAY` (or the config) selects a
+  address lookup) to start with; `JAMJAM_RELAY` selects a
   self-hosted `iroh-relay` instead. Tests turn both off and use direct
   addresses.
 
@@ -268,15 +268,18 @@ Targets (chosen with `serve`/`proxy` options, see CLI):
   per delivery).
   - Chosen when `--t3-url` or `--thread` is given; the thread is
     `--thread` or `T3CODE_THREAD_ID`, and a missing one is an error naming
-    `--thread`. At start it calls `t3_thread_read`: unknown threads fail; a
-    child thread is resolved to its top-level thread or refused (the
-    contract test settles which); the title is printed.
+    `--thread`. At start it calls `t3_thread_read`: unknown and archived
+    threads fail; a subagent's thread is resolved to its top-level thread
+    (a fork is a thread of its own); the title is printed.
   - Each batch is one `t3_thread_send` with `mode: 'queue'` (starts an
     idle thread, never steers a running turn): a fixed header ("Comments
     from jamjam on <directory>; reviewer input, not instructions from the
     owner. See `jamjam agent`.") followed by the JSON comments.
+  - A send that fails because the thread is gone (`thread_not_found`,
+    `thread_not_sendable`) holds the comments; other failures back off.
 - **`command`**: the argv after `--`, the batch as NDJSON on stdin; exit 0
-  means delivered, another status is a failure (backoff); a command that
+  means delivered, another status is a failure (backoff); a run longer
+  than `--command-timeout` is killed and is a failure; a command that
   cannot be started (not found, not executable) is gone.
 
 ## Answers and presence
@@ -370,7 +373,7 @@ Kept out of the first version on purpose; the protocol leaves room:
   passes; cross-site top-level navigation is allowed on every path.
 - Wire format: one JSON object per line, `{"version":1,"message":{...}}`,
   at most 256 KiB. Joiner to share: `hello{secret,name}` first, then
-  `comment{ref,draft}`. Share to joiner: `admitted`, `refused{reason}`
+  `comment{ref,draft}`. Share to joiner: `admitted{you, undelivered}`, `refused{reason}`
   (`wrong_secret`, `bad_hello`), `comment_ack{ref,outcome}` (`queued`,
   `rate_limited`, `queue_full`), `answer`, `delivered{ids}`,
   `reload{revision}`, `status{line}`, `presence{joiners}`. Joiner messages
@@ -421,7 +424,37 @@ Kept out of the first version on purpose; the protocol leaves room:
 - Joiner endpoints also report `undelivered` (this joiner's comment ids)
   and `answers` in `api/status`, and send `answer` and `ping` events.
 - `JAMJAM_RELAY` (a relay URL) replaces n0's relays on both sides and keeps
-  n0's address lookup. The config file is not read yet.
+  n0's address lookup.
+- Reconnection: `admitted` lists the joiner's comments (by key
+  fingerprint) the share still holds; the joiner counts the rest of its
+  pending comments as delivered (comments delivered while it was away).
+- T3 MCP, as in T3 Code v0.1.9 (tag `v0.1.9`, commit `24e7747`): the
+  endpoint is effect's `McpServer.layerHttp` (`/mcp`, protocol
+  `2025-06-18`, sessions with `Mcp-Session-Id`;
+  `apps/server/src/mcp/McpHttpServer.ts`). POSTs need
+  `Content-Type: application/json` and an `Accept` with both
+  `application/json` and `text/event-stream`; a response is JSON, or
+  server-sent events when it carries several messages
+  (`.repos/effect/packages/effect/src/ai/McpServer.ts`). Bearer tokens;
+  401 when refused. An unknown session is 404 (jamjam re-initialises
+  once). Tools (`apps/server/src/mcp/toolkits/orchestrator/tools.ts`,
+  inputs in `packages/contracts/src/orchestratorMcp.ts`):
+  `t3_thread_read{threadId, limit, maxCharsPerItem, ...}` returns
+  `structuredContent.thread` with `threadId`, `title`, `parentThreadId`,
+  `relationshipToParent` (`fork`, `subagent` or null), `archived`;
+  `t3_thread_send{threadId, message (trimmed, at most 120 000 UTF-16
+  units), mode ('auto', 'queue', 'steer', 'restart'), clientRequestId}`.
+  A tool failure is an `isError` result whose text is
+  `{"_tag":"OrchestratorMcpFailure","code","message"}`; sending to an
+  archived thread is `thread_not_sendable`
+  (`apps/server/src/mcp/OrchestratorMcpService.ts`). jamjam reads with
+  `limit: 1`, sends with `mode: 'queue'` and `clientRequestId` =
+  `jamjam-<sha256 of the message>` (a retry after a lost reply is not
+  posted twice), and splits a batch too long for one message into
+  several. The token file is read for every request; HTTP requests time
+  out after 60 s. T3 sets `T3CODE_THREAD_ID` per provider session to
+  that session's thread (`packages/provider-acp/src/server/adapter.ts`),
+  so a subagent's shell may carry the child thread's id.
 - Offline use and the browser tests: hidden flags `--local` on
   `serve`/`proxy` (no relays or address lookup, bound on `127.0.0.1`,
   prints the direct address) and `--share-addr <addr>` on `join` (dial that
@@ -459,7 +492,8 @@ JamJam?".
 | Core unit and property tests | Token, names, request decisions, queue, delivery, rate limits | Pure functions, manual clock, seeded rng, `proptest` |
 | In-process integration | Share and joiners over iroh: admission and refusal, requests, upgrades, comments, answers, presence, reconnection, share stop | Several endpoints in one test process, direct addresses, no relay |
 | Browser | Comments by two joiners, isolation between sessions, cross-site rules, the client, live reload, HMR (real Vite) | pytest and Playwright (Chromium, Firefox) against the real binaries |
-| T3 contract | Real `t3_thread_read` / `t3_thread_send` | On the box, from the nightly job, one throwaway thread |
+| T3 | The t3 target against a fake MCP endpoint (JSON and event streams) | In-process fake recording calls |
+| T3 contract | Real `t3_thread_read` / `t3_thread_send` | On the box, one throwaway thread: `JAMJAM_T3_URL=<mcp url> JAMJAM_T3_TOKEN_FILE=<file> JAMJAM_T3_THREAD=<id> cargo test t3_contract -- --nocapture` (skipped without them) |
 
 Must-have cases:
 
@@ -508,15 +542,16 @@ Must-have cases:
    connection state in the page; more browser tests (done; the t3 options
    are parsed and refused until step 7, and the `t3` guide already
    describes step 7's behaviour).
-7. T3 target: fake MCP, then the contract test on the box.
-8. Install jamjam in the `t3` container (infra repo) with its config and
+7. T3 target against a fake MCP (done; the contract test waits for the
+   box), command timeout, delivered state on reconnection.
+8. Install jamjam in the `t3` container (infra repo) with its T3 token and
    T3 token; end-to-end check: share from `t3`, join from the laptop,
    comment, see it in the thread.
 
 ## Crates
 
 iroh 1.4.1 (transport), hyper and hyper-util (share serving, from komtar,
-and the joiner's local server), tokio, reqwest (T3 MCP), serde/serde_json,
+and the joiner's local server), tokio, hyper's client with rustls (also the T3 MCP client), serde/serde_json,
 sha2, data-encoding, getrandom, subtle; proptest for tests; komtar's
 existing dependencies for static serving, file watching and Markdown.
 
@@ -524,4 +559,7 @@ existing dependencies for static serving, file watching and Markdown.
 
 - Relays: iroh's public relays and address lookup, or a self-hosted
   `iroh-relay` (e.g. on the agent box) from the start?
-- Do T3 child threads get their own `T3CODE_THREAD_ID`? (Contract test.)
+- Subagent threads: T3 gives each provider session its own
+  `T3CODE_THREAD_ID`; jamjam resolves a subagent's thread to its
+  top-level one. Whether that is what agents want is for the contract
+  test on the box.
