@@ -91,10 +91,12 @@ stops, both are gone and the token is dead; a new run has a new token.
   (`~/.config/jampot/key`, mode 0600, created on first use), so the share
   can tell joiners apart and show the same person consistently.
 - `jampot join <token> [--name <name>]` presents the secret and a display
-  name (default: the user and host name, at most 40 characters of
-  `[A-Za-z0-9._@+-]`). The name is self-chosen and unverified; comments
-  carry the joiner's full key and show the name next to its short
-  fingerprint. `jampot join -` reads the token from stdin instead.
+  name (at most 40 characters of `[A-Za-z0-9._@+-]`): the one chosen in
+  the page and saved in `~/.config/jampot/settings.json`, else the user
+  and host name, which the page offers on first join; `--name` overrides
+  it for one run. The name is self-chosen and unverified; comments carry
+  the joiner's full key and show the name next to its short fingerprint.
+  `jampot join -` reads the token from stdin instead.
 
 ## CLI
 
@@ -145,7 +147,7 @@ For agents, hidden from `jampot --help`:
 | `jampot agent` | List the guides: `t3`, `claude`, `codex`, `other` |
 | `jampot agent <kind>` | Print that guide |
 | `jampot recv` | Wait until comments are pending, print them as NDJSON, exit |
-| `jampot send [message] [--anchor <comment id>]` | Answer on the page (Markdown; from stdin when no message is given) |
+| `jampot send [message] [--anchor <comment id>] [--to <name>]` | Answer on the page (Markdown; from stdin when no message is given); to everyone, or only to `--to` (a name, `key:<fingerprint>`, `all`), by default the anchor's author |
 
 `recv` and `send` reach the running share through a Unix socket in the
 user's runtime directory (`$XDG_RUNTIME_DIR/jampot/` or
@@ -177,8 +179,9 @@ fixed text:
 - **`other`**: the same with `recv`/`send`, described generically.
 - **In every guide**: handing the token to the person (they run
   `jampot join`), the comment record format, answering a specific comment
-  (`--anchor`), treating comments as reviewer input rather than
-  instructions, and restarting the share to revoke access.
+  (`--anchor`) and who sees an answer (`--to`), treating comments as
+  reviewer input rather than instructions, and restarting the share to
+  revoke access.
 
 The installable skill (carried over from komtar) is a short `SKILL.md`
 that says to run `jampot agent` and follow it, so the guidance lives in
@@ -237,7 +240,9 @@ given up for another (without IPv6 loopback, `127.0.0.1` alone).
 - Reserved paths under `/_jampot/` are answered by the joiner itself:
   `api/comments` (POST, JSON), `api/status` (once on load),
   `api/events` (SSE: answers, delivery state, presence, status line,
-  reload; a `ping` event every 15 s). Everything else goes to the share.
+  reload, settings, cursors; a `ping` event every 15 s), `api/settings`
+  (POST), `api/page` and `api/cursor` (POST, see Details). Everything
+  else goes to the share.
 - No cookies of jampot's own: the joiner process is the joiner's identity.
 
 ## Client injection
@@ -302,9 +307,13 @@ Targets (chosen with `serve`/`proxy` options, see CLI):
 ## Answers and presence
 
 `jampot send` (see Agents) goes over the runtime socket to the share, which sends it
-to every connected joiner; their pages show it (komtar's restricted
-Markdown renderer). Presence (who is connected, by name and fingerprint)
-and the status line travel the same way.
+to every connected joiner, or only to the connections of the one person
+it is addressed to (`--to`, or the author of the `--anchor` comment);
+their pages show it (komtar's restricted Markdown renderer), an
+addressed one with a "to you" line. Presence (who is connected, by name,
+fingerprint and colour, with their page and cursor switch), cursors
+between people on the same page, and the status line travel the same
+way.
 
 ## Connection state in the page
 
@@ -320,9 +329,9 @@ Green: connected; amber: reconnecting; grey: share unreachable or a
 status line is set. Comments written while not green are kept in the page
 and sent when the connection is back.
 
-The page lists its own comments (bottom left, kept in `sessionStorage`
-across reloads): `queued`, `delivered`, or `not sent` with "send again".
-Anything not green also shows there as text. On every (re)connected event
+The page lists its own comments (the pill expands into the list, kept in
+`sessionStorage` across reloads): `queued`, `delivered`, or `not sent`
+with "send again"; the list's header says the state in words. On every (re)connected event
 stream the page reloads `api/status` (pending, delivered, answers, status
 line).
 
@@ -359,8 +368,16 @@ line).
 - **Token holders are bounded, not trusted.** Each can hold only so much
   of the share: connections (64 in all, 4 per key), streams and buffers
   per connection, queue space (100 comments per key) and comment rate
-  (10 per minute per key, 60 in all). Before admission a connection gets
-  even less (see Details).
+  (10 per minute per key, 60 in all), presence (one state per connection,
+  overwritten by each update; past 100 updates per 10 s a connection is
+  flooding and is closed) and cursors (25 per second
+  per connection, forwarded through a 32-message queue per recipient
+  that drops rather than grows). Before admission a connection gets even
+  less (see Details).
+- **Where people are is shared only with people there.** Presence tells
+  everyone who is here; a person's page goes only to joiners on the same
+  page, as do their cursors (element-relative positions, never viewport
+  coordinates, and nothing at all while their switch is off).
 - **Names are unverified.** A joiner picks its own name; its key is what
   is stable (comments carry the full key; the short fingerprint shown
   next to the name is for people, 40 bits, not for telling keys apart).
@@ -419,8 +436,9 @@ Kept out of the first version on purpose; the protocol leaves room:
 - Delivery backoff: 1 s doubling to 60 s, reset on success; a failed batch
   is retried unchanged (newer comments wait for the next batch); "gone"
   holds until restart while new comments still queue up to the cap.
-- Joiner's local server: only the three exact reserved paths are the
-  joiner's own; a wrong method or an upgrade on them is 405; for
+- Joiner's local server: only the exact reserved paths (`api/comments`,
+  `api/status`, `api/events`, `api/settings`, `api/page`, `api/cursor`)
+  are the joiner's own; a wrong method or an upgrade on them is 405; for
   non-navigation requests only `Sec-Fetch-Site: same-origin` or no header
   passes; cross-site top-level navigation is allowed on every path.
 - Wire format: one JSON object per line, `{"version":1,"message":{...}}`,
@@ -432,7 +450,8 @@ Kept out of the first version on purpose; the protocol leaves room:
   (`queued{id}`, `delivered{id}` for a `ref` sent again after its comment
   was delivered, `rate_limited`, `queue_full`), `answer`,
   `delivered{ids}`, `reload{revision}`, `status{line}`,
-  `presence{joiners}`. Joiner messages are parsed strictly; unknown fields
+  `presence{joiners}` (and, for docs/ui.md, `presence` and `cursor`
+  both ways; see Joiner UI as built). Joiner messages are parsed strictly; unknown fields
   in share messages are ignored. The joiner writes its control stream
   from one task, so a request given up never leaves half a line.
 - Admission: the first stream the joiner opens is the control stream; the
@@ -468,10 +487,26 @@ Kept out of the first version on purpose; the protocol leaves room:
   answers 202 `{id, pending}` (also for a `ref` sent before),
   429 `{error, retryAfterSecs}`, or 503 when the share is unreachable or
   its queue is full (`pending`: this joiner's comments not yet delivered).
-  `api/status` is `{connected, refused, you, joiners, revision, status,
-  pending}`; `api/events` sends `data: <json>` with `type` `share`
-  (`connected`, first on every stream), `reload`, `presence`, `status` or
-  `delivered`. The local server sends a second
+  `api/status` is `{api, version, connected, refused, you, joiners,
+  here, revision, status, pending, undelivered, answers, settings, rev,
+  epoch}`; `rev` counts the joiner's changes to that view and its
+  events, within `epoch`, 64 random bits (16 hex characters) drawn when
+  the joiner process starts. Every event carries the `epoch` and the
+  `rev` after it, `api/comments`' 202 has the `rev` that holds the
+  comment and `api/settings` answers the settings with the `rev` of the
+  `settings` event it sent. A page takes its epoch from its event stream
+  and applies a status or settings answer only if it is of that epoch
+  and no older than the newest `rev` it has applied, so a read that was
+  overtaken (by an event, a new comment, newer settings) undoes nothing,
+  a comment is never taken for delivered from a status that predates it,
+  and a joiner restarted on the same port (counting from 0 again) is
+  believed from its first event on.
+  These are additions; the page API stays at version 2 (unreleased, so
+  `seq` is simply required). `api/events` sends `data: <json>` with
+  `type` `share` (`connected`,
+  first on every stream), `reload`, `presence` (`joiners`, `here`),
+  `status`, `delivered`, `answer` (with `toYou`), `settings` or `cursor`
+  (to tabs on its page only). The local server sends a second
   `Content-Security-Policy: frame-ancestors 'self'` header rather than
   replacing the site's own.
 - Delivery: one task per share. A batch a `recv` took but did not confirm
@@ -483,8 +518,10 @@ Kept out of the first version on purpose; the protocol leaves room:
 - Runtime socket: one JSON line per message in the control envelope.
   Client `recv`, share `comment{comment}` per comment and `end`, client
   `printed`; client `send{message, anchor?}`, share `sent` or
-  `error{error}`. `send --anchor` takes a comment id the share has seen
-  (it remembers the last 1000); an unknown id is an error.
+  `error{error}`; `send` also takes `to` (`all`, a name, or `key:` and a
+  fingerprint or full key). `send --anchor` takes a comment id the share has seen
+  (it remembers the last 1000, with their authors); an unknown id is an
+  error.
 - Answers on the wire: `answer{id, message, anchor?}` with
   `anchor{comment, page, selector}`; the id is the share's, so every page
   shows the same id (comments on an answer use the selector
@@ -534,8 +571,108 @@ Kept out of the first version on purpose; the protocol leaves room:
 - The joiner refuses a key file open to group or others (chmod 600 it).
 - Offline use and the browser tests: hidden flags `--local` on
   `serve`/`proxy` (no relays or address lookup, bound on `127.0.0.1`,
-  prints the direct address) and `--share-addr <addr>` on `join` (dial that
-  address, no relays or address lookup).
+  prints the direct address), `--share-addr <addr>` on `join` (dial that
+  address, no relays or address lookup) and `--port <port>` on `join`
+  (serve that local port: a joiner restarted with the same token and
+  port serves the same origin, so open pages keep their storage).
+- The browser client is TypeScript under `client/src` (strict, checked
+  by `tsc` and typescript-eslint's strict type-checked rules), bundled by
+  esbuild into `assets/client.js`, which stays committed so building the
+  binary needs no Node; CI rebuilds it and fails if the committed bundle
+  differs. The joiner's endpoints are typed by `client/src/generated/api.ts`,
+  generated from the Rust types by a test (`JAMPOT_UPDATE_BINDINGS=1
+  cargo test bindings` rewrites it; the test fails when it is stale).
+  `api/status` carries `api`, the page API's version (now 2), and the
+  joiner's jampot `version`; the client, which comes from the share,
+  connects nothing when they differ and names both jampot versions in
+  the overlay.
+
+### Joiner UI (docs/ui.md) as built
+
+- Wire, all additions to version 1. `admitted` gains `presence`
+  (`supported`; absent from older shares, which then get no `presence`
+  or `cursor` messages). Joiner to share: `presence{name, url, cursor}`,
+  the whole state each time, sent after admission and on every change
+  (`url`: the page's path, query and hash, 1 to 512 printable ASCII
+  characters starting with `/`, without `"` or `\`, or null; `cursor`:
+  `on` or `off`); `cursor{position}` with `position{selector, x, y}`
+  (selector 1 to 512 characters without control characters; `x`, `y`
+  fractions of the element's box in ten-thousandths, 0 to 10000) or no
+  position when the pointer left. Share to joiner: `presence` gains
+  `here`, one entry per key, `{name, fingerprint, key, colour, url,
+  cursor}` (`colour`: 0 to 7, the first key byte modulo 8; `url` only
+  when the person is on the recipient's own page, else null);
+  `cursor{key, url, position}`; `answer` gains `to` (a key). The joiners
+  list of `presence` stays for older joiners.
+- The share keeps per connection its name, page and cursor switch; a
+  key with several connections is shown as its latest-updated one.
+  Presence changes are broadcast at most every 100 ms (joins and leaves
+  at once). Every presence update is recorded, the last one wins; past
+  100 per 10 s the share closes the connection (it reconnects). The
+  joiner never gets there: presence goes out only from one task, the
+  latest state at most every 250 ms (twice the share's sustained limit
+  apart, checked by a test), and nothing bypasses it: a cursor for a page
+  the share has not been told yet waits (the latest position only) and
+  goes out right after the presence that tells it. A cursor is dropped when the sender's switch is off, it has said no page, it is
+  over 25 per second, or a recipient's queue is full. A cursor goes to
+  the connections of other keys whose page is the sender's.
+- Tabs: a page opens `api/events?tab=<id>&url=<page>&seq=<n>` (`tab`: 1
+  to 64 characters of `[A-Za-z0-9-]`, a random UUID; `url` absent when
+  the page cannot say, e.g. longer than 512 characters) and is one of the
+  joiner's tabs while that stream is open (at most 64); `api/page
+  {tab, seq, url}` (`url` null: nowhere) says it moved (single-page-app
+  route changes through `history.pushState`/`replaceState`, `popstate`,
+  `hashchange`), came to the front (focus, visibility) or (re)opened its
+  stream: an event stream that reconnects by itself still names the page
+  it first opened on. A page has one report in flight and only its
+  latest page waiting; `seq` counts its reports and the joiner ignores
+  one older than what it has. The joiner is on its most recently active
+  tab's page. `api/cursor{tab, seq, url, position?}` is refused with 409
+  while the cursor switch is off (nothing is sent) or when `url` and
+  `seq` are not the tab's latest report, makes the tab the active one
+  first, and the joiner passes each cursor only to tabs on its page.
+- Client cursors: sent on `pointermove` only, at most 15 per second with
+  the last position of each window always sent, never while still, one
+  no-position message on `pointerleave`, window blur or a hidden tab.
+  Nothing goes out until the joiner took the page's current report;
+  the last movement meanwhile is sent then. One request is in flight and
+  one waits, holding only the latest (a leave replaces it); switching
+  off, a page change or an unrepresentable page drops it.
+  Drawn only when the selector resolves in the receiving page; they glide
+  between positions, stay attached to their element while it scrolls,
+  fade after 4 s without an update and go on the no-position message, a
+  page change, the switch turned off, presence without them, or a lost
+  connection.
+- Settings: `~/.config/jampot/settings.json` (or under
+  `$XDG_CONFIG_HOME`), next to the key: `{name?, keys: {commentMode,
+  showCursor}, commentMode, showCursor}` (switches `on`/`off`; defaults
+  `c`, `x`, comment mode on, cursor off). A change is applied under an
+  exclusive `flock` on `settings.lock` next to it: the file is read as it
+  is now, only the change applied, and written whole (a uniquely named
+  new 0600 file renamed over it), so joiners sharing a home directory keep
+  each other's changes. The directory is created 0700; a file open to
+  group or others is refused, as is one over 64 KiB; unknown fields are
+  ignored.
+  A key binding is `KeyboardEvent.key` (single characters in lower
+  case), at most 20 characters, not `/` or Escape, and the two differ.
+  `api/settings` takes any of these fields and answers the settings;
+  every page gets a `settings` event.
+- Name: the page asks ("Join the potluck.") only when no name is saved
+  and no `--name` was given; the field is prefilled with the default.
+  A name chosen in the page is saved and replaces `--name` for the rest
+  of the run; it reaches the share in the next presence update and
+  signs later comments.
+- Addressed answers: `--to all` is everyone (so a person named `all` is
+  addressed by key); `--to key:<fingerprint>` (or `key:<64 hex>`) is the
+  person with that key, and any other `--to` is a name, matched against
+  names only: `:` is not in the name alphabet, so a joiner cannot name
+  itself into someone else's key address. None or several is an error
+  listing who is here (or the candidates) as `name (key:<fingerprint>)`. Without `--to`, `--anchor` addresses the comment's
+  author whether or not they are connected (they get it on return).
+  The share replays addressed answers only to their recipient.
+- Comment mode stays on by default (the open question in docs/ui.md).
+  Off, right-click and `/` are the page's; the switch keys still work
+  outside text fields.
 
 ## Joiner UI
 
@@ -575,7 +712,7 @@ with a raspberry jam layer) and is to be replaced with one for jampot.
 |---|---|---|
 | Core unit and property tests | Token, names, request decisions, queue, delivery, rate limits | Pure functions, manual clock, seeded rng, `proptest` |
 | In-process integration | Share and joiners over iroh: admission and refusal, requests, upgrades, comments, answers, presence, reconnection, share stop; the joiner's Host and cross-site rules | Several endpoints in one test process, direct addresses, no relay |
-| Browser | The client (right-click comments), delivery and answers in two pages, the connection indicator and unsent comments, live reload, WebSockets through `proxy` and `join` | pytest and Playwright (Chromium, Firefox) against the real binaries |
+| Browser | The client (right-click comments), delivery and answers in two pages, the connection indicator and unsent comments, live reload, WebSockets through `proxy` and `join`, the page API version check, and every piece of docs/ui.md: alone (pill, comment list, control panel, name prompt, settings on disk) and with alice, bob and carol (presence, cursors on a single-page app, private comment lists, addressed answers, reconnection) | pytest and Playwright (Chromium, Firefox) against the real binaries, one home directory and browser context per joiner |
 | T3 | The t3 target against a fake MCP endpoint (JSON and event streams) | In-process fake recording calls |
 | T3 contract | Real `t3_thread_read` / `t3_thread_send` | On the box, one throwaway thread: `JAMPOT_T3_URL=<mcp url> JAMPOT_T3_TOKEN_FILE=<file> JAMPOT_T3_THREAD=<id> cargo test t3_contract -- --nocapture` (skipped without them) |
 

@@ -48,8 +48,12 @@ Where comments go is chosen with options on `serve` and `proxy`:
   `--command-timeout <secs>` (default 60) bounds each run.
 
 The agent answers on the page with `jampot send [message]` (Markdown, from
-stdin when no message is given); `--anchor <comment id>` places the answer
-next to that comment. `recv` and `send` reach the running share through a
+stdin when no message is given), seen by everyone connected.
+`--anchor <comment id>` places the answer next to that comment and sends it
+only to the comment's author; `--to <name>` sends it only to that person
+(their page marks it "to you"; when two people share a name, the share
+lists them and `--to key:<fingerprint>` picks one), and `--to all` sends it to
+everyone again. `recv` and `send` reach the running share through a
 socket only the same user can use; with several shares running, pass
 `--share <id>`.
 
@@ -68,13 +72,27 @@ jampot join <token> [--name <name>]
 shell history. `join` opens `http://<session>.localhost:<port>/` in the
 browser (Chromium or Firefox; Safari does not resolve `*.localhost`). Then:
 
+On first join the page asks for your name ("Join the potluck."). Then:
+
 1. **Right-click any element** to comment on it.
 2. **Select text first** to include the exact passage.
 3. **Press `/`** for a page-level comment when focus is not in a field.
 4. **Press Enter** to send; Shift+Enter adds a newline.
 
-Your comments are listed in the page as queued, delivered or not sent (with
-"send again"), next to the agent's answers and a connection indicator.
+The pill at the bottom right shows the connection (green: connected,
+amber: reconnecting, grey: the share is unreachable) and how many of your
+comments are queued; click it for your comments, each queued, delivered
+or not sent (with "send again"). The gear next to it opens the controls:
+
+- **Comment mode** (key `C`): off, right-click and `/` belong to the page
+  again.
+- **Show my cursor** (key `X`, off by default): others on the same page
+  see your pointer with your name; nothing is sent while it is off.
+- Click a key to rebind it; your name; who is here.
+
+Keys work when no text field has focus. Your name, keys and switches are
+kept in `~/.config/jampot/settings.json` (mode 0600), so they carry over
+to the next share; `--name` overrides the name for one run.
 
 The joiner keeps its key in `~/.config/jampot/key` (mode 0600; a key file
 others can read is refused); the share shows its name next to a
