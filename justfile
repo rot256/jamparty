@@ -9,6 +9,13 @@ lint:
 lint-js:
     npm run lint
 
+typecheck-js:
+    npm run typecheck
+
+bundle:
+    npm run build
+    git diff --exit-code -- assets/client.js
+
 fmt-python:
     uv run ruff format --check .
 
@@ -27,4 +34,4 @@ e2e:
 build:
     cargo build --release
 
-ci: fmt lint lint-js fmt-python lint-python typecheck-python test e2e build
+ci: fmt lint lint-js typecheck-js bundle fmt-python lint-python typecheck-python test e2e build

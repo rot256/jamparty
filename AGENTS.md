@@ -2,8 +2,9 @@
 
 `jampot` is the multi-user, peer-to-peer successor of komtar; DESIGN.md
 describes the target and its implementation plan. Keep the runtime as one
-self-contained binary: JavaScript and CSS belong in `assets/client.js` and are
-embedded with `include_str!`.
+self-contained binary: the browser client (JavaScript and CSS) is written in
+TypeScript under `client/src` and bundled by `npm run build` into
+`assets/client.js`, which is committed and embedded with `include_str!`.
 
 Run the checks below before handing off changes:
 
@@ -14,6 +15,8 @@ cargo test
 cargo deny check
 npm ci
 npm run lint
+npm run typecheck
+npm run build && git diff --exit-code -- assets/client.js
 uv run ruff format --check .
 uv run ruff check .
 uv run basedpyright
