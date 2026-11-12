@@ -95,12 +95,11 @@ export function checkVersion(body: unknown): Checked {
 }
 
 /** The event stream; `tab` and `url` make this page one of the joiner's tabs. */
-export function openEvents(tab: { tab: string; url: string } | null): EventSource {
+export function openEvents(tab: string, page: string | null, seq: number): EventSource {
   const url = new URL(EVENTS_URL);
-  if (tab !== null) {
-    url.searchParams.set("tab", tab.tab);
-    url.searchParams.set("url", tab.url);
-  }
+  url.searchParams.set("tab", tab);
+  if (page !== null) url.searchParams.set("url", page);
+  url.searchParams.set("seq", String(seq));
   return new EventSource(url);
 }
 
@@ -125,7 +124,7 @@ export async function changeSettings(change: SettingsChange): Promise<PageSettin
   return body as PageSettings;
 }
 
-/** Tells the joiner this tab is on `visit.url` now; false if it did not take it. */
+/** Tells the joiner this tab is on `visit.url` now (null: it cannot say); false if it did not take it. */
 export async function reportPage(visit: Visit): Promise<boolean> {
   try {
     return (await post(PAGE_URL, visit)).ok;

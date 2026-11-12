@@ -45,8 +45,45 @@ export function watchUrl(listener: Listener): void {
   window.addEventListener("hashchange", check);
 }
 
-/** Tells the joiner this tab is on `url` (and the active one). */
-export function reportUrl(url: string | null): void {
-  if (url === null) return;
-  void reportPage({ tab: TAB_ID, url });
+/**
+ * This tab's page reports to the joiner: one request at a time, and only
+ * the latest page waits behind it. Each report is numbered, counting up,
+ * so the joiner ignores one that arrives after a newer one.
+ */
+export class Registration {
+  private seq = 0;
+  private sending = false;
+  /** The page waiting to be reported (undefined: none). */
+  private wanted: { url: string | null } | undefined;
+  /** Called when the joiner took the latest report. */
+  onConfirmed: (url: string | null, seq: number) => void = () => undefined;
+
+  /** The number of the latest report made. */
+  get latest(): number {
+    return this.seq;
+  }
+
+  request(url: string | null): void {
+    this.wanted = { url };
+    void this.pump();
+  }
+
+  /** Whether a page came in while a report was out. */
+  private newerWaiting(): boolean {
+    return this.wanted !== undefined;
+  }
+
+  private async pump(): Promise<void> {
+    if (this.sending) return;
+    this.sending = true;
+    for (let next = this.wanted; next !== undefined; next = this.wanted) {
+      this.wanted = undefined;
+      this.seq += 1;
+      const seq = this.seq;
+      const taken = await reportPage({ tab: TAB_ID, seq, url: next.url });
+      // A newer page waits: that one is confirmed instead.
+      if (taken && !this.newerWaiting()) this.onConfirmed(next.url, seq);
+    }
+    this.sending = false;
+  }
 }

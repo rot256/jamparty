@@ -1,14 +1,15 @@
 // The browser client the share injects into every HTML page: comments,
 // the agent's answers, the connection state, live reload, the control
-// panel and presence (docs/ui.md).
+// panel, presence and cursors (docs/ui.md).
 
 import { Answers } from "./answers";
 import { AGENT_TARGET_PREFIX, LIVE_REVISION } from "./config";
 import { Connection, type ConnectionView } from "./connection";
+import { CursorLayer, CursorSender } from "./cursors";
 import { ANSWER_LABEL, CommentDialog } from "./dialog";
 import type { PageSettings, Person } from "./generated/api";
 import { CommentList } from "./list";
-import { TAB_ID, pageUrl, reportUrl, watchUrl } from "./location";
+import { Registration, TAB_ID, pageUrl, watchUrl } from "./location";
 import { NamePrompt } from "./name";
 import { Outbox } from "./outbox";
 import { Panel, isEditing } from "./panel";
@@ -23,6 +24,9 @@ function install(): void {
   const list = new CommentList(ui, outbox);
   // The panel takes its keys before the page and the `/` handler below.
   const panel = new Panel(ui);
+  const sender = new CursorSender(ui);
+  const layer = new CursorLayer(ui);
+  const registration = new Registration();
   let reloadRevision = LIVE_REVISION;
   let connectionView: ConnectionView = { colour: "amber", text: "", incompatible: null };
   let url = pageUrl();
@@ -36,6 +40,7 @@ function install(): void {
 
   const prompt = new NamePrompt(ui, (settings) => { panel.show(settings); });
   const applySettings = (settings: PageSettings): void => {
+    sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
   };
   panel.onSettings = applySettings;
@@ -43,6 +48,7 @@ function install(): void {
   const showPeople = (people: Person[]): void => {
     here = people;
     panel.showPeople(here, you);
+    layer.setPeople(here, url);
   };
 
   const onRevision = (revision: number | null): void => {
@@ -58,6 +64,10 @@ function install(): void {
       list.showState(view);
       ui.notice.hidden = view.incompatible === null;
       ui.notice.textContent = view.incompatible ?? "";
+      if (view.colour !== "green") layer.clear();
+      // The joiner forgets this tab when the stream goes: no cursor until
+      // it is registered again.
+      if (!connection.streaming) sender.suspend();
       if (recovered) void outbox.resendAll();
     },
     status(status) {
@@ -87,22 +97,46 @@ function install(): void {
           panel.show(event);
           break;
         case "cursor":
+          if (event.url === url && event.key !== you) layer.update(event.key, event.position);
+          break;
         case "share":
         case "status":
         case "ping":
           break;
       }
     },
-  }, () => (url === null ? null : { tab: TAB_ID, url }));
+    opened() {
+      register();
+    },
+  }, () => ({ tab: TAB_ID, url, seq: registration.latest }));
+
+  /**
+   * Tells the joiner where this tab is now; cursors go out only once it
+   * has taken that page (movement meanwhile waits), and never while the
+   * page cannot say (`null`).
+   */
+  function register(): void {
+    if (url === null) sender.suspend();
+    else sender.registering();
+    registration.request(url);
+  }
+  registration.onConfirmed = (confirmed, seq) => {
+    if (confirmed !== null && confirmed === url && connection.streaming) {
+      sender.confirmed(confirmed, seq);
+    }
+  };
 
   // Single-page apps move without loading: follow the URL, tell the joiner.
   watchUrl((now) => {
     url = now;
-    if (connection.streaming) reportUrl(url);
+    layer.clear();
+    layer.setPeople(here, url);
+    if (connection.streaming) register();
+    else sender.suspend();
   });
   // The tab in front is where the joiner is.
   const activate = (): void => {
-    if (connection.streaming && document.visibilityState === "visible") reportUrl(url);
+    if (connection.streaming && document.visibilityState === "visible") register();
   };
   window.addEventListener("focus", activate);
   document.addEventListener("visibilitychange", activate);

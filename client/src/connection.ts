@@ -23,6 +23,8 @@ export interface Handlers {
   status(status: Status): void;
   /** One event from the stream. */
   event(event: ServerEvent): void;
+  /** The stream (re)opened: this page is one of the joiner's tabs again. */
+  opened(): void;
 }
 
 export class Connection {
@@ -37,8 +39,8 @@ export class Connection {
 
   constructor(
     private readonly handlers: Handlers,
-    /** This page as one of the joiner's tabs, when it can say its URL. */
-    private readonly tab: () => { tab: string; url: string } | null,
+    /** This page as one of the joiner's tabs: its id and URL now. */
+    private readonly tab: () => { tab: string; url: string | null; seq: number },
   ) {}
 
   /** Checks the joiner's page API, then connects the event stream. */
@@ -121,12 +123,16 @@ export class Connection {
 
   private connect(): void {
     if (this.incompatible !== null) return;
-    const events = openEvents(this.tab());
+    const { tab, url, seq } = this.tab();
+    const events = openEvents(tab, url, seq);
     this.events = events;
     events.addEventListener("open", () => {
       this.streamOpen = true;
       this.lastEvent = Date.now();
       this.render();
+      // A stream that reconnected by itself still names the page it
+      // opened on: say where this page is now.
+      this.handlers.opened();
       void this.refresh();
     });
     events.addEventListener("error", () => {

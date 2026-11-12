@@ -18,7 +18,7 @@ import tempfile
 import threading
 import time
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,7 +27,15 @@ from typing import cast
 from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import Browser, Locator, Page, expect, sync_playwright
+from playwright.sync_api import (
+    Browser,
+    Locator,
+    Page,
+    Request,
+    Route,
+    expect,
+    sync_playwright,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
@@ -928,3 +936,436 @@ def test_the_name_prompt_and_settings_on_disk(tmp_path: Path, browser: Browser) 
             expect(overlay(page, ".avatar")).to_have_attribute("title", "dora.b (you)")
     finally:
         context.close()
+
+
+# Several joiners at once: alice, bob and carol, each with their own home
+# directory (key and settings), joiner process and browser context.
+
+
+def eventually(what: str, check: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        if check():
+            return
+        time.sleep(0.05)
+    pytest.fail(f"timed out waiting for {what}")
+
+
+def cursors(page: Page) -> Locator:
+    return overlay(page, ".cursor")
+
+
+def cursor_at(page: Page) -> tuple[float, float] | None:
+    """Where the one cursor drawn in `page` is, if any."""
+    transform = cast(
+        str | None,
+        page.evaluate(
+            """() => document.querySelector("#jampot")
+                .shadowRoot.querySelector(".cursor")?.style.transform ?? null"""
+        ),
+    )
+    if not transform:
+        return None
+    x, y = re.findall(r"-?[\d.]+", transform)[:2]
+    return float(x), float(y)
+
+
+def near(page: Page, x: float, y: float) -> bool:
+    at = cursor_at(page)
+    return at is not None and abs(at[0] - x) < 2 and abs(at[1] - y) < 2
+
+
+def cursor_messages(shared: Shared, name: str) -> int:
+    """Cursor messages from `name` that reached the share since the last look."""
+    return sum(
+        "cursor message" in line and f"name={name}" in line
+        for line in shared.process.drain()
+    )
+
+
+def waiting(page: Page, what: str, check: Callable[[], bool]) -> None:
+    """Like `eventually`, letting `page` handle its events meanwhile."""
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        if check():
+            return
+        page.wait_for_timeout(50)
+    pytest.fail(f"timed out waiting for {what}")
+
+
+def cursor_posts(page: Page) -> list[dict[str, object]]:
+    """The cursor messages `page` posts to its joiner, as they are made."""
+    posts: list[dict[str, object]] = []
+
+    def record(request: Request) -> None:
+        if request.url.endswith("/_jampot/api/cursor"):
+            posts.append(cast(dict[str, object], request.post_data_json))
+
+    page.on("request", record)
+    return posts
+
+
+def test_an_unrepresentable_url_is_nowhere(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SPA), log=True) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        overlay(alice_page, "#gear").click()
+        expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
+        bob_page.locator("#title").click()
+        bob_page.keyboard.press("x")
+        expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
+            "aria-checked", "true"
+        )
+        time.sleep(0.3)
+        bob_page.mouse.move(300, 250)
+        expect(cursors(alice_page)).to_have_count(1)
+
+        # Too long to say: bob is nowhere, and his pointer goes nowhere.
+        _ = bob_page.evaluate("history.pushState({}, '', '/?' + 'q'.repeat(600))")
+        expect(cursors(alice_page)).to_have_count(0)
+        time.sleep(0.5)
+        _ = cursor_messages(shared, "bob")
+        for step in range(10):
+            bob_page.mouse.move(300 + step * 5, 260)
+        time.sleep(0.5)
+        assert cursor_messages(shared, "bob") == 0
+        expect(cursors(alice_page)).to_have_count(0)
+
+        # Back on a page it can name: there again.
+        _ = bob_page.evaluate("history.pushState({}, '', '/')")
+        time.sleep(0.3)
+        bob_page.mouse.move(320, 270)
+        expect(cursors(alice_page)).to_have_count(1)
+
+
+def test_cursor_messages_coalesce_behind_a_slow_one(
+    tmp_path: Path, browser: Browser
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SPA)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        overlay(alice_page, "#gear").click()
+        expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
+        bob_page.locator("#title").click()
+        bob_page.keyboard.press("x")
+        expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
+            "aria-checked", "true"
+        )
+        time.sleep(0.3)
+        held: list[Route] = []
+        bob_page.route("**/_jampot/api/cursor", lambda route: held.append(route))
+        posts = cursor_posts(bob_page)
+
+        def release() -> None:
+            while held:
+                held.pop(0).continue_()
+
+        def burst(start: int) -> None:
+            for step in range(12):
+                bob_page.mouse.move(start + step * 10, 250)
+                bob_page.wait_for_timeout(30)
+
+        # One request in flight: the moves behind it wait as one, the last.
+        burst(200)
+        waiting(bob_page, "the first request", lambda: len(posts) == 1)
+        bob_page.wait_for_timeout(500)
+        assert len(posts) == 1
+        release()
+        waiting(bob_page, "the coalesced one", lambda: len(posts) == 2)
+        release()
+        bob_page.wait_for_timeout(500)
+        assert len(posts) == 2, posts
+        eventually("bob's last position", lambda: near(alice_page, 310, 250))
+
+        # A leave replaces the positions waiting behind a slow request.
+        burst(200)
+        waiting(bob_page, "a held request", lambda: len(posts) == 3)
+        burst(400)
+        _ = bob_page.evaluate("window.dispatchEvent(new Event('blur'))")
+        release()
+        waiting(bob_page, "the leave", lambda: len(posts) == 4)
+        release()
+        bob_page.wait_for_timeout(500)
+        assert len(posts) == 4, posts
+        assert "position" not in posts[3]
+        expect(cursors(alice_page)).to_have_count(0)
+
+        # Switched off behind a slow request: nothing more goes out.
+        burst(200)
+        waiting(bob_page, "a held request", lambda: len(posts) == 5)
+        burst(400)
+        bob_page.keyboard.press("x")
+        expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
+            "aria-checked", "false"
+        )
+        release()
+        bob_page.wait_for_timeout(500)
+        release()
+        assert len(posts) == 5, posts
+
+
+def cursor_on(page: Page) -> None:
+    page.locator("#title").click()
+    page.keyboard.press("x")
+    expect(overlay(page, "#show-cursor")).to_have_attribute("aria-checked", "true")
+    page.wait_for_timeout(300)
+
+
+def bob_is_at(bob: Joined, url: str) -> Callable[[], bool]:
+    def check() -> bool:
+        status = cast(
+            dict[str, list[dict[str, object]]],
+            json.loads(request(bob, "/_jampot/api/status")[1]),
+        )
+        return any(
+            person["name"] == "bob" and person["url"] == url
+            for person in status["here"]
+        )
+
+    return check
+
+
+def test_a_burst_of_page_changes_ends_on_the_last(
+    tmp_path: Path, browser: Browser
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SPA)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        overlay(alice_page, "#gear").click()
+        expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
+        cursor_on(bob_page)
+        # Straight at the joiner: 65 reports as fast as they go.
+        _ = bob_page.evaluate(
+            """async () => {
+                const stream = new EventSource("/_jampot/api/events?tab=burst&url=/");
+                await new Promise((resolve) => { stream.onopen = resolve; });
+                for (let seq = 1; seq <= 65; seq++) {
+                    await fetch("/_jampot/api/page", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ tab: "burst", seq, url: `/q${seq}` }),
+                    });
+                }
+                window.burst = stream;
+            }"""
+        )
+        eventually("the share at /q65", bob_is_at(bob, "/q65"))
+        # And through the page itself: 65 route changes, ending on /r64.
+        _ = bob_page.evaluate(
+            """() => {
+                window.burst.close();
+                for (let index = 0; index < 65; index++) {
+                    history.pushState({}, "", `/r${index}`);
+                }
+            }"""
+        )
+        eventually("the share at /r64", bob_is_at(bob, "/r64"))
+        # Cursors go by it: alice on /r64 sees bob there.
+        _ = alice_page.evaluate("history.pushState({}, '', '/r64')")
+        alice_page.wait_for_timeout(500)
+        bob_page.mouse.move(300, 250)
+        bob_page.mouse.move(310, 255)
+        expect(cursors(alice_page)).to_have_count(1)
+
+
+def test_page_reports_out_of_order(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SPA)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        _ = alice_page.evaluate("history.pushState({}, '', '/b')")
+        cursor_on(bob_page)
+        held: list[Route] = []
+
+        def hold_a(route: Route) -> None:
+            body = cast(dict[str, object], route.request.post_data_json)
+            if body["url"] == "/a":
+                held.append(route)
+            else:
+                route.continue_()
+
+        bob_page.route("**/_jampot/api/page", hold_a)
+        _ = bob_page.evaluate("history.pushState({}, '', '/a')")
+        waiting(bob_page, "the report of /a", lambda: len(held) > 0)
+        _ = bob_page.evaluate("history.pushState({}, '', '/b')")
+        bob_page.wait_for_timeout(300)
+        held.pop().continue_()
+        waiting(bob_page, "the share at /b", bob_is_at(bob, "/b"))
+        bob_page.wait_for_timeout(500)
+        assert bob_is_at(bob, "/b")()
+        bob_page.mouse.move(300, 250)
+        bob_page.mouse.move(310, 255)
+        expect(cursors(alice_page)).to_have_count(1)
+
+
+def test_movement_during_a_page_report_is_sent(
+    tmp_path: Path, browser: Browser
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SPA)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        _ = alice_page.evaluate("history.pushState({}, '', '/other')")
+        cursor_on(bob_page)
+        held: list[Route] = []
+        bob_page.route("**/_jampot/api/page", lambda route: held.append(route))
+        _ = bob_page.evaluate("history.pushState({}, '', '/other')")
+        waiting(bob_page, "the report", lambda: len(held) > 0)
+        # The pointer moves and stops while the page is being reported.
+        bob_page.mouse.move(320, 260)
+        bob_page.wait_for_timeout(200)
+        for route in held:
+            route.continue_()
+        expect(cursors(alice_page)).to_have_count(1)
+        eventually("the cursor where bob stopped", lambda: near(alice_page, 320, 260))
+
+
+def test_moving_pages_and_pointers_stay_connected(
+    tmp_path: Path, browser: Browser
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SPA), log=True) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        join(tmp_path / "carol", shared, "carol") as carol,
+        pages(browser, alice, bob, carol) as (alice_page, bob_page, carol_page),
+    ):
+        _ = alice_page.evaluate("history.pushState({}, '', '/route419')")
+        _ = carol_page.evaluate("history.pushState({}, '', '/route0')")
+        cursor_on(bob_page)
+        # A new page and a pointer movement every 70 ms, 420 times.
+        _ = bob_page.evaluate(
+            """async () => {
+                for (let index = 0; index < 420; index++) {
+                    history.pushState({}, "", `/route${index}`);
+                    document.dispatchEvent(new PointerEvent("pointermove", {
+                        clientX: 320, clientY: 260, pointerType: "mouse", bubbles: true,
+                    }));
+                    await new Promise((resolve) => setTimeout(resolve, 70));
+                }
+            }"""
+        )
+        eventually("the share at /route419", bob_is_at(bob, "/route419"))
+        bob_page.mouse.move(300, 250)
+        bob_page.mouse.move(310, 255)
+        expect(cursors(alice_page)).to_have_count(1)
+        expect(cursors(carol_page)).to_have_count(0)
+        log = "\n".join(shared.process.drain() + shared.process.seen)
+        assert "presence flood" not in log
+        assert "joiner left" not in log
+
+
+def test_cursors_follow_pointers_on_the_same_page(
+    tmp_path: Path, browser: Browser
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SPA), log=True) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        join(tmp_path / "carol", shared, "carol") as carol,
+        pages(browser, alice, bob, carol) as (alice_page, bob_page, carol_page),
+    ):
+        for page in (alice_page, bob_page, carol_page):
+            overlay(page, "#gear").click()
+            expect(overlay(page, "#here-count")).to_have_text("3 here")
+            overlay(page, "#gear").click()
+        # Carol moves to another route of the single-page app.
+        carol_page.locator("#to-other").click()
+        expect(carol_page.locator("#title")).to_have_text("Other")
+
+        # Off by default: bob's pointer goes nowhere.
+        _ = cursor_messages(shared, "bob")
+        for step in range(10):
+            bob_page.mouse.move(200 + step * 10, 250)
+        time.sleep(0.5)
+        assert cursor_messages(shared, "bob") == 0
+
+        # Bob turns his on: alice sees it, named, following his pointer.
+        bob_page.keyboard.press("x")
+        expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
+            "aria-checked", "true"
+        )
+        time.sleep(0.3)
+        bob_page.mouse.move(300, 250)
+        expect(cursors(alice_page)).to_have_count(1)
+        expect(cursors(alice_page).locator(".tag")).to_have_text("bob")
+        expect(cursors(alice_page).locator(".tag")).to_have_css("font-size", "11px")
+        eventually("the cursor at bob's pointer", lambda: near(alice_page, 300, 250))
+        bob_page.mouse.move(500, 320)
+        eventually("the cursor following", lambda: near(alice_page, 500, 320))
+        expect(cursors(carol_page)).to_have_count(0)
+
+        # Held still, nothing is sent.
+        time.sleep(0.3)
+        _ = cursor_messages(shared, "bob")
+        time.sleep(3)
+        assert cursor_messages(shared, "bob") == 0
+        # Without updates it fades (on the receiver's own timer).
+        expect(cursors(alice_page)).to_have_attribute("data-faded", "true")
+        expect(cursors(alice_page)).to_have_css("opacity", "0")
+
+        # A burst of movement: at most about 15 per second, ending on the
+        # last position.
+        started = time.monotonic()
+        for step in range(60):
+            bob_page.mouse.move(200 + step * 5, 260)
+            time.sleep(1 / 60)
+        elapsed = time.monotonic() - started
+        eventually("the final position", lambda: near(alice_page, 495, 260))
+        time.sleep(0.3)
+        sent = cursor_messages(shared, "bob")
+        assert 3 <= sent <= 15 * elapsed + 2, (sent, elapsed)
+
+        # Leaving the page takes the cursor away at once.
+        _ = bob_page.evaluate("window.dispatchEvent(new Event('blur'))")
+        expect(cursors(alice_page)).to_have_count(0)
+        bob_page.mouse.move(300, 250)
+        expect(cursors(alice_page)).to_have_count(1)
+
+        # A route change: bob's cursor leaves alice and reaches carol.
+        bob_page.locator("#to-other").click()
+        expect(bob_page.locator("#title")).to_have_text("Other")
+        expect(cursors(alice_page)).to_have_count(0)
+        bob_page.mouse.move(320, 260)
+        expect(cursors(carol_page)).to_have_count(1)
+        eventually("the cursor for carol", lambda: near(carol_page, 320, 260))
+        expect(cursors(alice_page)).to_have_count(0)
+
+        # Over an element only bob's page has: not drawn for carol.
+        _ = bob_page.evaluate(
+            """() => {
+                const only = document.createElement("div");
+                only.id = "only-bob";
+                only.style.cssText =
+                    "position:fixed;left:0;top:0;width:200px;height:120px;background:#fcc";
+                document.body.append(only);
+            }"""
+        )
+        bob_page.mouse.move(50, 50)
+        expect(cursors(carol_page)).to_have_count(0)
+        bob_page.mouse.move(320, 260)
+        expect(cursors(carol_page)).to_have_count(1)
+
+        # Bob turns it off: it disappears, and the share hears no more.
+        bob_page.keyboard.press("x")
+        expect(cursors(carol_page)).to_have_count(0)
+        time.sleep(0.3)
+        _ = cursor_messages(shared, "bob")
+        for step in range(30):
+            bob_page.mouse.move(250 + step * 5, 280)
+        time.sleep(1)
+        assert cursor_messages(shared, "bob") == 0
+        expect(cursors(alice_page)).to_have_count(0)
