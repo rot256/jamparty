@@ -96,11 +96,17 @@ login that no longer resolves stops startup.
 Each place that runs jamjam has its own persistent key pair. A person adds
 that key to their account on the front door, once.
 
-1. `jamjam init https://<domain>` writes `~/.config/jamjam/config.json`: it
-   fetches `https://<domain>/.well-known/jamjam` over HTTPS (the server's
-   iroh node id, address and relay) and pins that node id. On first use
-   any command creates `~/.config/jamjam/key` (the iroh secret key, mode
-   0600); it persists, so the environment keeps its identity.
+1. The server URL is built into the binary (`https://<domain>`, a
+   constant in the source). It changes only when set explicitly:
+   `--server <url>` or `JAMJAM_SERVER` (tests and self-hosting use this).
+   On first contact with a server the CLI fetches
+   `<server>/.well-known/jamjam` over HTTPS (the server's iroh node id,
+   address and relay; trusted through the server's TLS certificate) and
+   pins the node id per server URL in `~/.config/jamjam/servers.json`. A
+   later change of node id is refused until the pin is removed by hand
+   (`jamjam forget-server <url>`). On first use any command also creates
+   `~/.config/jamjam/key` (the iroh secret key, mode 0600); it persists, so
+   the environment keeps its identity.
 2. `jamjam code` prints this environment's pairing code: its public key
    with a checksum and the suggested label, e.g.
    `jamjam1-4f1ca90e77b2...-t3@mtrx`. It is public; printing or pasting
@@ -216,7 +222,7 @@ Front door paths:
 | `/auth/login`, `/auth/callback` | GitHub sign-in |
 | `/auth/logout` | POST, Origin-checked |
 | `/devices` | The person's keys: add (paste a pairing code) and remove; POSTs are Origin-checked |
-| `/.well-known/jamjam` | Public: the server's iroh node id, address and relay, for `jamjam init` |
+| `/.well-known/jamjam` | Public: the server's iroh node id, address and relay, fetched and pinned by the CLI on first contact |
 | `/` | The person's sessions (only those they may open) and devices |
 
 Session host paths:
@@ -439,7 +445,7 @@ on unshare or key revocation all of the session's streams are.
 
 | Command | What |
 |---|---|
-| `jamjam init <url>` | Write the config: pin the server's node id from `/.well-known/jamjam` |
+| `jamjam forget-server <url>` | Drop a pinned server node id (after a deliberate server key change) |
 | `jamjam code` | Print this environment's pairing code (its public key; the key is created on first use and kept in `~/.config/jamjam/key`) |
 | `jamjam share <dir or url>` | Create a session and serve it until stopped |
 | `jamjam share --resume <seed> <dir or url>` | Reattach to an existing session |
@@ -495,9 +501,11 @@ Written by the server:
 - `sessions.json`: `{"version": 1, "sessions": [...]}`.
 - `keys.json`: `{"version": 1, "keys": [...]}`, the paired share keys.
 
-Share side: `~/.config/jamjam/key` (iroh secret key) and
-`~/.config/jamjam/config.json` (server address, pinned server node id,
-relay, targets).
+Share side, all optional except the key: `~/.config/jamjam/key` (iroh
+secret key, created on first use), `~/.config/jamjam/servers.json` (pinned
+server node ids, written by the CLI), and `~/.config/jamjam/config.json`
+(delivery targets; no server address, which is built in unless overridden
+by `--server` or `JAMJAM_SERVER`).
 
 ## Security model
 
