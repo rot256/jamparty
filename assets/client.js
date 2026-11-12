@@ -6,6 +6,9 @@ var BASE = new URL("./", SCRIPT_URL);
 var COMMENTS_URL = new URL("api/comments", BASE);
 var STATUS_URL = new URL("api/status", BASE);
 var EVENTS_URL = new URL("api/events", BASE);
+var SETTINGS_URL = new URL("api/settings", BASE);
+var PAGE_URL = new URL("api/page", BASE);
+var CURSOR_URL = new URL("api/cursor", BASE);
 var LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
 var SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
 var HOST_ID = "jampot";
@@ -15,6 +18,17 @@ var OUTBOX_KEY = "jampot-outbox-v1";
 var MAX_OUTBOX = 20;
 var WATCHDOG_MS = 35e3;
 var AGENT_TARGET_PREFIX = "jampot-agent:";
+var RESERVED_KEYS = ["/", "Escape"];
+var PALETTE = [
+  "#0b7896",
+  "#9c4f96",
+  "#b4461f",
+  "#2b7a3d",
+  "#5f5bb8",
+  "#a33a5b",
+  "#7a6200",
+  "#3d6b8f"
+];
 
 // client/src/capture.ts
 function truncate(value, length) {
@@ -374,8 +388,38 @@ function checkVersion(body) {
   const incompatible = typeof api === "number" ? `jampot versions do not match: the share runs ${share} (page API ${API_VERSION}), your jampot join runs ${joiner} (page API ${api}). Use the same jampot version on both sides and join again.` : `Your jampot join is older than the share's jampot ${share} and cannot serve this page. Use the same jampot version on both sides and join again.`;
   return { incompatible };
 }
-function openEvents() {
-  return new EventSource(EVENTS_URL);
+function openEvents(tab) {
+  const url = new URL(EVENTS_URL);
+  if (tab !== null) {
+    url.searchParams.set("tab", tab.tab);
+    url.searchParams.set("url", tab.url);
+  }
+  return new EventSource(url);
+}
+async function post(url, body) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+}
+async function changeSettings(change) {
+  let response;
+  try {
+    response = await post(SETTINGS_URL, change);
+  } catch {
+    throw new Error("jampot join is not reachable");
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(errorMessage(body, `request failed (${response.status})`));
+  return body;
+}
+async function reportPage(visit) {
+  try {
+    return (await post(PAGE_URL, visit)).ok;
+  } catch {
+    return false;
+  }
 }
 function parseEvent(data) {
   try {
@@ -388,10 +432,12 @@ function parseEvent(data) {
 
 // client/src/connection.ts
 var Connection = class {
-  constructor(handlers) {
+  constructor(handlers, tab) {
     this.handlers = handlers;
+    this.tab = tab;
   }
   handlers;
+  tab;
   events = null;
   lastEvent = Date.now();
   streamOpen = false;
@@ -425,10 +471,10 @@ var Connection = class {
       text = this.incompatible;
     } else if (!this.streamOpen) {
       colour = "amber";
-      text = "Reconnecting to jampot join…";
+      text = "reconnecting to jampot join…";
     } else if (!this.shareConnected) {
       colour = "grey";
-      text = "The share is unreachable";
+      text = "share unreachable";
     } else if (this.statusLine !== null) {
       colour = "grey";
       text = this.statusLine;
@@ -438,6 +484,10 @@ var Connection = class {
   /** Whether comments can go out now. */
   get connected() {
     return this.colour === "green";
+  }
+  /** Whether the page has its event stream (so it is one of the joiner's tabs). */
+  get streaming() {
+    return this.streamOpen;
   }
   refuse(reason) {
     this.incompatible = reason;
@@ -468,7 +518,7 @@ var Connection = class {
   }
   connect() {
     if (this.incompatible !== null) return;
-    const events = openEvents();
+    const events = openEvents(this.tab());
     this.events = events;
     events.addEventListener("open", () => {
       this.streamOpen = true;
@@ -616,6 +666,7 @@ var CommentDialog = class {
   }
   close() {
     const ui = this.ui;
+    ui.textarea.blur();
     if (ui.dialog.open) ui.dialog.close();
     this.stopTracking();
     ui.highlight.style.display = "none";
@@ -665,6 +716,196 @@ var CommentDialog = class {
       ui.send.disabled = false;
       ui.cancel.disabled = false;
     });
+  }
+};
+
+// client/src/list.ts
+function shortSelector(selector) {
+  if (selector === "") return "page";
+  if (selector.startsWith(AGENT_TARGET_PREFIX)) return "answer";
+  const parts = selector.split(" > ");
+  return parts[parts.length - 1] ?? selector;
+}
+function relativeTime(at, now = Date.now()) {
+  const minutes = Math.floor((now - at) / 6e4);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
+}
+function stateText(entry) {
+  switch (entry.state) {
+    case "unsent":
+      return "not sent";
+    case "sending":
+      return "sending";
+    case "queued":
+    case "delivered":
+      return entry.state;
+  }
+}
+var CommentList = class {
+  constructor(ui, outbox) {
+    this.ui = ui;
+    this.outbox = outbox;
+    ui.pill.addEventListener("click", () => {
+      this.toggle();
+    });
+    ui.listHeader.addEventListener("click", () => {
+      this.close();
+    });
+  }
+  ui;
+  outbox;
+  refreshTimer;
+  /** Called when the list opens (the control panel closes then). */
+  onOpen = () => void 0;
+  get isOpen() {
+    return !this.ui.list.hidden;
+  }
+  toggle() {
+    if (this.isOpen) this.close();
+    else this.open();
+  }
+  open() {
+    this.onOpen();
+    this.ui.list.hidden = false;
+    this.ui.bar.hidden = true;
+    this.ui.pill.setAttribute("aria-expanded", "true");
+    this.render();
+    this.refreshTimer = window.setInterval(() => {
+      this.render();
+    }, 3e4);
+    this.ui.collapse.focus();
+  }
+  close() {
+    if (!this.isOpen) return;
+    this.ui.list.hidden = true;
+    this.ui.bar.hidden = false;
+    this.ui.pill.setAttribute("aria-expanded", "false");
+    if (this.refreshTimer !== void 0) clearInterval(this.refreshTimer);
+    this.refreshTimer = void 0;
+  }
+  /** Shows the connection state in the pill and the list's header. */
+  showState(view) {
+    const { connection, listDot, connectionText, pill } = this.ui;
+    connection.dataset.state = view.colour;
+    listDot.dataset.state = view.colour;
+    connection.title = view.text;
+    connection.setAttribute("aria-label", view.text);
+    pill.title = view.text;
+    connectionText.dataset.state = view.colour;
+    connectionText.textContent = `· ${view.text}`;
+  }
+  render() {
+    const { outboxList, outboxEmpty } = this.ui;
+    const now = Date.now();
+    const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
+    outboxList.replaceChildren(...entries.map((entry) => {
+      const item = document.createElement("li");
+      item.dataset.state = entry.state;
+      const row = document.createElement("div");
+      row.className = "row";
+      const where = document.createElement("span");
+      where.className = "where";
+      where.textContent = `${shortSelector(entry.draft.selector)} · ${relativeTime(entry.at, now)}`;
+      where.title = entry.draft.selector || "the whole page";
+      const state = document.createElement("span");
+      state.className = "state";
+      state.textContent = stateText(entry);
+      row.append(where, state);
+      const text = document.createElement("p");
+      text.className = "text";
+      text.textContent = entry.draft.comment;
+      item.append(row, text);
+      if (entry.state === "unsent") {
+        const again = document.createElement("button");
+        again.type = "button";
+        again.className = "again";
+        again.textContent = "send again";
+        again.addEventListener("click", () => {
+          void this.outbox.resend(entry);
+        });
+        item.append(again);
+      }
+      return item;
+    }));
+    outboxEmpty.hidden = entries.length > 0;
+  }
+};
+
+// client/src/location.ts
+var TAB_ID = crypto.randomUUID();
+var MAX_URL = 512;
+function pageUrl() {
+  const url = new URL(window.location.href);
+  const raw = `${url.pathname}${url.search}${url.hash}`;
+  const encoded = raw.replace(/[^\x21-\x7e]|["\\]/gu, (character) => encodeURIComponent(character));
+  return encoded.startsWith("/") && encoded.length <= MAX_URL ? encoded : null;
+}
+function watchUrl(listener) {
+  let last = pageUrl();
+  const check = () => {
+    const now = pageUrl();
+    if (now === last) return;
+    last = now;
+    listener(now);
+  };
+  for (const method of ["pushState", "replaceState"]) {
+    const original = history[method].bind(history);
+    history[method] = (...args) => {
+      original(...args);
+      check();
+    };
+  }
+  window.addEventListener("popstate", check);
+  window.addEventListener("hashchange", check);
+}
+function reportUrl(url) {
+  if (url === null) return;
+  void reportPage({ tab: TAB_ID, url });
+}
+
+// client/src/name.ts
+var NamePrompt = class {
+  constructor(ui, saved) {
+    this.ui = ui;
+    this.saved = saved;
+    ui.nameForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void this.join();
+    });
+    ui.nameDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+    });
+  }
+  ui;
+  saved;
+  /** Shows or hides the prompt as the settings say. */
+  show(settings) {
+    const { nameDialog, nameInput, nameError } = this.ui;
+    if (!settings.askName) {
+      if (nameDialog.open) nameDialog.close();
+      return;
+    }
+    if (nameDialog.open || this.ui.dialog.open) return;
+    nameInput.value = settings.name;
+    nameError.textContent = "";
+    nameDialog.showModal();
+    nameInput.focus();
+    nameInput.select();
+  }
+  async join() {
+    const { nameInput, nameError, nameJoin } = this.ui;
+    nameJoin.disabled = true;
+    try {
+      this.saved(await changeSettings({ name: nameInput.value.trim() }));
+    } catch (error) {
+      nameError.textContent = error instanceof Error ? error.message : "could not save the name";
+      nameInput.focus();
+    } finally {
+      nameJoin.disabled = false;
+    }
   }
 };
 
@@ -774,6 +1015,208 @@ var Outbox = class {
   }
 };
 
+// client/src/panel.ts
+var ACTION_NAMES = {
+  commentMode: "comment mode",
+  showCursor: "show my cursor"
+};
+function normalizeKey(key) {
+  return key.length === 1 ? key.toLowerCase() : key;
+}
+function keyLabel(key) {
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+function isEditing(event) {
+  return event.composedPath().some(
+    (node) => node instanceof HTMLElement && (node.isContentEditable || node.matches("input, textarea, select"))
+  );
+}
+function initials(name) {
+  const parts = name.split("@")[0]?.split(/[._+-]+/u).filter((part) => part !== "") ?? [];
+  const letters = parts.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join("");
+  return letters === "" ? "?" : letters;
+}
+function colourOf(person) {
+  return PALETTE[person.colour % PALETTE.length] ?? "#555";
+}
+var Panel = class {
+  constructor(ui) {
+    this.ui = ui;
+    ui.gear.addEventListener("click", () => {
+      this.toggle();
+    });
+    ui.commentMode.addEventListener("click", () => {
+      this.flip("commentMode");
+    });
+    ui.showCursor.addEventListener("click", () => {
+      this.flip("showCursor");
+    });
+    for (const [action, chip] of this.chips()) {
+      chip.addEventListener("click", () => {
+        this.listen(action);
+      });
+    }
+    ui.nameField.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.saveName();
+      }
+    });
+    ui.nameField.addEventListener("change", () => {
+      this.saveName();
+    });
+    document.addEventListener("keydown", (event) => {
+      this.onKey(event);
+    }, true);
+  }
+  ui;
+  settings = null;
+  listening = null;
+  you = null;
+  /** Called when the panel opens (the comment list closes then). */
+  onOpen = () => void 0;
+  /** Called with the settings whenever they change. */
+  onSettings = () => void 0;
+  chips() {
+    return [["commentMode", this.ui.commentModeKey], ["showCursor", this.ui.showCursorKey]];
+  }
+  get isOpen() {
+    return !this.ui.panel.hidden;
+  }
+  get commentMode() {
+    return this.settings?.commentMode !== "off";
+  }
+  toggle() {
+    if (this.isOpen) this.close();
+    else this.open();
+  }
+  open() {
+    this.onOpen();
+    this.ui.panel.hidden = false;
+    this.ui.gear.setAttribute("aria-expanded", "true");
+  }
+  close() {
+    this.stopListening();
+    this.ui.panel.hidden = true;
+    this.ui.gear.setAttribute("aria-expanded", "false");
+    this.ui.panelMessage.textContent = "";
+  }
+  message(text) {
+    this.ui.panelMessage.textContent = text;
+  }
+  /** The settings from the joiner (status or a settings event). */
+  show(settings) {
+    this.settings = settings;
+    const { ui } = this;
+    ui.commentMode.setAttribute("aria-checked", String(settings.commentMode === "on"));
+    ui.showCursor.setAttribute("aria-checked", String(settings.showCursor === "on"));
+    for (const [action, chip] of this.chips()) {
+      if (this.listening !== action) chip.textContent = keyLabel(settings.keys[action]);
+    }
+    if (ui.shadow.activeElement !== ui.nameField) ui.nameField.value = settings.name;
+    this.onSettings(settings);
+  }
+  async change(change) {
+    try {
+      this.show(await changeSettings(change));
+    } catch (error) {
+      this.message(error instanceof Error ? error.message : "could not save");
+    }
+  }
+  flip(action) {
+    const settings = this.settings;
+    if (settings === null) return;
+    const value = settings[action] === "on" ? "off" : "on";
+    this.message("");
+    void this.change(action === "commentMode" ? { commentMode: value } : { showCursor: value });
+  }
+  saveName() {
+    const name = this.ui.nameField.value.trim();
+    if (this.settings === null || name === this.settings.name) return;
+    this.message("");
+    void this.change({ name });
+  }
+  listen(action) {
+    this.stopListening();
+    this.listening = action;
+    const chip = action === "commentMode" ? this.ui.commentModeKey : this.ui.showCursorKey;
+    chip.dataset.listening = "true";
+    chip.textContent = "press a key…";
+    this.message("");
+  }
+  stopListening() {
+    this.listening = null;
+    for (const [action, chip] of this.chips()) {
+      chip.dataset.listening = "false";
+      if (this.settings !== null) chip.textContent = keyLabel(this.settings.keys[action]);
+    }
+  }
+  /** The next key press while a chip listens becomes its binding. */
+  rebind(action, event) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const settings = this.settings;
+    if (event.key === "Escape" || settings === null) {
+      this.stopListening();
+      return;
+    }
+    if (["Shift", "Control", "Alt", "Meta", "CapsLock"].includes(event.key)) return;
+    const key = normalizeKey(event.key);
+    const other = action === "commentMode" ? "showCursor" : "commentMode";
+    if (RESERVED_KEYS.includes(key) || key === " ") {
+      this.stopListening();
+      this.message(`${keyLabel(key)} is used by jampot`);
+      return;
+    }
+    if (normalizeKey(settings.keys[other]) === key) {
+      this.stopListening();
+      this.message(`${keyLabel(key)} is taken by ${ACTION_NAMES[other]}`);
+      return;
+    }
+    const keys = { ...settings.keys, [action]: key };
+    this.stopListening();
+    void this.change({ keys });
+  }
+  onKey(event) {
+    if (this.listening !== null) {
+      this.rebind(this.listening, event);
+      return;
+    }
+    const settings = this.settings;
+    if (settings === null || event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || isEditing(event)) return;
+    const key = normalizeKey(event.key);
+    for (const action of ["commentMode", "showCursor"]) {
+      if (normalizeKey(settings.keys[action]) === key) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        this.flip(action);
+        return;
+      }
+    }
+  }
+  /** Who is here: the count and an avatar each, the joiner's own outlined. */
+  showPeople(here, you) {
+    this.you = you;
+    const { hereCount, avatars } = this.ui;
+    hereCount.textContent = `${here.length} here`;
+    const ordered = [
+      ...here.filter((person) => person.key === this.you),
+      ...here.filter((person) => person.key !== this.you)
+    ];
+    avatars.replaceChildren(...ordered.map((person) => {
+      const item = document.createElement("li");
+      item.className = "avatar";
+      const mine = person.key === this.you;
+      item.dataset.you = String(mine);
+      item.dataset.key = person.key;
+      item.title = mine ? `${person.name} (you)` : person.name;
+      item.textContent = initials(person.name);
+      if (!mine) item.style.background = colourOf(person);
+      return item;
+    }));
+  }
+};
+
 // client/src/styles.ts
 var styles = `
   :host {
@@ -803,60 +1246,368 @@ var styles = `
     display: flex;
     align-items: center;
     gap: 6px;
-    pointer-events: none;
   }
 
-  #connection {
-    width: 12px;
-    height: 12px;
-    border: 2px solid #fff;
-    border-radius: 50%;
-    background: #9a958e;
-    box-shadow: 0 1px 6px rgb(0 0 0 / 30%);
-    pointer-events: auto;
-  }
+  #bar[hidden] { display: none; }
 
-  #connection[data-state="green"] { background: #2f9e44; }
-  #connection[data-state="amber"] { background: #e8a33d; }
-  #connection[data-state="grey"] { background: #9a958e; }
-
-  #outbox {
-    position: fixed;
-    left: 14px;
-    bottom: 14px;
-    z-index: 2147483644;
-    width: min(320px, calc(100vw - 28px));
-    max-height: 40vh;
-    overflow: auto;
-    padding: 8px 10px;
-    border-radius: 6px;
-    background: #161616;
-    color: #fff;
-    box-shadow: 0 3px 12px rgb(0 0 0 / 22%);
-    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-
-  #outbox[hidden] { display: none; }
-  #connection-text { color: #f0c27a; }
-  #connection-text[hidden] { display: none; }
-  #outbox ul { margin: 0; padding: 0; list-style: none; }
-  #outbox li { display: flex; gap: 8px; align-items: baseline; margin-top: 4px; }
-  #outbox .text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #outbox .state { color: #b8b2a9; }
-  #outbox li[data-state="delivered"] .state { color: #8ce99a; }
-  #outbox li[data-state="unsent"] .state { color: #ffa8a8; }
-  #outbox button { padding: 3px 6px; font-size: 11px; }
-
-  #badge {
-    padding: 7px 10px;
+  #pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px 7px 9px;
     border: 1px solid rgb(255 255 255 / 30%);
     border-radius: 999px;
     background: #161616;
     color: #fff;
     box-shadow: 0 3px 12px rgb(0 0 0 / 22%);
+    cursor: pointer;
     font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  .dot {
+    display: block;
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #9a958e;
+  }
+
+  .dot[data-state="green"] { background: #2f9e44; }
+  .dot[data-state="amber"] { background: #e8a33d; }
+  .dot[data-state="grey"] { background: #9a958e; }
+
+  #gear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid rgb(255 255 255 / 30%);
+    border-radius: 50%;
+    background: #161616;
+    color: #fff;
+    box-shadow: 0 3px 12px rgb(0 0 0 / 22%);
+    cursor: pointer;
+  }
+
+  #gear[aria-expanded="true"] { background: #2a2a2a; }
+
+  #list {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 2147483644;
+    display: flex;
+    flex-direction: column;
+    width: min(440px, calc(100vw - 28px));
+    max-height: min(60vh, calc(100vh - 28px));
+    border: 1px solid rgb(255 255 255 / 30%);
+    border-radius: 12px;
+    background: #161616;
+    color: #fff;
+    box-shadow: 0 8px 28px rgb(0 0 0 / 28%);
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow: hidden;
+  }
+
+  #list[hidden] { display: none; }
+
+  #list header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid #2c2c2c;
+    cursor: pointer;
+  }
+
+  #list-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-weight: 600;
+  }
+
+  #connection-text {
+    overflow: hidden;
+    color: #b8b2a9;
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #connection-text[data-state="grey"], #connection-text[data-state="amber"] { color: #f0c27a; }
+
+  #collapse {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #b8b2a9;
+    font: 16px/1 ui-monospace, Menlo, monospace;
+  }
+
+  #collapse:hover, #collapse:focus-visible { background: #2a2a2a; }
+
+  #outbox-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 4px 0;
+    overflow: auto;
+    list-style: none;
+  }
+
+  #outbox-list li {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #242424;
+  }
+
+  #outbox-list li:last-child { border-bottom: 0; }
+  #outbox-list .row { display: flex; justify-content: space-between; gap: 10px; }
+  #outbox-list .where, #outbox-list .state { color: #b8b2a9; }
+  #outbox-list .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #outbox-list li[data-state="delivered"] .state { color: #8ce99a; }
+  #outbox-list li[data-state="unsent"] .state { color: #ffa8a8; }
+  #outbox-list li[data-state="delivered"] .text,
+  #outbox-list li[data-state="unsent"] .text { color: #d8d4cd; }
+  #outbox-list .text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+  #outbox-list .again {
+    align-self: flex-start;
+    padding: 3px 8px;
+    border: 1px solid #555;
+    border-radius: 4px;
+    background: #2a2a2a;
+    color: #fff;
+    font: 11px ui-monospace, Menlo, monospace;
+  }
+
+  #outbox-empty { padding: 10px 14px; color: #8c867e; }
+  #outbox-empty[hidden] { display: none; }
+
+  #panel {
+    position: fixed;
+    right: 14px;
+    bottom: 58px;
+    z-index: 2147483644;
+    width: 232px;
+    padding: 6px;
+    border: 1px solid rgb(255 255 255 / 12%);
+    border-radius: 10px;
+    background: #161616;
+    color: #fff;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 22%);
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  #panel[hidden] { display: none; }
+
+  .control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border-radius: 6px;
+  }
+
+  .control .label { flex-grow: 1; cursor: pointer; }
+
+  .chip {
+    padding: 1px 5px;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    background: transparent;
+    color: #b8b2a9;
+    cursor: pointer;
+    font: 11px/1.3 ui-monospace, Menlo, monospace;
+    white-space: nowrap;
+  }
+
+  .chip[data-listening="true"] {
+    padding: 1px 6px;
+    border: 1px dashed #66d9e8;
+    color: #66d9e8;
+  }
+
+  .switch {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: flex-start;
+    width: 28px;
+    height: 16px;
+    padding: 2px;
+    border: 0;
+    border-radius: 999px;
+    background: #3a3a3a;
+    cursor: pointer;
+  }
+
+  .switch::after {
+    content: "";
+    display: block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #b8b2a9;
+  }
+
+  .switch[aria-checked="true"] { justify-content: flex-end; background: #2f9e44; }
+  .switch[aria-checked="true"]::after { background: #fff; }
+
+  #name-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+  #name-row label { color: #b8b2a9; font-weight: 400; margin: 0; }
+
+  #name-field {
+    flex-grow: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    background: #222;
+    color: #fff;
+    font: 12px/1.3 ui-monospace, Menlo, monospace;
+  }
+
+  #name-field:focus { outline: 1px solid #66d9e8; }
+
+  #panel-message {
+    padding: 0 10px 6px;
+    color: #f0c27a;
+    font-size: 11px;
+  }
+
+  #panel-message:empty { display: none; }
+
+  #people {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 4px;
+    padding: 10px 10px 6px;
+    border-top: 1px solid #262626;
+  }
+
+  #here-count { color: #8c867e; font-size: 11px; }
+
+  #avatars {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 2px solid #161616;
+    border-radius: 50%;
+    color: #fff;
+    font: 700 10px/1 system-ui, -apple-system, sans-serif;
+  }
+
+  .avatar + .avatar { margin-left: -6px; }
+  .avatar[data-you="true"] { border-color: #fff; background: #161616; }
+
+  #notice {
+    position: fixed;
+    right: 14px;
+    bottom: 52px;
+    z-index: 2147483644;
+    max-width: min(420px, calc(100vw - 28px));
+    padding: 9px 11px;
+    border-radius: 6px;
+    background: #161616;
+    color: #f0c27a;
+    box-shadow: 0 3px 12px rgb(0 0 0 / 22%);
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  #notice[hidden] { display: none; }
+
+  #cursors {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483642;
+    overflow: hidden;
     pointer-events: none;
   }
+
+  .cursor {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 120px;
+    height: 48px;
+    opacity: 1;
+    transition: opacity 400ms;
+    will-change: transform;
+  }
+
+  .cursor[data-faded="true"] { opacity: 0; }
+  .cursor svg { position: absolute; left: 0; top: 0; filter: drop-shadow(0 1px 2px rgb(0 0 0 / 30%)); }
+
+  .cursor .tag {
+    position: absolute;
+    left: 13px;
+    top: 17px;
+    padding: 3px 8px;
+    border-radius: 0 6px 6px 6px;
+    color: #fff;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+    font: 600 11px/1.3 system-ui, -apple-system, sans-serif;
+    white-space: nowrap;
+  }
+
+  #name-dialog {
+    top: 50%;
+    left: 50%;
+    width: min(400px, calc(100vw - 24px));
+    padding: 22px;
+    border-radius: 10px;
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    transform: translate(-50%, -50%);
+  }
+
+  #name-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+  #name-dialog form { display: flex; flex-direction: column; gap: 14px; padding: 0; }
+  #name-title { display: flex; flex-direction: column; gap: 4px; }
+  #name-title strong { font: 700 20px Georgia, serif; }
+  #name-title span, #name-foot span { color: #5b564f; }
+  #name-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  #name-foot span { font-size: 11px; }
+  #name-dialog label { margin: 0; }
+
+  #name-input {
+    padding: 8px 10px;
+    border: 2px solid #287088;
+    border-radius: 4px;
+    background: #fff;
+    color: #161616;
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  #name-error { color: #a12c10; font-size: 11px; }
+  #name-error:empty { display: none; }
 
   #toast {
     position: fixed;
@@ -1074,18 +1825,53 @@ var styles = `
 `;
 
 // client/src/ui.ts
+var GEAR_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>`;
 var MARKUP = `
   <style>${styles}</style>
+  <div id="cursors" aria-hidden="true"></div>
   <div id="highlight" aria-hidden="true"></div>
   <div id="message-highlight" aria-hidden="true"></div>
   <div id="bar">
-    <div id="connection" data-state="amber" role="img" aria-label="Connecting" title="Connecting"></div>
-    <div id="badge" role="status" aria-live="polite">0 queued</div>
+    <button id="pill" type="button" aria-expanded="false" aria-controls="list">
+      <span id="connection" class="dot" data-state="amber" role="img" aria-label="Connecting" title="Connecting"></span>
+      <span id="badge" role="status" aria-live="polite">0 queued</span>
+    </button>
+    <button id="gear" type="button" aria-label="Settings" aria-expanded="false" aria-controls="panel">${GEAR_ICON}</button>
   </div>
-  <div id="outbox" hidden>
-    <div id="connection-text" role="status" hidden></div>
-    <ul id="outbox-list"></ul>
-  </div>
+  <section id="list" aria-label="Your comments" hidden>
+    <header id="list-header">
+      <div id="list-summary">
+        <span id="list-dot" class="dot" data-state="amber"></span>
+        <span id="list-count">0 queued</span>
+        <span id="connection-text" role="status">· connecting</span>
+      </div>
+      <button id="collapse" type="button" aria-label="Collapse">▾</button>
+    </header>
+    <ol id="outbox-list"></ol>
+    <div id="outbox-empty">No comments yet: right-click an element, or press / for the page.</div>
+  </section>
+  <section id="panel" aria-label="jampot settings" hidden>
+    <div class="control" id="comment-mode-row">
+      <span class="label" id="comment-mode-label">Comment mode</span>
+      <button class="chip" id="comment-mode-key" type="button" aria-label="Key for comment mode">C</button>
+      <button class="switch" id="comment-mode" type="button" role="switch" aria-checked="true" aria-labelledby="comment-mode-label"></button>
+    </div>
+    <div class="control" id="show-cursor-row">
+      <span class="label" id="show-cursor-label">Show my cursor</span>
+      <button class="chip" id="show-cursor-key" type="button" aria-label="Key for show my cursor">X</button>
+      <button class="switch" id="show-cursor" type="button" role="switch" aria-checked="false" aria-labelledby="show-cursor-label"></button>
+    </div>
+    <div id="name-row">
+      <label for="name-field">Name</label>
+      <input id="name-field" type="text" maxlength="40" autocomplete="nickname" spellcheck="false">
+    </div>
+    <div id="panel-message" role="status"></div>
+    <div id="people">
+      <span id="here-count">0 here</span>
+      <ul id="avatars" aria-label="People here"></ul>
+    </div>
+  </section>
+  <div id="notice" role="alert" hidden></div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <div id="agent-log" role="log" aria-live="polite" aria-relevant="additions">
     <div id="agent-general"></div>
@@ -1109,17 +1895,51 @@ var MARKUP = `
       </div>
     </form>
   </dialog>
+  <dialog id="name-dialog" aria-labelledby="name-heading">
+    <form id="name-form">
+      <div id="name-title">
+        <strong id="name-heading">Join the potluck.</strong>
+        <span>Your name is shown next to your comments and your cursor.</span>
+      </div>
+      <label for="name-input">Name</label>
+      <input id="name-input" type="text" maxlength="40" autocomplete="nickname" spellcheck="false" required>
+      <div id="name-error" role="alert"></div>
+      <div id="name-foot">
+        <span>Remembered on this computer; change it under the gear.</span>
+        <button id="name-join" type="submit">Join</button>
+      </div>
+    </form>
+  </dialog>
 `;
 var Ui = class _Ui {
   host;
   shadow;
+  cursors;
   highlight;
   messageHighlight;
-  badge;
+  bar;
+  pill;
   connection;
-  outbox;
+  badge;
+  gear;
+  list;
+  listHeader;
+  listDot;
+  listCount;
   connectionText;
+  collapse;
   outboxList;
+  outboxEmpty;
+  panel;
+  commentModeKey;
+  commentMode;
+  showCursorKey;
+  showCursor;
+  nameField;
+  panelMessage;
+  hereCount;
+  avatars;
+  notice;
   toast;
   agentGeneral;
   agentAnchored;
@@ -1133,6 +1953,11 @@ var Ui = class _Ui {
   reloadNotice;
   cancel;
   send;
+  nameDialog;
+  nameForm;
+  nameInput;
+  nameError;
+  nameJoin;
   toastTimer;
   /** Adds the UI to the page; null when it is there already. */
   static install() {
@@ -1152,19 +1977,38 @@ var Ui = class _Ui {
     };
     this.host = host;
     this.shadow = shadow;
+    this.cursors = find("#cursors", HTMLDivElement);
     this.highlight = find("#highlight", HTMLDivElement);
     this.messageHighlight = find("#message-highlight", HTMLDivElement);
-    this.badge = find("#badge", HTMLDivElement);
-    this.connection = find("#connection", HTMLDivElement);
-    this.outbox = find("#outbox", HTMLDivElement);
-    this.connectionText = find("#connection-text", HTMLDivElement);
-    this.outboxList = find("#outbox-list", HTMLUListElement);
+    this.bar = find("#bar", HTMLDivElement);
+    this.pill = find("#pill", HTMLButtonElement);
+    this.connection = find("#connection", HTMLSpanElement);
+    this.badge = find("#badge", HTMLSpanElement);
+    this.gear = find("#gear", HTMLButtonElement);
+    this.list = find("#list", HTMLElement);
+    this.listHeader = find("#list-header", HTMLElement);
+    this.listDot = find("#list-dot", HTMLSpanElement);
+    this.listCount = find("#list-count", HTMLSpanElement);
+    this.connectionText = find("#connection-text", HTMLSpanElement);
+    this.collapse = find("#collapse", HTMLButtonElement);
+    this.outboxList = find("#outbox-list", HTMLOListElement);
+    this.outboxEmpty = find("#outbox-empty", HTMLDivElement);
+    this.panel = find("#panel", HTMLElement);
+    this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
+    this.commentMode = find("#comment-mode", HTMLButtonElement);
+    this.showCursorKey = find("#show-cursor-key", HTMLButtonElement);
+    this.showCursor = find("#show-cursor", HTMLButtonElement);
+    this.nameField = find("#name-field", HTMLInputElement);
+    this.panelMessage = find("#panel-message", HTMLDivElement);
+    this.hereCount = find("#here-count", HTMLSpanElement);
+    this.avatars = find("#avatars", HTMLUListElement);
+    this.notice = find("#notice", HTMLDivElement);
     this.toast = find("#toast", HTMLDivElement);
     this.agentGeneral = find("#agent-general", HTMLDivElement);
     this.agentAnchored = find("#agent-anchored", HTMLDivElement);
-    this.dialog = find("dialog", HTMLDialogElement);
+    this.dialog = find("#jampot-dialog", HTMLDialogElement);
     this.dialogLabel = find("#dialog-label", HTMLLabelElement);
-    this.form = find("form", HTMLFormElement);
+    this.form = find("#jampot-dialog form", HTMLFormElement);
     this.selectionPreview = find("#selection-preview", HTMLDivElement);
     this.selectionText = find("#selection-text", HTMLQuoteElement);
     this.textarea = find("textarea", HTMLTextAreaElement);
@@ -1172,6 +2016,11 @@ var Ui = class _Ui {
     this.reloadNotice = find("#reload-notice", HTMLDivElement);
     this.cancel = find("#cancel", HTMLButtonElement);
     this.send = find("#send", HTMLButtonElement);
+    this.nameDialog = find("#name-dialog", HTMLDialogElement);
+    this.nameForm = find("#name-form", HTMLFormElement);
+    this.nameInput = find("#name-input", HTMLInputElement);
+    this.nameError = find("#name-error", HTMLDivElement);
+    this.nameJoin = find("#name-join", HTMLButtonElement);
   }
   showToast(message) {
     this.toast.textContent = message;
@@ -1182,55 +2031,49 @@ var Ui = class _Ui {
     }, 2400);
   }
   setPending(pending) {
-    this.badge.textContent = `${pending} queued`;
+    const text = `${pending} queued`;
+    this.badge.textContent = text;
     this.badge.dataset.pending = String(pending);
+    this.listCount.textContent = text;
   }
 };
 
 // client/src/main.ts
-function stateText(entry) {
-  return entry.state === "unsent" ? "not sent" : entry.state;
-}
-function isEditing(event) {
-  return event.composedPath().some(
-    (node) => node instanceof HTMLElement && (node.isContentEditable || node.matches("input, textarea, select"))
-  );
-}
 function install() {
   const ui = Ui.install();
   if (ui === null) return;
   const outbox = new Outbox();
   const answers = new Answers(ui);
   const dialog = new CommentDialog(ui, outbox);
+  const list = new CommentList(ui, outbox);
+  const panel = new Panel(ui);
   let reloadRevision = LIVE_REVISION;
   let connectionView = { colour: "amber", text: "", incompatible: null };
-  const renderOutbox = () => {
-    ui.outboxList.replaceChildren(...outbox.entries.map((entry) => {
-      const item = document.createElement("li");
-      item.dataset.state = entry.state;
-      const text = document.createElement("span");
-      text.className = "text";
-      text.textContent = entry.draft.comment;
-      const state = document.createElement("span");
-      state.className = "state";
-      state.textContent = stateText(entry);
-      item.append(text, state);
-      if (entry.state === "unsent") {
-        const again = document.createElement("button");
-        again.type = "button";
-        again.textContent = "send again";
-        again.addEventListener("click", () => {
-          void outbox.resend(entry);
-        });
-        item.append(again);
-      }
-      return item;
-    }));
-    ui.outbox.hidden = outbox.entries.length === 0 && ui.connectionText.hidden;
+  let url = pageUrl();
+  let you = null;
+  let here = [];
+  list.onOpen = () => {
+    panel.close();
   };
-  outbox.onChange = renderOutbox;
+  panel.onOpen = () => {
+    list.close();
+  };
+  outbox.onChange = () => {
+    list.render();
+  };
   outbox.onPending = (pending) => {
     ui.setPending(pending);
+  };
+  const prompt = new NamePrompt(ui, (settings) => {
+    panel.show(settings);
+  });
+  const applySettings = (settings) => {
+    prompt.show(settings);
+  };
+  panel.onSettings = applySettings;
+  const showPeople = (people) => {
+    here = people;
+    panel.showPeople(here, you);
   };
   const onRevision = (revision) => {
     if (LIVE_REVISION === null || revision === null) return;
@@ -1241,18 +2084,18 @@ function install() {
   const connection = new Connection({
     state(view, recovered) {
       connectionView = view;
-      ui.connection.dataset.state = view.colour;
-      ui.connection.title = view.text;
-      ui.connection.setAttribute("aria-label", view.text);
-      ui.connectionText.textContent = view.text;
-      ui.connectionText.hidden = view.colour === "green";
-      renderOutbox();
+      list.showState(view);
+      ui.notice.hidden = view.incompatible === null;
+      ui.notice.textContent = view.incompatible ?? "";
       if (recovered) void outbox.resendAll();
     },
     status(status) {
+      you = status.you?.key ?? null;
       ui.setPending(status.pending);
       outbox.markDeliveredExcept(status.undelivered);
       for (const answer of status.answers) answers.add(answer);
+      panel.show(status.settings);
+      showPeople(status.here);
       onRevision(status.revision);
     },
     event(event) {
@@ -1266,25 +2109,39 @@ function install() {
         case "delivered":
           outbox.markDelivered(event.ids);
           break;
+        case "presence":
+          showPeople(event.here);
+          break;
+        case "settings":
+          panel.show(event);
+          break;
+        case "cursor":
         case "share":
         case "status":
-        case "presence":
-        case "settings":
-        case "cursor":
         case "ping":
           break;
       }
     }
+  }, () => url === null ? null : { tab: TAB_ID, url });
+  watchUrl((now) => {
+    url = now;
+    if (connection.streaming) reportUrl(url);
   });
+  const activate = () => {
+    if (connection.streaming && document.visibilityState === "visible") reportUrl(url);
+  };
+  window.addEventListener("focus", activate);
+  document.addEventListener("visibilitychange", activate);
+  const commenting = () => connectionView.incompatible === null && panel.commentMode;
   document.addEventListener("contextmenu", (event) => {
-    if (connectionView.incompatible !== null) return;
+    if (!commenting()) return;
     if (event.shiftKey || event.composedPath().includes(ui.host)) return;
     if (!(event.target instanceof Element)) return;
     event.preventDefault();
     dialog.openElement(event.target, event.clientX, event.clientY);
   }, true);
   ui.shadow.addEventListener("contextmenu", (event) => {
-    if (connectionView.incompatible !== null) return;
+    if (!commenting()) return;
     if (!(event instanceof MouseEvent) || event.shiftKey) return;
     const target = event.composedPath().find(
       (node) => node instanceof HTMLElement && node.classList.contains("agent-message")
@@ -1301,13 +2158,13 @@ function install() {
     );
   }, true);
   document.addEventListener("keydown", (event) => {
-    if (connectionView.incompatible !== null) return;
+    if (!commenting()) return;
     if (event.defaultPrevented || event.isComposing || event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
     if (isEditing(event)) return;
     event.preventDefault();
     dialog.openPage();
   }, true);
-  renderOutbox();
+  list.render();
   void connection.start();
 }
 if (document.readyState === "loading") {

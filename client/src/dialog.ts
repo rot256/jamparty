@@ -122,6 +122,9 @@ export class CommentDialog {
 
   close(): void {
     const ui = this.ui;
+    // Firefox may leave focus in the closed dialog's textarea, where keys
+    // (like `/`) would then count as typing.
+    ui.textarea.blur();
     if (ui.dialog.open) ui.dialog.close();
     this.stopTracking();
     ui.highlight.style.display = "none";

@@ -10,7 +10,9 @@ import http.client
 import json
 import os
 import queue
+import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -25,13 +27,15 @@ from typing import cast
 from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import Browser, Page, expect, sync_playwright
+from playwright.sync_api import Browser, Locator, Page, expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
 BINARY = TARGET_DIR / "debug/jampot"
 SITE = ROOT / "tests/fixtures/site"
+SPA = ROOT / "tests/fixtures/spa"
 FIXTURE_HTML = (SITE / "index.html").read_bytes()
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 TIMEOUT = 20.0
 VERSION = cast(
     str, tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
@@ -140,6 +144,17 @@ class Process:
                 return line.removeprefix(prefix)
         pytest.fail(f"no line starting with {prefix!r}; output: {self.seen}")
 
+    def drain(self) -> list[str]:
+        """The lines that arrived since the last look, without waiting."""
+        new: list[str] = []
+        while True:
+            try:
+                new.append(ANSI.sub("", self.lines.get_nowait()))
+            except queue.Empty:
+                break
+        self.seen.extend(new)
+        return new
+
     def stop(self) -> None:
         if self.process.poll() is None:
             self.process.terminate()
@@ -201,8 +216,12 @@ def jampot(home: Path, *arguments: str) -> str:
 
 
 @contextmanager
-def share(home: Path, *source: str) -> Iterator[Shared]:
-    process = Process([*source, "--local"], environment(home))
+def share(home: Path, *source: str, log: bool = False) -> Iterator[Shared]:
+    """A share; with `log`, its debug log (each cursor message) is kept."""
+    env = environment(home)
+    if log:
+        env["RUST_LOG"] = "jampot=debug"
+    process = Process([*source, "--local"], env)
     try:
         token = process.wait_for("jampot: token: ")
         address = process.wait_for("jampot: direct address: ")
@@ -213,10 +232,18 @@ def share(home: Path, *source: str) -> Iterator[Shared]:
 
 @contextmanager
 def join_process(
-    home: Path, shared: Shared, token: str, name: str = "alice"
+    home: Path,
+    shared: Shared,
+    token: str,
+    name: str | None = "alice",
+    port: int | None = None,
 ) -> Iterator[Process]:
     # The token goes on stdin, as `jampot join -` reads it: out of argv.
-    arguments = ["join", "-", "--no-open", "--name", name]
+    arguments = ["join", "-", "--no-open"]
+    if name is not None:
+        arguments += ["--name", name]
+    if port is not None:
+        arguments += ["--port", str(port)]
     process = Process(
         [*arguments, "--share-addr", shared.address],
         environment(home),
@@ -229,8 +256,10 @@ def join_process(
 
 
 @contextmanager
-def join(home: Path, shared: Shared, name: str = "alice") -> Iterator[Joined]:
-    with join_process(home, shared, shared.token, name) as process:
+def join(
+    home: Path, shared: Shared, name: str | None = "alice", port: int | None = None
+) -> Iterator[Joined]:
+    with join_process(home, shared, shared.token, name, port) as process:
         url = process.wait_for("jampot: open ")
         parts = urlsplit(url)
         assert parts.hostname is not None and parts.port is not None
@@ -421,7 +450,7 @@ def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> 
             _ = alice_page.goto(alice.url)
             _ = bob_page.goto(bob.url)
             comment_on_intro(alice_page, "Shorter, please.")
-            entry = alice_page.locator("#jampot #outbox li")
+            entry = alice_page.locator("#jampot #outbox-list li")
             expect(entry).to_have_attribute("data-state", "queued")
 
             output = jampot(tmp_path, "recv")
@@ -463,7 +492,7 @@ def test_connection_indicator_and_unsent_comments(tmp_path: Path, page: Page) ->
         expect(page.locator("#jampot #connection-text")).to_contain_text("unreachable")
 
         comment_on_intro(page, "Kept for later.")
-        entry = page.locator("#jampot #outbox li")
+        entry = page.locator("#jampot #outbox-list li")
         expect(entry).to_have_attribute("data-state", "unsent")
         expect(entry.locator("button")).to_have_text("send again")
 
@@ -500,7 +529,7 @@ def test_a_joiner_with_another_page_api_is_not_used(tmp_path: Path, page: Page) 
         requested: list[str] = []
         page.on("request", lambda request: requested.append(request.url))
         _ = page.goto(joined.url)
-        text = page.locator("#jampot #connection-text")
+        text = page.locator("#jampot #notice")
         expect(text).to_contain_text("your jampot join runs 9.9.9 (page API 999)")
         expect(text).to_contain_text(f"the share runs {VERSION}")
         expect(page.locator("#jampot #connection")).to_have_attribute(
@@ -620,3 +649,282 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
         assert refused.returncode == 1
         assert "nobody called zed is here" in refused.stderr
         assert "alice (" in refused.stderr and "bob (" in refused.stderr
+
+
+# The overlay (docs/ui.md), one joiner at a time.
+
+
+def overlay(page: Page, selector: str) -> Locator:
+    return page.locator(f"#jampot {selector}")
+
+
+def test_the_pill_holds_the_dot_and_follows_the_state(
+    tmp_path: Path, browser: Browser
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join_process(tmp_path, shared, shared.token) as process,
+    ):
+        url = process.wait_for("jampot: open ")
+        context = browser.new_context()
+        try:
+            page = context.new_page()
+            page.clock.install()
+            _ = page.goto(url)
+            dot = overlay(page, "#pill > #connection")
+            expect(dot).to_have_attribute("data-state", "green")
+            expect(dot).to_have_css("background-color", "rgb(47, 158, 68)")
+            expect(overlay(page, "#pill")).to_contain_text("0 queued")
+            expect(overlay(page, "#bar > #gear")).to_be_visible()
+
+            # The joiner's event stream goes silent: the page's watchdog
+            # gives up on it and reconnects, which cannot work yet.
+            os.kill(process.process.pid, signal.SIGSTOP)
+            try:
+                page.clock.fast_forward(40_000)
+                expect(dot).to_have_attribute("data-state", "amber")
+                expect(dot).to_have_css("background-color", "rgb(232, 163, 61)")
+            finally:
+                os.kill(process.process.pid, signal.SIGCONT)
+            expect(dot).to_have_attribute("data-state", "green")
+
+            shared.process.stop()
+            expect(dot).to_have_attribute("data-state", "grey")
+            expect(dot).to_have_css("background-color", "rgb(154, 149, 142)")
+        finally:
+            context.close()
+
+
+def test_the_comment_list(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        comment_on_intro(page, "First, on the paragraph.")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        _ = page.keyboard.press("/")
+        textarea = overlay(page, "textarea")
+        textarea.fill("Second, on the page.")
+        textarea.press("Enter")
+        expect(overlay(page, "#badge")).to_have_text("2 queued")
+
+        # Expand: the pill becomes the list, newest first.
+        overlay(page, "#pill").click()
+        listed = overlay(page, "#list")
+        expect(listed).to_be_visible()
+        expect(overlay(page, "#bar")).to_be_hidden()
+        expect(overlay(page, "#list-count")).to_have_text("2 queued")
+        expect(overlay(page, "#connection-text")).to_have_text("· connected")
+        rows = overlay(page, "#outbox-list li")
+        expect(rows).to_have_count(2)
+        expect(rows.nth(0).locator(".where")).to_have_text("page · just now")
+        expect(rows.nth(0).locator(".text")).to_have_text("Second, on the page.")
+        expect(rows.nth(1).locator(".where")).to_have_text("#intro · just now")
+        expect(rows.nth(1).locator(".state")).to_have_text("queued")
+
+        # Delivered once the agent has them, in green.
+        assert len(jampot(tmp_path, "recv").splitlines()) == 2
+        expect(rows.nth(1).locator(".state")).to_have_text("delivered")
+        expect(rows.nth(1).locator(".state")).to_have_css("color", "rgb(140, 233, 154)")
+        expect(overlay(page, "#list-count")).to_have_text("0 queued")
+
+        # Collapse with ▾, and by clicking the header.
+        overlay(page, "#collapse").click()
+        expect(listed).to_be_hidden()
+        expect(overlay(page, "#pill")).to_be_visible()
+        overlay(page, "#pill").click()
+        overlay(page, "#list-summary").click()
+        expect(listed).to_be_hidden()
+
+        # Not sent (the joiner did not take it), then sent again.
+        page.route("**/_jampot/api/comments", lambda route: route.abort())
+        comment_on_intro(page, "Third, kept for later.")
+        overlay(page, "#pill").click()
+        unsent = rows.nth(0)
+        expect(unsent).to_have_attribute("data-state", "unsent")
+        expect(unsent.locator(".state")).to_have_text("not sent")
+        expect(unsent.locator(".state")).to_have_css("color", "rgb(255, 168, 168)")
+        page.unroute("**/_jampot/api/comments")
+        unsent.locator("button.again").click()
+        expect(unsent).to_have_attribute("data-state", "queued")
+        expect(overlay(page, "#list-count")).to_have_text("1 queued")
+
+
+def switch(page: Page, name: str) -> Locator:
+    return overlay(page, f"#{name}")
+
+
+def test_the_control_panel(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        # A text field of the page's own, and a record of what the page saw.
+        _ = page.evaluate(
+            """() => {
+                const field = document.createElement("input");
+                field.id = "field";
+                document.querySelector("main").append(field);
+                window.seen = [];
+                for (const type of ["contextmenu", "keydown"]) {
+                    window.addEventListener(type, (event) => {
+                        window.seen.push(`${type}:${event.defaultPrevented}`);
+                    });
+                }
+            }"""
+        )
+        comment_mode = switch(page, "comment-mode")
+        show_cursor = switch(page, "show-cursor")
+
+        # One panel at a time.
+        overlay(page, "#gear").click()
+        expect(overlay(page, "#panel")).to_be_visible()
+        overlay(page, "#pill").click()
+        expect(overlay(page, "#list")).to_be_visible()
+        expect(overlay(page, "#panel")).to_be_hidden()
+        overlay(page, "#collapse").click()
+        overlay(page, "#gear").click()
+        expect(overlay(page, "#panel")).to_be_visible()
+        expect(overlay(page, "#panel")).to_have_css("width", "232px")
+        expect(comment_mode).to_have_attribute("aria-checked", "true")
+        expect(show_cursor).to_have_attribute("aria-checked", "false")
+        expect(overlay(page, "#comment-mode-key")).to_have_text("C")
+        expect(overlay(page, "#show-cursor-key")).to_have_text("X")
+
+        # By click.
+        comment_mode.click()
+        expect(comment_mode).to_have_attribute("aria-checked", "false")
+        show_cursor.click()
+        expect(show_cursor).to_have_attribute("aria-checked", "true")
+
+        # Comment mode off: right-click and / are the page's.
+        _ = page.evaluate("window.seen = []")
+        page.locator("#intro").click(button="right")
+        page.keyboard.press("Escape")
+        page.locator("h1").click()
+        page.keyboard.press("/")
+        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        assert page.evaluate("window.seen") == [
+            "contextmenu:false",
+            "keydown:false",
+            "keydown:false",
+        ]
+
+        # By key; not while a text field has focus.
+        page.keyboard.press("c")
+        expect(comment_mode).to_have_attribute("aria-checked", "true")
+        page.keyboard.press("x")
+        expect(show_cursor).to_have_attribute("aria-checked", "false")
+        page.locator("#field").click()
+        page.keyboard.type("cx")
+        expect(page.locator("#field")).to_have_value("cx")
+        expect(comment_mode).to_have_attribute("aria-checked", "true")
+        expect(show_cursor).to_have_attribute("aria-checked", "false")
+        page.locator("h1").click()
+
+        # Rebinding: the new key works, the old one does not.
+        chip = overlay(page, "#comment-mode-key")
+        chip.click()
+        expect(chip).to_have_text("press a key…")
+        expect(chip).to_have_css("border-style", "dashed")
+        page.keyboard.press("k")
+        expect(chip).to_have_text("K")
+        page.keyboard.press("c")
+        expect(comment_mode).to_have_attribute("aria-checked", "true")
+        page.keyboard.press("k")
+        expect(comment_mode).to_have_attribute("aria-checked", "false")
+        # Escape cancels.
+        chip.click()
+        page.keyboard.press("Escape")
+        expect(chip).to_have_text("K")
+        # Keys taken by the other switch or by jampot are refused.
+        chip.click()
+        page.keyboard.press("x")
+        expect(overlay(page, "#panel-message")).to_have_text(
+            "X is taken by show my cursor"
+        )
+        expect(chip).to_have_text("K")
+        chip.click()
+        page.keyboard.press("/")
+        expect(overlay(page, "#panel-message")).to_have_text("/ is used by jampot")
+        expect(chip).to_have_text("K")
+        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+
+        # Comment mode back on: / is jampot's again.
+        page.keyboard.press("k")
+        expect(comment_mode).to_have_attribute("aria-checked", "true")
+        page.keyboard.press("/")
+        expect(overlay(page, "textarea")).to_be_focused()
+
+
+def settings_file(home: Path) -> dict[str, object]:
+    path = home / "config/jampot/settings.json"
+    assert path.stat().st_mode & 0o777 == 0o600
+    return cast(dict[str, object], json.loads(path.read_text()))
+
+
+def test_the_name_prompt_and_settings_on_disk(tmp_path: Path, browser: Browser) -> None:
+    home = tmp_path / "dora"
+    context = browser.new_context()
+    try:
+        with (
+            share(tmp_path, "serve", str(SITE)) as shared,
+            join(home, shared, name=None) as joined,
+        ):
+            page = context.new_page()
+            _ = page.goto(joined.url)
+            prompt = overlay(page, "#name-dialog")
+            expect(prompt).to_be_visible()
+            expect(prompt).to_contain_text("Join the potluck.")
+            expect(prompt).to_contain_text(
+                "Remembered on this computer; change it under the gear."
+            )
+            name = overlay(page, "#name-input")
+            expect(name).not_to_have_value("")
+            name.fill("dora")
+            overlay(page, "#name-join").click()
+            expect(prompt).to_be_hidden()
+            assert settings_file(home)["name"] == "dora"
+
+            # Under the gear: the name, and who is here.
+            overlay(page, "#gear").click()
+            expect(overlay(page, "#name-field")).to_have_value("dora")
+            expect(overlay(page, "#here-count")).to_have_text("1 here")
+            expect(overlay(page, ".avatar")).to_have_attribute("title", "dora (you)")
+            # A change updates presence.
+            overlay(page, "#name-field").fill("dora.b")
+            overlay(page, "#name-field").press("Enter")
+            expect(overlay(page, ".avatar")).to_have_attribute("title", "dora.b (you)")
+            expect(overlay(page, ".avatar")).to_have_text("DB")
+            # Keys and switches are kept too.
+            overlay(page, "#show-cursor").click()
+            overlay(page, "#comment-mode-key").click()
+            page.keyboard.press("k")
+            expect(overlay(page, "#comment-mode-key")).to_have_text("K")
+            page.close()
+            saved = settings_file(home)
+            assert saved["name"] == "dora.b"
+            assert saved["showCursor"] == "on"
+            assert saved["keys"] == {"commentMode": "k", "showCursor": "x"}
+
+        # A new share and a new joiner, the same home: no prompt, the same
+        # settings.
+        with (
+            share(tmp_path, "serve", str(SITE)) as shared,
+            join(home, shared, name=None) as joined,
+        ):
+            page = context.new_page()
+            _ = page.goto(joined.url)
+            overlay(page, "#gear").click()
+            expect(overlay(page, "#name-field")).to_have_value("dora.b")
+            expect(overlay(page, "#name-dialog")).to_be_hidden()
+            expect(overlay(page, "#show-cursor")).to_have_attribute(
+                "aria-checked", "true"
+            )
+            expect(overlay(page, "#comment-mode-key")).to_have_text("K")
+            expect(overlay(page, ".avatar")).to_have_attribute("title", "dora.b (you)")
+    finally:
+        context.close()

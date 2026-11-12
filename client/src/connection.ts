@@ -35,7 +35,11 @@ export class Connection {
   private colour: Colour = "amber";
   private watchdog: number | undefined;
 
-  constructor(private readonly handlers: Handlers) {}
+  constructor(
+    private readonly handlers: Handlers,
+    /** This page as one of the joiner's tabs, when it can say its URL. */
+    private readonly tab: () => { tab: string; url: string } | null,
+  ) {}
 
   /** Checks the joiner's page API, then connects the event stream. */
   async start(): Promise<void> {
@@ -64,10 +68,10 @@ export class Connection {
       text = this.incompatible;
     } else if (!this.streamOpen) {
       colour = "amber";
-      text = "Reconnecting to jampot join…";
+      text = "reconnecting to jampot join…";
     } else if (!this.shareConnected) {
       colour = "grey";
-      text = "The share is unreachable";
+      text = "share unreachable";
     } else if (this.statusLine !== null) {
       colour = "grey";
       text = this.statusLine;
@@ -78,6 +82,11 @@ export class Connection {
   /** Whether comments can go out now. */
   get connected(): boolean {
     return this.colour === "green";
+  }
+
+  /** Whether the page has its event stream (so it is one of the joiner's tabs). */
+  get streaming(): boolean {
+    return this.streamOpen;
   }
 
   private refuse(reason: string): void {
@@ -112,7 +121,7 @@ export class Connection {
 
   private connect(): void {
     if (this.incompatible !== null) return;
-    const events = openEvents();
+    const events = openEvents(this.tab());
     this.events = events;
     events.addEventListener("open", () => {
       this.streamOpen = true;

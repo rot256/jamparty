@@ -6,6 +6,9 @@ const BASE = new URL("./", SCRIPT_URL);
 export const COMMENTS_URL = new URL("api/comments", BASE);
 export const STATUS_URL = new URL("api/status", BASE);
 export const EVENTS_URL = new URL("api/events", BASE);
+export const SETTINGS_URL = new URL("api/settings", BASE);
+export const PAGE_URL = new URL("api/page", BASE);
+export const CURSOR_URL = new URL("api/cursor", BASE);
 
 /** The live-reload revision this page was served at (shared directories only). */
 export const LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
@@ -21,3 +24,20 @@ export const MAX_OUTBOX = 20;
 export const WATCHDOG_MS = 35000;
 /** Selectors of agent answers, for comments on an answer. */
 export const AGENT_TARGET_PREFIX = "jampot-agent:";
+/** Cursor messages per second at most (docs/ui.md: about 15). */
+export const CURSOR_RATE = 15;
+/** A cursor without an update for this long fades out. */
+export const CURSOR_FADE_MS = 4000;
+/** Keys jampot keeps for itself (`/` opens a page comment, Escape cancels). */
+export const RESERVED_KEYS = ["/", "Escape"];
+/** The colours people are shown in, by the share's colour index; white text reads on each. */
+export const PALETTE = [
+  "#0b7896",
+  "#9c4f96",
+  "#b4461f",
+  "#2b7a3d",
+  "#5f5bb8",
+  "#a33a5b",
+  "#7a6200",
+  "#3d6b8f",
+];

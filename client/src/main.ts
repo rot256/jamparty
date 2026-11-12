@@ -1,23 +1,18 @@
 // The browser client the share injects into every HTML page: comments,
-// the agent's answers, the connection state and live reload.
+// the agent's answers, the connection state, live reload, the control
+// panel and presence (docs/ui.md).
 
 import { Answers } from "./answers";
 import { AGENT_TARGET_PREFIX, LIVE_REVISION } from "./config";
 import { Connection, type ConnectionView } from "./connection";
 import { ANSWER_LABEL, CommentDialog } from "./dialog";
-import { Outbox, type OutboxEntry } from "./outbox";
+import type { PageSettings, Person } from "./generated/api";
+import { CommentList } from "./list";
+import { TAB_ID, pageUrl, reportUrl, watchUrl } from "./location";
+import { NamePrompt } from "./name";
+import { Outbox } from "./outbox";
+import { Panel, isEditing } from "./panel";
 import { Ui } from "./ui";
-
-function stateText(entry: OutboxEntry): string {
-  return entry.state === "unsent" ? "not sent" : entry.state;
-}
-
-function isEditing(event: Event): boolean {
-  return event.composedPath().some(
-    (node) => node instanceof HTMLElement &&
-      (node.isContentEditable || node.matches("input, textarea, select")),
-  );
-}
 
 function install(): void {
   const ui = Ui.install();
@@ -25,33 +20,30 @@ function install(): void {
   const outbox = new Outbox();
   const answers = new Answers(ui);
   const dialog = new CommentDialog(ui, outbox);
+  const list = new CommentList(ui, outbox);
+  // The panel takes its keys before the page and the `/` handler below.
+  const panel = new Panel(ui);
   let reloadRevision = LIVE_REVISION;
   let connectionView: ConnectionView = { colour: "amber", text: "", incompatible: null };
+  let url = pageUrl();
+  let you: string | null = null;
+  let here: Person[] = [];
 
-  const renderOutbox = (): void => {
-    ui.outboxList.replaceChildren(...outbox.entries.map((entry) => {
-      const item = document.createElement("li");
-      item.dataset.state = entry.state;
-      const text = document.createElement("span");
-      text.className = "text";
-      text.textContent = entry.draft.comment;
-      const state = document.createElement("span");
-      state.className = "state";
-      state.textContent = stateText(entry);
-      item.append(text, state);
-      if (entry.state === "unsent") {
-        const again = document.createElement("button");
-        again.type = "button";
-        again.textContent = "send again";
-        again.addEventListener("click", () => { void outbox.resend(entry); });
-        item.append(again);
-      }
-      return item;
-    }));
-    ui.outbox.hidden = outbox.entries.length === 0 && ui.connectionText.hidden;
-  };
-  outbox.onChange = renderOutbox;
+  list.onOpen = () => { panel.close(); };
+  panel.onOpen = () => { list.close(); };
+  outbox.onChange = () => { list.render(); };
   outbox.onPending = (pending) => { ui.setPending(pending); };
+
+  const prompt = new NamePrompt(ui, (settings) => { panel.show(settings); });
+  const applySettings = (settings: PageSettings): void => {
+    prompt.show(settings);
+  };
+  panel.onSettings = applySettings;
+
+  const showPeople = (people: Person[]): void => {
+    here = people;
+    panel.showPeople(here, you);
+  };
 
   const onRevision = (revision: number | null): void => {
     if (LIVE_REVISION === null || revision === null) return;
@@ -63,18 +55,18 @@ function install(): void {
   const connection = new Connection({
     state(view, recovered) {
       connectionView = view;
-      ui.connection.dataset.state = view.colour;
-      ui.connection.title = view.text;
-      ui.connection.setAttribute("aria-label", view.text);
-      ui.connectionText.textContent = view.text;
-      ui.connectionText.hidden = view.colour === "green";
-      renderOutbox();
+      list.showState(view);
+      ui.notice.hidden = view.incompatible === null;
+      ui.notice.textContent = view.incompatible ?? "";
       if (recovered) void outbox.resendAll();
     },
     status(status) {
+      you = status.you?.key ?? null;
       ui.setPending(status.pending);
       outbox.markDeliveredExcept(status.undelivered);
       for (const answer of status.answers) answers.add(answer);
+      panel.show(status.settings);
+      showPeople(status.here);
       onRevision(status.revision);
     },
     event(event) {
@@ -88,19 +80,37 @@ function install(): void {
         case "delivered":
           outbox.markDelivered(event.ids);
           break;
+        case "presence":
+          showPeople(event.here);
+          break;
+        case "settings":
+          panel.show(event);
+          break;
+        case "cursor":
         case "share":
         case "status":
-        case "presence":
-        case "settings":
-        case "cursor":
         case "ping":
           break;
       }
     },
+  }, () => (url === null ? null : { tab: TAB_ID, url }));
+
+  // Single-page apps move without loading: follow the URL, tell the joiner.
+  watchUrl((now) => {
+    url = now;
+    if (connection.streaming) reportUrl(url);
   });
+  // The tab in front is where the joiner is.
+  const activate = (): void => {
+    if (connection.streaming && document.visibilityState === "visible") reportUrl(url);
+  };
+  window.addEventListener("focus", activate);
+  document.addEventListener("visibilitychange", activate);
+
+  const commenting = (): boolean => connectionView.incompatible === null && panel.commentMode;
 
   document.addEventListener("contextmenu", (event) => {
-    if (connectionView.incompatible !== null) return;
+    if (!commenting()) return;
     if (event.shiftKey || event.composedPath().includes(ui.host)) return;
     if (!(event.target instanceof Element)) return;
     event.preventDefault();
@@ -108,7 +118,7 @@ function install(): void {
   }, true);
 
   ui.shadow.addEventListener("contextmenu", (event) => {
-    if (connectionView.incompatible !== null) return;
+    if (!commenting()) return;
     if (!(event instanceof MouseEvent) || event.shiftKey) return;
     const target = event.composedPath().find(
       (node) => node instanceof HTMLElement && node.classList.contains("agent-message"),
@@ -126,7 +136,7 @@ function install(): void {
   }, true);
 
   document.addEventListener("keydown", (event) => {
-    if (connectionView.incompatible !== null) return;
+    if (!commenting()) return;
     if (
       event.defaultPrevented || event.isComposing || event.key !== "/" ||
       event.metaKey || event.ctrlKey || event.altKey
@@ -136,7 +146,7 @@ function install(): void {
     dialog.openPage();
   }, true);
 
-  renderOutbox();
+  list.render();
   void connection.start();
 }
 
