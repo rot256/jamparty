@@ -92,11 +92,30 @@ pub(crate) async fn deliver(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
 
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
 
     use crate::{adapters::command::deliver, core::queue::DeliveryResult};
+
+    /// Whether `pid` still runs. A killed process whose parent died stays
+    /// a zombie until init reaps it, and some inits (a container's node,
+    /// say) never do; a zombie runs nothing, so it counts as gone.
+    fn running(pid: i32) -> bool {
+        if kill(Pid::from_raw(pid), None) == Err(Errno::ESRCH) {
+            return false;
+        }
+        // `/proc/<pid>/stat` is `pid (comm) state ...`; comm may hold spaces
+        // and parentheses, so the state follows the last `)`.
+        let zombie = fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(')')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+        });
+        !zombie
+    }
 
     #[tokio::test]
     async fn a_timeout_kills_what_the_command_started() {
@@ -110,13 +129,9 @@ mod tests {
         ];
         let (result, detail) = deliver(&argv, Duration::from_millis(300), &[]).await;
         assert_eq!(result, DeliveryResult::Error, "{detail}");
-        let pid: i32 = std::fs::read_to_string(&pid)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let pid: i32 = fs::read_to_string(&pid).unwrap().trim().parse().unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while kill(Pid::from_raw(pid), None) != Err(Errno::ESRCH) {
+        while running(pid) {
             assert!(Instant::now() < deadline, "the background sleep survived");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
