@@ -91,6 +91,11 @@ impl<T: Clone> DeliveryQueue<T> {
         Self::default()
     }
 
+    /// Undelivered comments, in flight first, then waiting.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+        self.in_flight.iter().chain(self.waiting.iter())
+    }
+
     /// Undelivered comments, waiting and in flight.
     #[must_use]
     pub(crate) fn len(&self) -> usize {

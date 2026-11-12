@@ -1,7 +1,7 @@
 //! Joiners' display names: self-chosen and unverified, shown next to the
 //! joiner's key fingerprint.
 
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +35,7 @@ impl JoinerName {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
@@ -53,6 +54,14 @@ impl TryFrom<String> for JoinerName {
                 "a name is 1 to {MAX_NAME} characters of letters, digits and ._@+-"
             ))
         }
+    }
+}
+
+impl FromStr for JoinerName {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        Self::try_from(raw.to_owned())
     }
 }
 

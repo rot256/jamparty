@@ -1,8 +1,11 @@
 //! Injected time source.
 
+#[cfg(test)]
 use std::sync::{Mutex, PoisonError};
 
-use jiff::{SignedDuration, Timestamp};
+#[cfg(test)]
+use jiff::SignedDuration;
+use jiff::Timestamp;
 
 /// The current time. Production uses [`SystemClock`]; tests use [`ManualClock`].
 pub(crate) trait Clock: Send + Sync {
@@ -20,11 +23,13 @@ impl Clock for SystemClock {
 }
 
 /// A clock that only moves when told to.
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ManualClock {
     now: Mutex<Timestamp>,
 }
 
+#[cfg(test)]
 impl ManualClock {
     #[must_use]
     pub(crate) fn new(start: Timestamp) -> Self {
@@ -50,6 +55,7 @@ impl ManualClock {
     }
 }
 
+#[cfg(test)]
 impl Clock for ManualClock {
     fn now(&self) -> Timestamp {
         *self.now.lock().unwrap_or_else(PoisonError::into_inner)

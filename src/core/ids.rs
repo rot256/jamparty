@@ -169,6 +169,7 @@ const SID_LEN: usize = 16;
 pub(crate) struct Sid(String);
 
 impl Sid {
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn as_str(&self) -> &str {
         &self.0

@@ -4,7 +4,9 @@
 //! With capacity `n` per `period`, a request costs `period / n`; a joiner may
 //! run up to `n` requests ahead of the steady rate.
 
-use std::{collections::HashMap, fmt};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::fmt;
 
 use jiff::{SignedDuration, Timestamp};
 
@@ -20,17 +22,21 @@ pub(crate) struct RateLimit {
     burst: SignedDuration,
 }
 
+#[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct InvalidRateLimit;
 
+#[cfg(test)]
 impl fmt::Display for InvalidRateLimit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("rate limit needs a positive capacity and period")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for InvalidRateLimit {}
 
+#[cfg(test)]
 impl RateLimit {
     pub(crate) fn new(capacity: u16, period: SignedDuration) -> Result<Self, InvalidRateLimit> {
         let interval = period
@@ -99,6 +105,7 @@ impl RateLimiter {
     }
 
     /// Number of joiners currently tracked.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn tracked(&self) -> usize {
         self.arrival.len()

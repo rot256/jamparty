@@ -41,13 +41,6 @@ pub(crate) struct DraftFields {
 #[serde(try_from = "DraftFields", into = "DraftFields")]
 pub(crate) struct Draft(DraftFields);
 
-impl Draft {
-    #[must_use]
-    pub(crate) fn fields(&self) -> &DraftFields {
-        &self.0
-    }
-}
-
 impl TryFrom<DraftFields> for Draft {
     type Error = String;
 

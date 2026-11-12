@@ -118,6 +118,7 @@ impl LocalOrigin {
     }
 
     /// The `Host` header value, also the address to open in the browser.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn host(&self) -> &str {
         &self.host

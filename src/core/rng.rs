@@ -1,7 +1,9 @@
 //! Injected randomness.
 
+#[cfg(test)]
 use std::sync::{Mutex, PoisonError};
 
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 /// A source of random bytes. Production uses [`SystemRng`]; tests use
@@ -35,12 +37,14 @@ impl Rng for SystemRng {
 
 /// A deterministic generator for tests: SHA-256 over (seed, counter).
 /// Not for production use.
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct SeededRng {
     seed: u64,
     counter: Mutex<u64>,
 }
 
+#[cfg(test)]
 impl SeededRng {
     #[must_use]
     pub(crate) fn new(seed: u64) -> Self {
@@ -51,6 +55,7 @@ impl SeededRng {
     }
 }
 
+#[cfg(test)]
 impl Rng for SeededRng {
     fn fill(&self, dest: &mut [u8]) {
         let mut counter = self.counter.lock().unwrap_or_else(PoisonError::into_inner);

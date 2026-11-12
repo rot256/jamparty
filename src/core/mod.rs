@@ -4,6 +4,8 @@
 pub(crate) mod clock;
 pub(crate) mod ids;
 pub(crate) mod name;
+// The delivery state machine is driven from implementation step 6 on.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod queue;
 pub(crate) mod ratelimit;
 pub(crate) mod request;

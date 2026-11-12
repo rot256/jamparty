@@ -1,368 +1,241 @@
-mod agent;
-// Pure core and wire types; the share and joiner wire them in (implementation plan steps 4 and 5).
-#[allow(dead_code)]
+mod adapters;
 mod core;
-mod fifo;
-mod live;
-mod model;
-#[allow(dead_code)]
+mod join;
 mod protocol;
-mod server;
+mod share;
+#[cfg(test)]
+mod tests;
 
-use std::{
-    error::Error,
-    io::{self, Read, Write},
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::{error::Error, io, net::SocketAddr, path::PathBuf, process::Stdio, time::Duration};
 
-use clap::{Parser, Subcommand};
-use tokio::net::TcpListener;
-use url::Url;
+use clap::{Args, Parser, Subcommand};
+use tokio::signal::unix::{SignalKind, signal};
 
 use crate::{
-    agent::{AgentHub, InboxTask},
-    fifo::{CommentQueue, ServerTransport},
-    model::AgentMessage,
-    server::ServerState,
+    adapters::{
+        endpoint::{Discovery, NetConfig},
+        keyfile,
+    },
+    core::{name::JoinerName, token::PartyToken},
+    join::{JoinConfig, Joiner},
+    share::{Share, ShareConfig, Source, proxy::UpstreamUrl},
 };
 
 pub(crate) type BoxError = Box<dyn Error + Send + Sync>;
-pub(crate) const CLIENT_JS: &str = include_str!("../assets/client.js");
 
-#[derive(Clone, Debug)]
-struct UpstreamUrl(Url);
-
-impl FromStr for UpstreamUrl {
-    type Err = BoxError;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let mut upstream = Url::parse(raw)?;
-        if !matches!(upstream.scheme(), "http" | "https") {
-            return Err("upstream must use http:// or https://".into());
-        }
-        if upstream.host_str().is_none() {
-            return Err("upstream must include a host".into());
-        }
-        if !upstream.username().is_empty() || upstream.password().is_some() {
-            return Err("upstream credentials are not supported".into());
-        }
-        if upstream.query().is_some() || upstream.fragment().is_some() {
-            return Err("upstream must not include a query or fragment".into());
-        }
-        if !upstream.path().ends_with('/') {
-            let path = format!("{}/", upstream.path());
-            upstream.set_path(&path);
-        }
-        Ok(Self(upstream))
-    }
-}
+/// How long a public share waits to reach a relay before printing its token.
+const ONLINE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Parser)]
 #[command(
     name = "jamjam",
     version,
-    about = "Serve or proxy development sites and queue browser feedback",
-    arg_required_else_help = true,
-    after_help = "Workflow:\n  1. Run jamjam and open the printed URL.\n  2. Ask your agent to run `jamjam recv`.\n  3. Right-click the page and suggest edits.\n\nRun `jamjam agent` for the complete agent workflow."
+    about = "Share a site under development and collect comments on it",
+    arg_required_else_help = true
 )]
 pub struct Cli {
-    /// Address on which jamjam accepts browser requests.
-    #[arg(long, global = true, default_value = "127.0.0.1:3939")]
-    listen: SocketAddr,
-
-    /// FIFO to create and use for newline-delimited JSON delivery.
-    #[arg(long, global = true, default_value = ".jamjam")]
-    fifo: PathBuf,
-
-    /// Base URL of the HTTP or HTTPS development server (legacy proxy form).
-    #[arg(value_name = "UPSTREAM")]
-    upstream: Option<UpstreamUrl>,
-
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Proxy an HTTP or HTTPS development server.
+    /// Share a static directory (live reload); print the party token.
+    Serve {
+        /// Directory to share.
+        #[arg(default_value = ".")]
+        directory: PathBuf,
+        #[command(flatten)]
+        net: ShareNet,
+    },
+
+    /// Share a running development server; print the party token.
     Proxy {
         /// Base URL of the development server.
         upstream: UpstreamUrl,
+        #[command(flatten)]
+        net: ShareNet,
     },
 
-    /// Serve a directory and reload browsers when its files change.
-    Serve {
-        /// Directory containing the site to serve.
-        directory: PathBuf,
-    },
-
-    /// Wait for and print one batch of browser feedback.
-    Recv,
-
-    /// Send a Markdown answer to connected browsers.
-    Send {
-        /// CSS selector beside which the answer should appear.
+    /// Join a share and open it in the browser.
+    Join {
+        /// The party token printed by `jamjam serve` or `jamjam proxy`.
+        token: PartyToken,
+        /// Display name shown next to your comments (default: user@host).
         #[arg(long)]
-        anchor: Option<String>,
+        name: Option<JoinerName>,
+        /// Do not open the browser.
+        #[arg(long)]
+        no_open: bool,
+        /// Dial the share at this address, without relays or address lookup.
+        #[arg(long, hide = true)]
+        share_addr: Vec<SocketAddr>,
     },
-
-    /// Print the agent workflow.
-    Agent,
 }
 
-#[derive(Debug)]
-enum Source {
-    Proxy(Url),
-    Serve(PathBuf),
-}
-
-#[derive(Debug)]
-struct RunConfig {
-    listen: SocketAddr,
-    fifo: PathBuf,
-    source: Source,
-}
-
-impl TryFrom<Cli> for RunConfig {
-    type Error = BoxError;
-
-    fn try_from(cli: Cli) -> Result<Self, Self::Error> {
-        let Cli {
-            listen,
-            fifo,
-            upstream,
-            command,
-        } = cli;
-        let source = match (upstream, command) {
-            (Some(UpstreamUrl(upstream)), None) => Source::Proxy(upstream),
-            (
-                None,
-                Some(Command::Proxy {
-                    upstream: UpstreamUrl(upstream),
-                }),
-            ) => Source::Proxy(upstream),
-            (None, Some(Command::Serve { directory })) => {
-                let directory = std::fs::canonicalize(&directory).map_err(|error| {
-                    io::Error::new(
-                        error.kind(),
-                        format!("could not serve directory {}: {error}", directory.display()),
-                    )
-                })?;
-                if !directory.is_dir() {
-                    return Err(
-                        format!("serve path {} is not a directory", directory.display()).into(),
-                    );
-                }
-                Source::Serve(directory)
-            }
-            (None, Some(Command::Recv | Command::Send { .. } | Command::Agent)) => {
-                return Err("helper commands do not start a server".into());
-            }
-            (None, None) => return Err("provide an upstream URL or a subcommand".into()),
-            (Some(_), Some(_)) => {
-                return Err("the legacy upstream URL cannot be combined with a subcommand".into());
-            }
-        };
-        Ok(Self {
-            listen,
-            fifo,
-            source,
-        })
-    }
+#[derive(Debug, Args)]
+struct ShareNet {
+    /// No relays or address lookup: bind 127.0.0.1 and print the address
+    /// for `jamjam join --share-addr`.
+    #[arg(long, hide = true)]
+    local: bool,
 }
 
 pub async fn run(cli: Cli) -> Result<(), BoxError> {
-    if cli.upstream.is_some()
-        && matches!(
-            cli.command.as_ref(),
-            Some(Command::Recv | Command::Send { .. } | Command::Agent)
-        )
-    {
-        return Err("the legacy upstream URL cannot be combined with a helper command".into());
-    }
-    match &cli.command {
-        Some(Command::Recv) => {
-            let batch = fifo::receive_batch(&cli.fifo)?;
-            io::stdout().write_all(&batch)?;
-            io::stdout().flush()?;
-            return Ok(());
-        }
-        Some(Command::Send { anchor }) => {
-            let mut message = String::new();
-            io::stdin().read_to_string(&mut message)?;
-            let input = AgentMessage::new(message, anchor.clone())
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-            agent::send_message(&cli.fifo, input)?;
-            return Ok(());
-        }
-        Some(Command::Agent) => {
-            print!("{}", agent::agent_guidance()?);
-            return Ok(());
-        }
-        Some(Command::Proxy { .. } | Command::Serve { .. }) | None => {}
-    }
-
-    let RunConfig {
-        listen,
-        fifo: fifo_path,
-        source,
-    } = RunConfig::try_from(cli)?;
-
-    let listener = TcpListener::bind(listen).await.map_err(|error| {
-        std::io::Error::new(
-            error.kind(),
-            format!("could not listen on {listen}: {error}"),
-        )
-    })?;
-    let listen = listener.local_addr()?;
-    let transport = ServerTransport::create(&fifo_path)?;
-    let transport_paths = transport.paths().clone();
-    let queue = CommentQueue::new();
-    let delivery = queue.start_delivery(transport_paths.clone());
-    let messages = AgentHub::new();
-    let inbox = InboxTask::start(transport.open_send_reader()?, messages.clone());
-
-    let (state, mode_message, live_watcher) = match source {
-        Source::Proxy(upstream) => (
-            ServerState::proxy(upstream.clone(), queue, messages),
-            format!("proxying {upstream}"),
-            None,
-        ),
-        Source::Serve(directory) => {
-            let excluded_paths = transport_paths.canonical().map_err(|error| {
+    match cli.command {
+        Command::Serve { directory, net } => {
+            let root = std::fs::canonicalize(&directory).map_err(|error| {
                 io::Error::new(
                     error.kind(),
-                    format!("could not resolve transport paths: {error}"),
+                    format!("could not share {}: {error}", directory.display()),
                 )
             })?;
-            let (watcher, reload) = live::start(&directory, &excluded_paths)?;
-            (
-                ServerState::live(directory.clone(), excluded_paths, queue, messages, reload),
-                format!("serving {} with live reload", directory.display()),
-                Some(watcher),
-            )
+            if !root.is_dir() {
+                return Err(format!("{} is not a directory", root.display()).into());
+            }
+            let what = format!("{} (live reload)", root.display());
+            share(Source::Files(root), &net, &what).await
+        }
+        Command::Proxy { upstream, net } => {
+            let what = upstream.to_string();
+            share(Source::Proxy(upstream), &net, &what).await
+        }
+        Command::Join {
+            token,
+            name,
+            no_open,
+            share_addr,
+        } => join(token, name, no_open, share_addr).await,
+    }
+}
+
+async fn share(source: Source, net: &ShareNet, what: &str) -> Result<(), BoxError> {
+    let discovery = if net.local {
+        Discovery::Direct
+    } else {
+        Discovery::Public
+    };
+    let share = Share::start(ShareConfig::new(source, NetConfig::new(discovery))).await?;
+    if discovery == Discovery::Public
+        && tokio::time::timeout(ONLINE_TIMEOUT, share.endpoint().online())
+            .await
+            .is_err()
+    {
+        tracing::warn!("no relay reachable yet; joiners may not find this share");
+    }
+    println!("jamjam: sharing {what}");
+    println!("jamjam: token: {}", share.token());
+    println!("jamjam: anyone with the token can see the site and comment until this share stops");
+    if discovery == Discovery::Direct {
+        for addr in share.direct_addrs() {
+            println!("jamjam: direct address: {addr}");
+        }
+    }
+    shutdown_signal().await?;
+    share.stop().await;
+    Ok(())
+}
+
+async fn join(
+    token: PartyToken,
+    name: Option<JoinerName>,
+    no_open: bool,
+    share_addrs: Vec<SocketAddr>,
+) -> Result<(), BoxError> {
+    let discovery = if share_addrs.is_empty() {
+        Discovery::Public
+    } else {
+        Discovery::Direct
+    };
+    let name = name.unwrap_or_else(default_name);
+    let key = keyfile::load_or_create(&keyfile::default_path()?)?;
+    let joiner = Joiner::start(JoinConfig {
+        token,
+        name,
+        key,
+        net: NetConfig::new(discovery),
+        share_addrs,
+    })
+    .await?;
+    let url = joiner.url();
+    println!("jamjam: open {url}");
+    if !no_open {
+        open_browser(&url);
+    }
+    let mut view = joiner.watch();
+    let refused = tokio::select! {
+        refused = view.wait_for(|view| view.refused.is_some()) => {
+            refused.ok().and_then(|view| view.refused)
+        }
+        signal = shutdown_signal() => {
+            signal?;
+            None
         }
     };
-
-    let base_url = format!("http://{listen}");
-    println!("jamjam: {mode_message} at {base_url}");
-    println!("jamjam: FIFO {}", transport_paths.receive.display());
-    if fifo_path == Path::new(".jamjam") {
-        println!("jamjam: receive feedback with: jamjam recv");
-    } else {
-        println!(
-            "jamjam: receive feedback with: jamjam recv --fifo {}",
-            fifo_path.display()
-        );
+    joiner.stop().await;
+    match refused {
+        Some(reason) => Err(format!(
+            "the share refused this joiner ({reason:?}): the token is wrong or from an earlier run"
+        )
+        .into()),
+        None => Ok(()),
     }
+}
 
-    let result = tokio::select! {
-        result = server::serve(listener, state) => result,
-        error = transport.wait_until_broken() => Err(error.into()),
+fn default_name() -> JoinerName {
+    let user = std::env::var("USER").unwrap_or_default();
+    let host = nix::unistd::gethostname()
+        .map(|host| host.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    JoinerName::default_for(&user, &host)
+}
+
+fn open_browser(url: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
     };
-    drop(inbox);
-    drop(delivery);
-    drop(live_watcher);
-    result
+    let spawned = std::process::Command::new(opener)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "could not open the browser; open the address yourself");
+    }
+}
+
+async fn shutdown_signal() -> io::Result<()> {
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut hangup = signal(SignalKind::hangup())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+        _ = hangup.recv() => Ok(()),
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use clap::{CommandFactory, Parser};
+mod cli_tests {
+    use clap::Parser;
 
-    use super::{Cli, RunConfig, Source, UpstreamUrl};
-
-    #[test]
-    fn parses_options_after_the_upstream() {
-        let cli = Cli::try_parse_from([
-            "jamjam",
-            "http://127.0.0.1:8000",
-            "--listen",
-            "127.0.0.1:0",
-            "--fifo",
-            "feedback.pipe",
-        ])
-        .expect("valid CLI");
-        assert_eq!(cli.listen.port(), 0);
-        assert_eq!(cli.fifo.to_string_lossy(), "feedback.pipe");
-        let Some(upstream) = cli.upstream else {
-            panic!("legacy upstream");
-        };
-        assert_eq!(upstream.0.as_str(), "http://127.0.0.1:8000/");
-    }
+    use crate::{Cli, Command};
 
     #[test]
-    fn parses_explicit_proxy_and_serve_commands() {
-        let proxy = Cli::try_parse_from([
-            "jamjam",
-            "proxy",
-            "http://127.0.0.1:8000",
-            "--listen",
-            "127.0.0.1:0",
-        ])
-        .expect("explicit proxy");
-        assert_eq!(proxy.listen.port(), 0);
-        let proxy = RunConfig::try_from(proxy).expect("proxy run configuration");
-        assert!(matches!(proxy.source, Source::Proxy(_)));
-
-        let temporary = tempfile::tempdir().expect("temp directory");
-        let serve = Cli::try_parse_from([
-            "jamjam",
-            "--fifo",
-            "feedback.pipe",
-            "serve",
-            temporary.path().to_str().expect("UTF-8 path"),
-        ])
-        .expect("serve directory");
-        let config = RunConfig::try_from(serve).expect("run configuration");
-        assert_eq!(config.fifo.to_string_lossy(), "feedback.pipe");
-        assert!(matches!(config.source, Source::Serve(_)));
-    }
-
-    #[test]
-    fn rejects_conflicting_or_missing_sources() {
-        let conflicting = Cli::try_parse_from([
-            "jamjam",
-            "http://127.0.0.1:8000",
-            "proxy",
-            "http://127.0.0.1:9000",
-        ])
-        .expect("syntactically valid CLI");
-        assert!(RunConfig::try_from(conflicting).is_err());
+    fn parses_the_three_commands() {
+        let serve = Cli::try_parse_from(["jamjam", "serve"]).unwrap();
+        assert!(matches!(serve.command, Command::Serve { .. }));
+        let proxy = Cli::try_parse_from(["jamjam", "proxy", "http://127.0.0.1:8000"]).unwrap();
+        assert!(matches!(proxy.command, Command::Proxy { .. }));
+        let token = format!("{}:{}", "ab".repeat(32), "a".repeat(26));
+        let join = Cli::try_parse_from(["jamjam", "join", &token, "--name", "alice", "--no-open"])
+            .unwrap();
+        assert!(matches!(join.command, Command::Join { no_open: true, .. }));
+        assert!(Cli::try_parse_from(["jamjam", "join", "nonsense"]).is_err());
+        assert!(Cli::try_parse_from(["jamjam", "join", &token, "--name", "a b"]).is_err());
+        assert!(Cli::try_parse_from(["jamjam", "http://127.0.0.1:8000"]).is_err());
         assert!(Cli::try_parse_from(["jamjam"]).is_err());
-    }
-
-    #[test]
-    fn rejects_invalid_serve_paths() {
-        let temporary = tempfile::tempdir().expect("temp directory");
-        let file = temporary.path().join("index.html");
-        std::fs::write(&file, "fixture").expect("write fixture");
-
-        for path in [file, temporary.path().join("missing")] {
-            let cli = Cli::try_parse_from(["jamjam", "serve", path.to_str().expect("UTF-8 path")])
-                .expect("syntactically valid serve command");
-            assert!(RunConfig::try_from(cli).is_err());
-        }
-    }
-
-    #[test]
-    fn validates_upstream() {
-        assert!("http://localhost:3000".parse::<UpstreamUrl>().is_ok());
-        assert!("https://localhost:3000".parse::<UpstreamUrl>().is_ok());
-        assert!("ftp://localhost:3000".parse::<UpstreamUrl>().is_err());
-        assert!(
-            "http://user:pass@localhost:3000"
-                .parse::<UpstreamUrl>()
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn help_explains_the_agent_workflow() {
-        let help = Cli::command().render_long_help().to_string();
-        assert!(help.contains("jamjam recv"));
-        assert!(help.contains("jamjam agent"));
     }
 }

@@ -1,8 +1,7 @@
 const BASE = new URL("./", import.meta.url);
 const COMMENTS_URL = new URL("api/comments", BASE);
 const STATUS_URL = new URL("api/status", BASE);
-const RELOAD_URL = new URL("api/reload", BASE);
-const MESSAGES_URL = new URL("api/messages", BASE);
+const EVENTS_URL = new URL("api/events", BASE);
 const LIVE_REVISION = new URL(import.meta.url).searchParams.get("live");
 const HOST_ID = "jamjam";
 const MAX_SELECTED_TEXT = 2000;
@@ -709,14 +708,6 @@ function install() {
     characterData: true,
   });
 
-  const messageEvents = new EventSource(MESSAGES_URL);
-  messageEvents.addEventListener("message", (event) => {
-    try {
-      addAgentMessage(JSON.parse(event.data));
-    } catch {
-      // Ignore malformed events and leave the stream connected.
-    }
-  });
 
   const updateHighlight = () => {
     if (
@@ -852,7 +843,12 @@ function install() {
     void fetch(COMMENTS_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ comment, ...context }),
+      body: JSON.stringify({
+        page: context.page.url,
+        selector: context.target.selector,
+        selectedText: context.target.selectedText,
+        comment,
+      }),
     })
       .then(async (response) => {
         const body = await response.json().catch(() => null);
@@ -898,32 +894,39 @@ function install() {
     highlight.style.display = "none";
   });
 
-  const refreshPending = () => {
-    void fetch(STATUS_URL)
-      .then(async (response) => {
-        if (!response.ok) return;
-        const body = await response.json();
-        if (typeof body.pending === "number") setPending(body.pending);
-      })
-      .catch(() => undefined);
+  const onRevision = (revision) => {
+    if (LIVE_REVISION === null || typeof revision !== "number") return;
+    if (String(revision) === reloadRevision) return;
+    reloadRevision = String(revision);
+    if (dialog.open) {
+      pendingReload = true;
+      reloadNotice.hidden = false;
+    } else {
+      window.location.reload();
+    }
   };
-  refreshPending();
-  setInterval(refreshPending, 750);
 
-  if (LIVE_REVISION !== null) {
-    const reloadEvents = new EventSource(RELOAD_URL);
-    reloadEvents.addEventListener("message", (event) => {
-      if (!event.data) return;
-      if (event.data === reloadRevision) return;
-      reloadRevision = event.data;
-      if (dialog.open) {
-        pendingReload = true;
-        reloadNotice.hidden = false;
-      } else {
-        window.location.reload();
-      }
-    });
-  }
+  void fetch(STATUS_URL)
+    .then(async (response) => {
+      if (!response.ok) return;
+      const body = await response.json();
+      if (typeof body.pending === "number") setPending(body.pending);
+      onRevision(body.revision);
+    })
+    .catch(() => undefined);
+
+  const events = new EventSource(EVENTS_URL);
+  events.addEventListener("message", (event) => {
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (!data || typeof data !== "object") return;
+    if (data.type === "answer") addAgentMessage(data);
+    else if (data.type === "reload") onRevision(data.revision);
+  });
 }
 
 if (document.readyState === "loading") {
