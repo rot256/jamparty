@@ -236,8 +236,8 @@ config, `~/.config/jamjam/config.json`):
 - **`t3`**: the share is an MCP client of T3 (URL and token file in the
   config; in the `t3` container the token comes from the existing sign-in
   script with label `jamjam`, renewed nightly and re-read per delivery).
-  - Thread: `--thread` or `T3CODE_THREAD_ID`; with neither, `jamjam`
-    refuses. At start it calls `t3_thread_read`: unknown threads fail; a
+  - Chosen when `--thread` is given or `T3CODE_THREAD_ID` is set (with
+    neither, the target is `recv`). At start it calls `t3_thread_read`: unknown threads fail; a
     child thread is resolved to its top-level thread or refused (the
     contract test settles which); the title is printed.
   - Each batch is one `t3_thread_send` with `mode: 'queue'` (starts an
