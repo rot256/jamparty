@@ -9,6 +9,8 @@ updates:
       cargo-dependencies:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: npm
     directory: /
@@ -18,6 +20,8 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: uv
     directory: /
@@ -27,6 +31,8 @@ updates:
       python-dependencies:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: github-actions
     directory: /
@@ -36,3 +42,5 @@ updates:
       github-actions:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
