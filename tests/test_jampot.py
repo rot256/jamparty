@@ -1309,6 +1309,16 @@ def test_cursors_follow_pointers_on_the_same_page(
         eventually("the cursor following", lambda: near(alice_page, 500, 320))
         expect(cursors(carol_page)).to_have_count(0)
 
+        # A cursor is never what a comment is about.
+        alice_page.mouse.click(500, 320, button="right")
+        textarea = overlay(alice_page, "textarea")
+        expect(textarea).to_be_focused()
+        textarea.fill("Under bob's cursor.")
+        textarea.press("Enter")
+        expect(overlay(alice_page, "#badge")).to_have_text("1 queued")
+        [line] = jampot(tmp_path, "recv").splitlines()
+        assert cast(dict[str, object], json.loads(line))["selector"] == "#board"
+
         # Held still, nothing is sent.
         time.sleep(0.3)
         _ = cursor_messages(shared, "bob")
