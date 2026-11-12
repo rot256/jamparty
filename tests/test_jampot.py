@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,6 +33,9 @@ BINARY = TARGET_DIR / "debug/jampot"
 SITE = ROOT / "tests/fixtures/site"
 FIXTURE_HTML = (SITE / "index.html").read_bytes()
 TIMEOUT = 20.0
+VERSION = cast(
+    str, tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
+)
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -477,3 +481,28 @@ def test_live_reload_after_a_file_change(tmp_path: Path, page: Page) -> None:
         index = site / "index.html"
         _ = index.write_text(index.read_text().replace("Fixture page", "Changed page"))
         expect(page.locator("h1")).to_have_text("Changed page")
+
+
+def test_a_joiner_with_another_page_api_is_not_used(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        status = {"api": 999, "version": "9.9.9", "connected": True}
+        page.route(
+            "**/_jampot/api/status",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json", body=json.dumps(status)
+            ),
+        )
+        requested: list[str] = []
+        page.on("request", lambda request: requested.append(request.url))
+        _ = page.goto(joined.url)
+        text = page.locator("#jampot #connection-text")
+        expect(text).to_contain_text("your jampot join runs 9.9.9 (page API 999)")
+        expect(text).to_contain_text(f"the share runs {VERSION}")
+        expect(page.locator("#jampot #connection")).to_have_attribute(
+            "data-state", "grey"
+        )
+        page.wait_for_timeout(500)
+        assert not any("/_jampot/api/events" in url for url in requested), requested

@@ -1,19 +1,775 @@
-const BASE = new URL("./", import.meta.url);
-const COMMENTS_URL = new URL("api/comments", BASE);
-const STATUS_URL = new URL("api/status", BASE);
-const EVENTS_URL = new URL("api/events", BASE);
-const LIVE_REVISION = new URL(import.meta.url).searchParams.get("live");
-const HOST_ID = "jampot";
-const MAX_SELECTED_TEXT = 2000;
-const MAX_TEXT = 4000;
-const MAX_HTML = 8000;
-const DISMISSED_KEY = "jampot-dismissed-v1";
-const OUTBOX_KEY = "jampot-outbox-v1";
-const MAX_OUTBOX = 20;
-const WATCHDOG_MS = 35000;
-const AGENT_TARGET_PREFIX = "jampot-agent:";
+// Generated from client/src by `npm run build`; do not edit.
 
-const styles = `
+// client/src/config.ts
+var SCRIPT_URL = new URL(import.meta.url);
+var BASE = new URL("./", SCRIPT_URL);
+var COMMENTS_URL = new URL("api/comments", BASE);
+var STATUS_URL = new URL("api/status", BASE);
+var EVENTS_URL = new URL("api/events", BASE);
+var LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
+var SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
+var HOST_ID = "jampot";
+var MAX_SELECTED_TEXT = 2e3;
+var DISMISSED_KEY = "jampot-dismissed-v1";
+var OUTBOX_KEY = "jampot-outbox-v1";
+var MAX_OUTBOX = 20;
+var WATCHDOG_MS = 35e3;
+var AGENT_TARGET_PREFIX = "jampot-agent:";
+
+// client/src/capture.ts
+function truncate(value, length) {
+  return value.length <= length ? value : `${value.slice(0, length - 1)}…`;
+}
+function normalizeText(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+function selectedTextFor(target) {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  try {
+    if (!selection.getRangeAt(0).intersectsNode(target)) return null;
+  } catch {
+    return null;
+  }
+  const selected = normalizeText(selection.toString());
+  return selected ? truncate(selected, MAX_SELECTED_TEXT) : null;
+}
+function uniqueIdSelector(element) {
+  if (!element.id) return null;
+  const selector = `#${CSS.escape(element.id)}`;
+  return document.querySelectorAll(selector).length === 1 ? selector : null;
+}
+function cssSelector(target) {
+  const parts = [];
+  let element = target;
+  while (element) {
+    const idSelector = uniqueIdSelector(element);
+    if (idSelector) {
+      parts.unshift(idSelector);
+      break;
+    }
+    let part = element.tagName.toLowerCase();
+    const parent = element.parentElement;
+    if (parent) {
+      const tagName = element.tagName;
+      const sameTag = Array.from(parent.children).filter(
+        (sibling) => sibling.tagName === tagName
+      );
+      if (sameTag.length > 1) part += `:nth-of-type(${sameTag.indexOf(element) + 1})`;
+    }
+    parts.unshift(part);
+    element = parent;
+  }
+  return parts.join(" > ");
+}
+function captureTarget(target, selector = cssSelector(target)) {
+  return {
+    element: target,
+    page: window.location.href,
+    selector,
+    selectedText: selectedTextFor(target)
+  };
+}
+function capturePageTarget() {
+  return {
+    element: null,
+    page: window.location.href,
+    selector: "",
+    selectedText: selectedTextFor(document.documentElement)
+  };
+}
+function samePage(page) {
+  if (page === void 0) return true;
+  try {
+    const url = new URL(page);
+    return url.pathname === window.location.pathname && url.search === window.location.search;
+  } catch {
+    return false;
+  }
+}
+
+// client/src/answers.ts
+var GAP = 8;
+var EDGE = 8;
+function loadDismissed() {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]");
+    return new Set(
+      Array.isArray(stored) ? stored.filter((id) => typeof id === "string") : []
+    );
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+var Answers = class {
+  constructor(ui) {
+    this.ui = ui;
+    const schedule = () => {
+      this.schedulePlacement();
+    };
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    new MutationObserver(schedule).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true
+    });
+  }
+  ui;
+  shown = /* @__PURE__ */ new Map();
+  dismissed = loadDismissed();
+  placementFrame;
+  highlightTimer;
+  /** The node of answer `id`, for comments on an answer. */
+  node(id) {
+    return this.shown.get(id)?.node ?? null;
+  }
+  /** The element a selector names: on the page, or one of the answers. */
+  targetFor(selector) {
+    if (selector.startsWith(AGENT_TARGET_PREFIX)) {
+      return this.node(selector.slice(AGENT_TARGET_PREFIX.length));
+    }
+    return document.querySelector(selector);
+  }
+  add(answer) {
+    if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
+    const node = document.createElement("article");
+    node.className = "agent-message";
+    node.dataset.messageId = answer.id;
+    const close = document.createElement("button");
+    close.className = "agent-dismiss";
+    close.type = "button";
+    close.setAttribute("aria-label", "Dismiss agent message");
+    close.textContent = "×";
+    const body = document.createElement("div");
+    body.className = "agent-body";
+    body.innerHTML = answer.html;
+    const unavailable = document.createElement("div");
+    unavailable.className = "agent-unavailable";
+    unavailable.textContent = "Target unavailable";
+    unavailable.hidden = true;
+    node.append(close, body, unavailable);
+    const anchor = answer.anchor !== void 0 && samePage(answer.page) ? answer.anchor : null;
+    if (anchor !== null) {
+      node.classList.add("has-anchor");
+      node.tabIndex = 0;
+      node.setAttribute("aria-label", "Agent message; activate to show its anchor");
+      node.addEventListener("click", (event) => {
+        const interactive = event.target instanceof Element ? event.target.closest("a, button") : null;
+        const selection = window.getSelection();
+        if (interactive || selection && !selection.isCollapsed) return;
+        this.reveal(anchor);
+      });
+      node.addEventListener("keydown", (event) => {
+        if (event.target !== node || !["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+        this.reveal(anchor);
+      });
+    }
+    for (const link of body.querySelectorAll("a")) {
+      const href = link.getAttribute("href") ?? "";
+      if (!href.toLowerCase().startsWith("jampot:")) {
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+      }
+    }
+    body.addEventListener("click", (event) => {
+      const link = event.target instanceof Element ? event.target.closest("a") : null;
+      if (link) this.followElementLink(link, event);
+    });
+    close.addEventListener("click", () => {
+      this.dismissed.add(answer.id);
+      this.persistDismissed();
+      this.shown.delete(answer.id);
+      node.remove();
+      this.schedulePlacement();
+    });
+    this.shown.set(answer.id, { node, unavailable, anchor });
+    this.schedulePlacement();
+  }
+  persistDismissed() {
+    try {
+      sessionStorage.setItem(DISMISSED_KEY, JSON.stringify(Array.from(this.dismissed)));
+    } catch {
+    }
+  }
+  /** The element an anchored answer belongs next to; undefined when it is not shown. */
+  anchorTarget(anchor) {
+    try {
+      const target = this.targetFor(anchor);
+      if (!target || target === this.ui.host || target.getClientRects().length === 0) {
+        return void 0;
+      }
+      return target;
+    } catch {
+      return void 0;
+    }
+  }
+  schedulePlacement() {
+    if (this.placementFrame !== void 0) return;
+    this.placementFrame = requestAnimationFrame(() => {
+      this.place();
+    });
+  }
+  place() {
+    this.placementFrame = void 0;
+    const { agentAnchored, agentGeneral } = this.ui;
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of this.shown.values()) {
+      const target = entry.anchor === null ? void 0 : this.anchorTarget(entry.anchor);
+      if (target !== void 0) {
+        entry.unavailable.hidden = true;
+        if (entry.node.parentElement !== agentAnchored) agentAnchored.append(entry.node);
+        const group = groups.get(target) ?? [];
+        group.push(entry.node);
+        groups.set(target, group);
+      } else {
+        entry.unavailable.hidden = entry.anchor === null;
+        if (entry.node.parentElement !== agentGeneral) agentGeneral.append(entry.node);
+        entry.node.style.removeProperty("left");
+        entry.node.style.removeProperty("top");
+      }
+    }
+    const occupied = Array.from(agentGeneral.children).map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    });
+    const overlaps = (candidate) => occupied.some((rect) => !(candidate.right + GAP <= rect.left || candidate.left >= rect.right + GAP || candidate.bottom + GAP <= rect.top || candidate.top >= rect.bottom + GAP));
+    const placement = (rect, width, height, desiredTop) => {
+      const maximumLeft = window.innerWidth - width - EDGE;
+      const right = Math.max(EDGE, Math.min(rect.right + GAP, maximumLeft));
+      const left = Math.max(EDGE, Math.min(rect.left - width - GAP, maximumLeft));
+      const horizontal = rect.right + GAP + width <= window.innerWidth - EDGE ? [right, left] : [left, right];
+      const maximumTop = window.innerHeight - height - EDGE;
+      const vertical = [
+        desiredTop,
+        ...occupied.flatMap((placed) => [placed.bottom + GAP, placed.top - height - GAP])
+      ].map((top) => Math.max(EDGE, Math.min(top, maximumTop)));
+      const candidates = horizontal.flatMap((candidateLeft, side) => vertical.map((candidateTop) => ({
+        left: candidateLeft,
+        right: candidateLeft + width,
+        top: candidateTop,
+        bottom: candidateTop + height,
+        score: Math.abs(candidateTop - desiredTop) * 2 + side
+      }))).sort((first, second) => first.score - second.score);
+      const fallback = { left: EDGE, right: EDGE + width, top: desiredTop, bottom: desiredTop + height };
+      return candidates.find((candidate) => !overlaps(candidate)) ?? candidates[0] ?? fallback;
+    };
+    for (const [target, nodes] of groups) {
+      const rect = target.getBoundingClientRect();
+      const heights = nodes.map((node) => node.offsetHeight);
+      const totalHeight = heights.reduce((total, height) => total + height, 0) + GAP * Math.max(0, nodes.length - 1);
+      let top = Math.max(EDGE, Math.min(rect.top, window.innerHeight - totalHeight - EDGE));
+      for (const [index, node] of nodes.entries()) {
+        const placed = placement(rect, node.offsetWidth, heights[index] ?? 0, top);
+        node.style.left = `${placed.left}px`;
+        node.style.top = `${placed.top}px`;
+        occupied.push(placed);
+        top = placed.bottom + GAP;
+      }
+    }
+  }
+  showHighlight(target) {
+    const { messageHighlight } = this.ui;
+    const rect = target.getBoundingClientRect();
+    messageHighlight.style.display = "block";
+    messageHighlight.style.left = `${rect.left}px`;
+    messageHighlight.style.top = `${rect.top}px`;
+    messageHighlight.style.width = `${rect.width}px`;
+    messageHighlight.style.height = `${rect.height}px`;
+    if (this.highlightTimer !== void 0) clearTimeout(this.highlightTimer);
+    this.highlightTimer = window.setTimeout(() => {
+      messageHighlight.style.display = "none";
+    }, 1800);
+  }
+  /** Scrolls to the element `selector` names and highlights it briefly. */
+  reveal(selector) {
+    let target;
+    try {
+      target = this.targetFor(selector);
+    } catch {
+      target = null;
+    }
+    if (!target || target.getClientRects().length === 0) {
+      this.ui.showToast("Element is unavailable");
+      return;
+    }
+    const found = target;
+    found.scrollIntoView({ block: "center", inline: "nearest" });
+    requestAnimationFrame(() => {
+      this.showHighlight(found);
+    });
+  }
+  followElementLink(link, event) {
+    const href = link.getAttribute("href") ?? "";
+    if (!href.toLowerCase().startsWith("jampot:")) return;
+    event.preventDefault();
+    let selector;
+    try {
+      selector = decodeURIComponent(href.slice("jampot:".length));
+    } catch {
+      this.ui.showToast("Element link is invalid");
+      return;
+    }
+    this.reveal(selector);
+  }
+};
+
+// client/src/generated/api.ts
+var API_VERSION = 1;
+
+// client/src/api.ts
+var SubmitError = class extends Error {
+  constructor(message, unsent) {
+    super(message);
+    this.unsent = unsent;
+  }
+  unsent;
+};
+function isObject(value) {
+  return typeof value === "object" && value !== null;
+}
+function errorMessage(body, fallback) {
+  return isObject(body) && typeof body.error === "string" ? body.error : fallback;
+}
+async function submit(submission) {
+  let response;
+  try {
+    response = await fetch(COMMENTS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(submission)
+    });
+  } catch {
+    throw new SubmitError("jampot join is not reachable", true);
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new SubmitError(
+      errorMessage(body, `request failed (${response.status})`),
+      response.status === 503
+    );
+  }
+  return body;
+}
+async function fetchStatus() {
+  try {
+    const response = await fetch(STATUS_URL);
+    if (!response.ok) return null;
+    return checkVersion(await response.json());
+  } catch {
+    return null;
+  }
+}
+function checkVersion(body) {
+  const api = isObject(body) ? body.api : void 0;
+  if (api === API_VERSION) return { status: body };
+  const share = SHARE_VERSION ?? "unknown";
+  const joiner = isObject(body) && typeof body.version === "string" ? body.version : "another";
+  const incompatible = typeof api === "number" ? `jampot versions do not match: the share runs ${share} (page API ${API_VERSION}), your jampot join runs ${joiner} (page API ${api}). Use the same jampot version on both sides and join again.` : `Your jampot join is older than the share's jampot ${share} and cannot serve this page. Use the same jampot version on both sides and join again.`;
+  return { incompatible };
+}
+function openEvents() {
+  return new EventSource(EVENTS_URL);
+}
+function parseEvent(data) {
+  try {
+    const event = JSON.parse(data);
+    return isObject(event) && typeof event.type === "string" ? event : null;
+  } catch {
+    return null;
+  }
+}
+
+// client/src/connection.ts
+var Connection = class {
+  constructor(handlers) {
+    this.handlers = handlers;
+  }
+  handlers;
+  events = null;
+  lastEvent = Date.now();
+  streamOpen = false;
+  shareConnected = false;
+  statusLine = null;
+  incompatible = null;
+  colour = "amber";
+  watchdog;
+  /** Checks the joiner's page API, then connects the event stream. */
+  async start() {
+    const checked = await fetchStatus();
+    if (checked !== null && "incompatible" in checked) {
+      this.refuse(checked.incompatible);
+      return;
+    }
+    this.connect();
+    this.watchdog = window.setInterval(() => {
+      if (Date.now() - this.lastEvent < WATCHDOG_MS) return;
+      this.events?.close();
+      this.streamOpen = false;
+      this.render();
+      this.lastEvent = Date.now();
+      this.connect();
+    }, 5e3);
+  }
+  get view() {
+    let colour = "green";
+    let text = "connected";
+    if (this.incompatible !== null) {
+      colour = "grey";
+      text = this.incompatible;
+    } else if (!this.streamOpen) {
+      colour = "amber";
+      text = "Reconnecting to jampot join…";
+    } else if (!this.shareConnected) {
+      colour = "grey";
+      text = "The share is unreachable";
+    } else if (this.statusLine !== null) {
+      colour = "grey";
+      text = this.statusLine;
+    }
+    return { colour, text, incompatible: this.incompatible };
+  }
+  /** Whether comments can go out now. */
+  get connected() {
+    return this.colour === "green";
+  }
+  refuse(reason) {
+    this.incompatible = reason;
+    this.events?.close();
+    this.events = null;
+    if (this.watchdog !== void 0) clearInterval(this.watchdog);
+    this.render();
+  }
+  render() {
+    const view = this.view;
+    const recovered = view.colour === "green" && this.colour !== "green";
+    this.colour = view.colour;
+    this.handlers.state(view, recovered);
+  }
+  /** Reads `api/status` again (on every reconnection and after deliveries). */
+  async refresh() {
+    const checked = await fetchStatus();
+    if (checked === null) return;
+    if ("incompatible" in checked) {
+      this.refuse(checked.incompatible);
+      return;
+    }
+    const status = checked.status;
+    this.shareConnected = status.connected;
+    this.statusLine = status.status;
+    this.handlers.status(status);
+    this.render();
+  }
+  connect() {
+    if (this.incompatible !== null) return;
+    const events = openEvents();
+    this.events = events;
+    events.addEventListener("open", () => {
+      this.streamOpen = true;
+      this.lastEvent = Date.now();
+      this.render();
+      void this.refresh();
+    });
+    events.addEventListener("error", () => {
+      this.streamOpen = false;
+      this.render();
+    });
+    events.addEventListener("message", (message) => {
+      this.lastEvent = Date.now();
+      const event = parseEvent(message.data);
+      if (event === null) return;
+      switch (event.type) {
+        case "share":
+          this.shareConnected = event.connected;
+          this.render();
+          if (event.connected) void this.refresh();
+          break;
+        case "status":
+          this.statusLine = event.line;
+          this.render();
+          break;
+        case "delivered":
+          void this.refresh();
+          break;
+        case "answer":
+        case "reload":
+        case "presence":
+        case "ping":
+          break;
+      }
+      this.handlers.event(event);
+    });
+  }
+};
+
+// client/src/dialog.ts
+var ELEMENT_LABEL = "Comment:";
+var ANSWER_LABEL = "Comment on agent response:";
+var CommentDialog = class {
+  constructor(ui, outbox) {
+    this.ui = ui;
+    this.outbox = outbox;
+    const { dialog, form, textarea, cancel } = ui;
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      this.submit();
+    });
+    textarea.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+    cancel.addEventListener("click", () => {
+      this.close();
+    });
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      this.close();
+    });
+    dialog.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = dialog.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) this.close();
+    });
+    dialog.addEventListener("close", () => {
+      this.stopTracking();
+      ui.highlight.style.display = "none";
+    });
+  }
+  ui;
+  outbox;
+  captured = null;
+  /** A live reload waiting for the dialog to close. */
+  pendingReload = false;
+  get open() {
+    return this.ui.dialog.open;
+  }
+  /** Reloads now, or when the dialog closes if it is open. */
+  reloadWhenClosed() {
+    if (this.ui.dialog.open) {
+      this.pendingReload = true;
+      this.ui.reloadNotice.hidden = false;
+    } else {
+      window.location.reload();
+    }
+  }
+  openElement(target, x, y, selector, label = ELEMENT_LABEL) {
+    this.show(captureTarget(target, selector), x, y, label);
+  }
+  openPage() {
+    this.show(capturePageTarget(), window.innerWidth / 2, window.innerHeight / 3, ELEMENT_LABEL);
+  }
+  updateHighlight = () => {
+    const { highlight, dialog } = this.ui;
+    const element = this.captured?.element;
+    if (!dialog.open || !element?.isConnected) {
+      highlight.style.display = "none";
+      return;
+    }
+    const rect = element.getBoundingClientRect();
+    highlight.style.display = "block";
+    highlight.style.left = `${rect.left}px`;
+    highlight.style.top = `${rect.top}px`;
+    highlight.style.width = `${rect.width}px`;
+    highlight.style.height = `${rect.height}px`;
+  };
+  stopTracking() {
+    window.removeEventListener("resize", this.updateHighlight);
+    window.removeEventListener("scroll", this.updateHighlight, true);
+  }
+  place(x, y) {
+    const { dialog } = this.ui;
+    const gap = 12;
+    const width = dialog.offsetWidth;
+    const height = dialog.offsetHeight;
+    dialog.style.left = `${Math.max(gap, Math.min(x + gap, window.innerWidth - width - gap))}px`;
+    dialog.style.top = `${Math.max(gap, Math.min(y + gap, window.innerHeight - height - gap))}px`;
+  }
+  show(captured, x, y, label) {
+    const ui = this.ui;
+    if (ui.dialog.open) {
+      ui.textarea.focus();
+      return;
+    }
+    this.captured = captured;
+    ui.dialogLabel.textContent = label;
+    ui.selectionPreview.hidden = captured.selectedText === null;
+    ui.selectionText.textContent = captured.selectedText ?? "";
+    ui.status.textContent = "";
+    ui.reloadNotice.hidden = !this.pendingReload;
+    ui.textarea.value = "";
+    ui.dialog.showModal();
+    this.place(x, y);
+    this.updateHighlight();
+    window.addEventListener("resize", this.updateHighlight);
+    window.addEventListener("scroll", this.updateHighlight, true);
+    ui.textarea.focus();
+  }
+  close() {
+    const ui = this.ui;
+    if (ui.dialog.open) ui.dialog.close();
+    this.stopTracking();
+    ui.highlight.style.display = "none";
+    this.captured = null;
+    ui.selectionPreview.hidden = true;
+    ui.selectionText.textContent = "";
+    ui.status.textContent = "";
+    ui.textarea.value = "";
+    if (this.pendingReload) window.location.reload();
+  }
+  submit() {
+    const ui = this.ui;
+    const captured = this.captured;
+    if (!captured) return;
+    const comment = ui.textarea.value.trim();
+    if (!comment) {
+      ui.status.textContent = "Enter a comment before queueing it.";
+      ui.textarea.focus();
+      return;
+    }
+    ui.send.disabled = true;
+    ui.cancel.disabled = true;
+    ui.status.textContent = "Queueing…";
+    const draft = {
+      page: captured.page,
+      selector: captured.selector,
+      selectedText: captured.selectedText,
+      comment
+    };
+    const ref = crypto.randomUUID();
+    const at = Date.now();
+    submit({ ref, ...draft }).then((queued) => {
+      this.outbox.add({ draft, ref, id: queued.id, state: "queued", at });
+      this.outbox.onPending(queued.pending);
+      this.close();
+      ui.showToast(`Comment queued · ${queued.pending} pending`);
+    }).catch((error) => {
+      if (error instanceof SubmitError && error.unsent) {
+        this.outbox.add({ draft, ref, id: null, state: "unsent", at });
+        this.close();
+        ui.showToast("Not sent: kept in the page, sent when the connection is back");
+        return;
+      }
+      ui.status.textContent = error instanceof Error ? error.message : "Could not queue comment";
+      ui.textarea.focus();
+    }).finally(() => {
+      ui.send.disabled = false;
+      ui.cancel.disabled = false;
+    });
+  }
+};
+
+// client/src/outbox.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function parseDraft(value) {
+  if (!isRecord(value)) return null;
+  const { page, selector, selectedText, comment } = value;
+  if (typeof page !== "string" || typeof selector !== "string" || typeof comment !== "string") {
+    return null;
+  }
+  return {
+    page,
+    selector,
+    selectedText: typeof selectedText === "string" ? selectedText : null,
+    comment
+  };
+}
+function parseState(value) {
+  switch (value) {
+    case "queued":
+    case "delivered":
+      return value;
+    default:
+      return "unsent";
+  }
+}
+function parseEntry(value) {
+  if (!isRecord(value)) return null;
+  const draft = parseDraft(value.draft);
+  if (draft === null) return null;
+  return {
+    draft,
+    ref: typeof value.ref === "string" ? value.ref : crypto.randomUUID(),
+    id: typeof value.id === "string" ? value.id : null,
+    state: parseState(value.state),
+    at: typeof value.at === "number" ? value.at : Date.now()
+  };
+}
+function load() {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(OUTBOX_KEY) ?? "[]");
+    if (!Array.isArray(stored)) return [];
+    return stored.map(parseEntry).filter((entry) => entry !== null);
+  } catch {
+    return [];
+  }
+}
+var Outbox = class {
+  entries = load();
+  /** Called after every change, to redraw. */
+  onChange = () => void 0;
+  /** Called with the joiner's pending count after a comment was queued. */
+  onPending = () => void 0;
+  add(entry) {
+    this.entries.push(entry);
+    this.changed();
+  }
+  /** Persists the list (bounded) and redraws. */
+  changed() {
+    while (this.entries.length > MAX_OUTBOX) {
+      const delivered = this.entries.findIndex((entry) => entry.state === "delivered");
+      this.entries.splice(delivered === -1 ? 0 : delivered, 1);
+    }
+    try {
+      sessionStorage.setItem(OUTBOX_KEY, JSON.stringify(this.entries));
+    } catch {
+    }
+    this.onChange();
+  }
+  async resend(entry) {
+    if (entry.state !== "unsent") return;
+    entry.state = "sending";
+    this.changed();
+    try {
+      const queued = await submit({ ref: entry.ref, ...entry.draft });
+      entry.id = queued.id;
+      entry.state = "queued";
+      this.onPending(queued.pending);
+    } catch {
+      entry.state = "unsent";
+    }
+    this.changed();
+  }
+  async resendAll() {
+    for (const entry of this.entries.filter((candidate) => candidate.state === "unsent")) {
+      await this.resend(entry);
+    }
+  }
+  markDelivered(ids) {
+    const delivered = new Set(ids);
+    for (const entry of this.entries) {
+      if (entry.state === "queued" && entry.id !== null && delivered.has(entry.id)) {
+        entry.state = "delivered";
+      }
+    }
+    this.changed();
+  }
+  /** Every queued comment not in `undelivered` was delivered meanwhile. */
+  markDeliveredExcept(undelivered) {
+    const held = new Set(undelivered);
+    this.markDelivered(
+      this.entries.filter((entry) => entry.state === "queued" && entry.id !== null && !held.has(entry.id)).map((entry) => entry.id ?? "")
+    );
+  }
+};
+
+// client/src/styles.ts
+var styles = `
   :host {
     all: initial;
     color-scheme: light;
@@ -302,272 +1058,139 @@ const styles = `
   button:disabled { cursor: wait; opacity: 0.55; }
 `;
 
-function truncate(value, length) {
-  return value.length <= length ? value : `${value.slice(0, length - 1)}…`;
-}
-
-function normalizeText(value) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function roundCssPixel(value) {
-  return Math.round(value * 100) / 100;
-}
-
-function point(x, y) {
-  return { x: roundCssPixel(x), y: roundCssPixel(y) };
-}
-
-function selectedTextFor(target) {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
-  try {
-    if (!selection.getRangeAt(0).intersectsNode(target)) return null;
-  } catch {
-    return null;
+// client/src/ui.ts
+var MARKUP = `
+  <style>${styles}</style>
+  <div id="highlight" aria-hidden="true"></div>
+  <div id="message-highlight" aria-hidden="true"></div>
+  <div id="bar">
+    <div id="connection" data-state="amber" role="img" aria-label="Connecting" title="Connecting"></div>
+    <div id="badge" role="status" aria-live="polite">0 queued</div>
+  </div>
+  <div id="outbox" hidden>
+    <div id="connection-text" role="status" hidden></div>
+    <ul id="outbox-list"></ul>
+  </div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="agent-log" role="log" aria-live="polite" aria-relevant="additions">
+    <div id="agent-general"></div>
+    <div id="agent-anchored"></div>
+  </div>
+  <dialog id="jampot-dialog" aria-labelledby="dialog-label">
+    <form>
+      <label id="dialog-label" for="comment">Comment:</label>
+      <div id="selection-preview" hidden>
+        <div id="selection-label">Selected text</div>
+        <blockquote id="selection-text"></blockquote>
+      </div>
+      <textarea id="comment" name="comment" maxlength="10000" required></textarea>
+      <div id="status" role="alert"></div>
+      <div id="reload-notice" role="status" hidden>
+        Files changed. Reloading when this edit closes.
+      </div>
+      <div class="actions">
+        <button id="cancel" type="button">Cancel</button>
+        <button id="send" type="submit">Queue comment</button>
+      </div>
+    </form>
+  </dialog>
+`;
+var Ui = class _Ui {
+  host;
+  shadow;
+  highlight;
+  messageHighlight;
+  badge;
+  connection;
+  outbox;
+  connectionText;
+  outboxList;
+  toast;
+  agentGeneral;
+  agentAnchored;
+  dialog;
+  dialogLabel;
+  form;
+  selectionPreview;
+  selectionText;
+  textarea;
+  status;
+  reloadNotice;
+  cancel;
+  send;
+  toastTimer;
+  /** Adds the UI to the page; null when it is there already. */
+  static install() {
+    if (document.getElementById(HOST_ID)) return null;
+    const host = document.createElement("div");
+    host.id = HOST_ID;
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = MARKUP;
+    document.body.append(host);
+    return new _Ui(host, shadow);
   }
-  const selected = normalizeText(selection.toString());
-  return selected ? truncate(selected, MAX_SELECTED_TEXT) : null;
-}
-
-function elementText(target) {
-  const raw = target instanceof HTMLElement ? target.innerText : target.textContent;
-  return truncate(normalizeText(raw ?? ""), MAX_TEXT);
-}
-
-function uniqueIdSelector(element) {
-  if (!element.id) return null;
-  const selector = `#${CSS.escape(element.id)}`;
-  return document.querySelectorAll(selector).length === 1 ? selector : null;
-}
-
-function cssSelector(target) {
-  const parts = [];
-  let element = target;
-  while (element) {
-    const idSelector = uniqueIdSelector(element);
-    if (idSelector) {
-      parts.unshift(idSelector);
-      break;
-    }
-    let part = element.tagName.toLowerCase();
-    const parent = element.parentElement;
-    if (parent) {
-      const sameTag = Array.from(parent.children).filter(
-        (sibling) => sibling.tagName === element.tagName,
-      );
-      if (sameTag.length > 1) part += `:nth-of-type(${sameTag.indexOf(element) + 1})`;
-    }
-    parts.unshift(part);
-    element = parent;
+  constructor(host, shadow) {
+    const find = (selector, type) => {
+      const element = shadow.querySelector(selector);
+      if (!(element instanceof type)) throw new Error(`jampot: missing ${selector}`);
+      return element;
+    };
+    this.host = host;
+    this.shadow = shadow;
+    this.highlight = find("#highlight", HTMLDivElement);
+    this.messageHighlight = find("#message-highlight", HTMLDivElement);
+    this.badge = find("#badge", HTMLDivElement);
+    this.connection = find("#connection", HTMLDivElement);
+    this.outbox = find("#outbox", HTMLDivElement);
+    this.connectionText = find("#connection-text", HTMLDivElement);
+    this.outboxList = find("#outbox-list", HTMLUListElement);
+    this.toast = find("#toast", HTMLDivElement);
+    this.agentGeneral = find("#agent-general", HTMLDivElement);
+    this.agentAnchored = find("#agent-anchored", HTMLDivElement);
+    this.dialog = find("dialog", HTMLDialogElement);
+    this.dialogLabel = find("#dialog-label", HTMLLabelElement);
+    this.form = find("form", HTMLFormElement);
+    this.selectionPreview = find("#selection-preview", HTMLDivElement);
+    this.selectionText = find("#selection-text", HTMLQuoteElement);
+    this.textarea = find("textarea", HTMLTextAreaElement);
+    this.status = find("#status", HTMLDivElement);
+    this.reloadNotice = find("#reload-notice", HTMLDivElement);
+    this.cancel = find("#cancel", HTMLButtonElement);
+    this.send = find("#send", HTMLButtonElement);
   }
-  return parts.join(" > ");
-}
-
-function captureTarget(target, event, selector = cssSelector(target)) {
-  const rect = target.getBoundingClientRect();
-  return {
-    element: target,
-    context: {
-      page: { url: window.location.href, title: document.title },
-      target: {
-        selector,
-        tag: target.tagName.toLowerCase(),
-        id: target.id || null,
-        classes: Array.from(target.classList),
-        selectedText: selectedTextFor(target),
-        text: elementText(target),
-        html: truncate(target.outerHTML, MAX_HTML),
-      },
-      pointer: {
-        page: point(event.pageX, event.pageY),
-        viewport: point(event.clientX, event.clientY),
-        target: point(event.clientX - rect.left, event.clientY - rect.top),
-        scroll: point(window.scrollX, window.scrollY),
-        viewportSize: {
-          width: roundCssPixel(window.innerWidth),
-          height: roundCssPixel(window.innerHeight),
-        },
-        targetSize: {
-          width: roundCssPixel(rect.width),
-          height: roundCssPixel(rect.height),
-        },
-        devicePixelRatio: roundCssPixel(window.devicePixelRatio),
-      },
-    },
-  };
-}
-
-function capturePageTarget() {
-  const viewport = point(window.innerWidth / 2, window.innerHeight / 2);
-  return {
-    element: null,
-    context: {
-      page: { url: window.location.href, title: document.title },
-      target: {
-        selector: "",
-        tag: "page",
-        id: null,
-        classes: [],
-        selectedText: selectedTextFor(document.documentElement),
-        text: "",
-        html: "",
-      },
-      pointer: {
-        page: point(viewport.x + window.scrollX, viewport.y + window.scrollY),
-        viewport,
-        target: point(0, 0),
-        scroll: point(window.scrollX, window.scrollY),
-        viewportSize: {
-          width: roundCssPixel(window.innerWidth),
-          height: roundCssPixel(window.innerHeight),
-        },
-        targetSize: { width: 0, height: 0 },
-        devicePixelRatio: roundCssPixel(window.devicePixelRatio),
-      },
-    },
-  };
-}
-
-// Whether an answer's comment was made on this page (hosts differ per
-// joiner, so only the path and query count).
-function samePage(page) {
-  if (typeof page !== "string") return true;
-  try {
-    const url = new URL(page);
-    return url.pathname === window.location.pathname && url.search === window.location.search;
-  } catch {
-    return false;
+  showToast(message) {
+    this.toast.textContent = message;
+    this.toast.hidden = false;
+    if (this.toastTimer !== void 0) clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => {
+      this.toast.hidden = true;
+    }, 2400);
   }
-}
+  setPending(pending) {
+    this.badge.textContent = `${pending} queued`;
+    this.badge.dataset.pending = String(pending);
+  }
+};
 
-function responseMessage(value, fallback) {
-  return value && typeof value === "object" && typeof value.error === "string"
-    ? value.error
-    : fallback;
+// client/src/main.ts
+function stateText(entry) {
+  return entry.state === "unsent" ? "not sent" : entry.state;
 }
-
+function isEditing(event) {
+  return event.composedPath().some(
+    (node) => node instanceof HTMLElement && (node.isContentEditable || node.matches("input, textarea, select"))
+  );
+}
 function install() {
-  if (document.getElementById(HOST_ID)) return;
-  const host = document.createElement("div");
-  host.id = HOST_ID;
-  const shadow = host.attachShadow({ mode: "open" });
-  shadow.innerHTML = `
-    <style>${styles}</style>
-    <div id="highlight" aria-hidden="true"></div>
-    <div id="message-highlight" aria-hidden="true"></div>
-    <div id="bar">
-      <div id="connection" data-state="amber" role="img" aria-label="Connecting" title="Connecting"></div>
-      <div id="badge" role="status" aria-live="polite">0 queued</div>
-    </div>
-    <div id="outbox" hidden>
-      <div id="connection-text" role="status" hidden></div>
-      <ul id="outbox-list"></ul>
-    </div>
-    <div id="toast" role="status" aria-live="polite" hidden></div>
-    <div id="agent-log" role="log" aria-live="polite" aria-relevant="additions">
-      <div id="agent-general"></div>
-      <div id="agent-anchored"></div>
-    </div>
-    <dialog id="jampot-dialog" aria-labelledby="dialog-label">
-      <form>
-        <label id="dialog-label" for="comment">Comment:</label>
-        <div id="selection-preview" hidden>
-          <div id="selection-label">Selected text</div>
-          <blockquote id="selection-text"></blockquote>
-        </div>
-        <textarea id="comment" name="comment" maxlength="10000" required></textarea>
-        <div id="status" role="alert"></div>
-        <div id="reload-notice" role="status" hidden>
-          Files changed. Reloading when this edit closes.
-        </div>
-        <div class="actions">
-          <button id="cancel" type="button">Cancel</button>
-          <button id="send" type="submit">Queue comment</button>
-        </div>
-      </form>
-    </dialog>
-  `;
-  document.body.append(host);
-
-  const highlight = shadow.querySelector("#highlight");
-  const messageHighlight = shadow.querySelector("#message-highlight");
-  const badge = shadow.querySelector("#badge");
-  const connection = shadow.querySelector("#connection");
-  const outbox = shadow.querySelector("#outbox");
-  const connectionText = shadow.querySelector("#connection-text");
-  const outboxList = shadow.querySelector("#outbox-list");
-  const toast = shadow.querySelector("#toast");
-  const agentGeneral = shadow.querySelector("#agent-general");
-  const agentAnchored = shadow.querySelector("#agent-anchored");
-  const dialog = shadow.querySelector("dialog");
-  const dialogLabel = shadow.querySelector("#dialog-label");
-  const form = shadow.querySelector("form");
-  const selectionPreview = shadow.querySelector("#selection-preview");
-  const selectionText = shadow.querySelector("#selection-text");
-  const textarea = shadow.querySelector("textarea");
-  const status = shadow.querySelector("#status");
-  const reloadNotice = shadow.querySelector("#reload-notice");
-  const cancel = shadow.querySelector("#cancel");
-  const send = shadow.querySelector("#send");
-  if (
-    !highlight || !messageHighlight || !badge || !connection || !outbox ||
-    !connectionText || !outboxList || !toast || !agentGeneral ||
-    !agentAnchored || !dialog || !dialogLabel || !form || !selectionPreview ||
-    !selectionText || !textarea || !status || !reloadNotice || !cancel || !send
-  ) {
-    host.remove();
-    return;
-  }
-
-  let captured = null;
-  let toastTimer;
-  let pendingReload = false;
+  const ui = Ui.install();
+  if (ui === null) return;
+  const outbox = new Outbox();
+  const answers = new Answers(ui);
+  const dialog = new CommentDialog(ui, outbox);
   let reloadRevision = LIVE_REVISION;
-  let placementFrame;
-  let messageHighlightTimer;
-  const agentMessages = new Map();
-  const dismissed = (() => {
-    try {
-      const stored = JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]");
-      return new Set(Array.isArray(stored) ? stored.filter((id) => typeof id === "string") : []);
-    } catch {
-      return new Set();
-    }
-  })();
-
-  // Comments this page sent or could not send: `queued` (with the share's
-  // id), `delivered`, or `unsent` (kept, sent again when connected).
-  const loadOutbox = () => {
-    try {
-      const stored = JSON.parse(sessionStorage.getItem(OUTBOX_KEY) ?? "[]");
-      if (!Array.isArray(stored)) return [];
-      const entries = stored.filter((entry) => entry && typeof entry === "object" && entry.draft);
-      for (const entry of entries) {
-        if (typeof entry.ref !== "string") entry.ref = crypto.randomUUID();
-      }
-      return entries;
-    } catch {
-      return [];
-    }
-  };
-  let outboxEntries = loadOutbox();
-  let connectionState = "amber";
-  let sseOpen = false;
-  let shareConnected = false;
-  let statusLine = null;
-
+  let connectionView = { colour: "amber", text: "", incompatible: null };
   const renderOutbox = () => {
-    while (outboxEntries.length > MAX_OUTBOX) {
-      const delivered = outboxEntries.findIndex((entry) => entry.state === "delivered");
-      outboxEntries.splice(delivered === -1 ? 0 : delivered, 1);
-    }
-    try {
-      sessionStorage.setItem(OUTBOX_KEY, JSON.stringify(outboxEntries));
-    } catch {
-      // The list stays in this document if storage is unavailable.
-    }
-    outboxList.replaceChildren(...outboxEntries.map((entry) => {
+    ui.outboxList.replaceChildren(...outbox.entries.map((entry) => {
       const item = document.createElement("li");
       item.dataset.state = entry.state;
       const text = document.createElement("span");
@@ -575,619 +1198,101 @@ function install() {
       text.textContent = entry.draft.comment;
       const state = document.createElement("span");
       state.className = "state";
-      state.textContent = entry.state === "unsent" ? "not sent" : entry.state;
+      state.textContent = stateText(entry);
       item.append(text, state);
       if (entry.state === "unsent") {
         const again = document.createElement("button");
         again.type = "button";
         again.textContent = "send again";
-        again.addEventListener("click", () => { void resend(entry); });
+        again.addEventListener("click", () => {
+          void outbox.resend(entry);
+        });
         item.append(again);
       }
       return item;
     }));
-    outbox.hidden = outboxEntries.length === 0 && connectionText.hidden;
+    ui.outbox.hidden = outbox.entries.length === 0 && ui.connectionText.hidden;
   };
-
-  const renderConnection = () => {
-    let state = "green";
-    let text = "Connected";
-    if (!sseOpen) {
-      state = "amber";
-      text = "Reconnecting to jampot join…";
-    } else if (!shareConnected) {
-      state = "grey";
-      text = "The share is unreachable";
-    } else if (statusLine !== null) {
-      state = "grey";
-      text = statusLine;
-    }
-    const recovered = state === "green" && connectionState !== "green";
-    connectionState = state;
-    connection.dataset.state = state;
-    connection.title = text;
-    connection.setAttribute("aria-label", text);
-    connectionText.textContent = text;
-    connectionText.hidden = state === "green";
-    renderOutbox();
-    if (recovered) void resendAll();
+  outbox.onChange = renderOutbox;
+  outbox.onPending = (pending) => {
+    ui.setPending(pending);
   };
-
-  const setPending = (pending) => {
-    badge.textContent = `${pending} queued`;
-    badge.dataset.pending = String(pending);
+  const onRevision = (revision) => {
+    if (LIVE_REVISION === null || revision === null) return;
+    if (String(revision) === reloadRevision) return;
+    reloadRevision = String(revision);
+    dialog.reloadWhenClosed();
   };
-
-  const showToast = (message) => {
-    toast.textContent = message;
-    toast.hidden = false;
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast.hidden = true; }, 2400);
-  };
-
-  const persistDismissed = () => {
-    try {
-      sessionStorage.setItem(DISMISSED_KEY, JSON.stringify(Array.from(dismissed)));
-    } catch {
-      // Dismissal remains active for this document if storage is unavailable.
-    }
-  };
-
-  const targetForSelector = (selector) => {
-    if (selector.startsWith(AGENT_TARGET_PREFIX)) {
-      const id = selector.slice(AGENT_TARGET_PREFIX.length);
-      return agentMessages.get(id)?.node ?? null;
-    }
-    return document.querySelector(selector);
-  };
-
-  const anchorTarget = (anchor) => {
-    if (anchor === null) return null;
-    try {
-      const target = targetForSelector(anchor);
-      if (!target || target === host || target.getClientRects().length === 0) return undefined;
-      return target;
-    } catch {
-      return undefined;
-    }
-  };
-
-  const placeAgentMessages = () => {
-    placementFrame = undefined;
-    const anchoredGroups = new Map();
-    for (const entry of agentMessages.values()) {
-      const target = anchorTarget(entry.anchor);
-      if (target instanceof Element) {
-        entry.unavailable.hidden = true;
-        if (entry.node.parentElement !== agentAnchored) agentAnchored.append(entry.node);
-        const group = anchoredGroups.get(target) ?? [];
-        group.push(entry.node);
-        anchoredGroups.set(target, group);
-      } else {
-        entry.unavailable.hidden = entry.anchor === null;
-        if (entry.node.parentElement !== agentGeneral) agentGeneral.append(entry.node);
-        entry.node.style.removeProperty("left");
-        entry.node.style.removeProperty("top");
+  const connection = new Connection({
+    state(view, recovered) {
+      connectionView = view;
+      ui.connection.dataset.state = view.colour;
+      ui.connection.title = view.text;
+      ui.connection.setAttribute("aria-label", view.text);
+      ui.connectionText.textContent = view.text;
+      ui.connectionText.hidden = view.colour === "green";
+      renderOutbox();
+      if (recovered) void outbox.resendAll();
+    },
+    status(status) {
+      ui.setPending(status.pending);
+      outbox.markDeliveredExcept(status.undelivered);
+      for (const answer of status.answers) answers.add(answer);
+      onRevision(status.revision);
+    },
+    event(event) {
+      switch (event.type) {
+        case "answer":
+          answers.add(event);
+          break;
+        case "reload":
+          onRevision(event.revision);
+          break;
+        case "delivered":
+          outbox.markDelivered(event.ids);
+          break;
+        case "share":
+        case "status":
+        case "presence":
+        case "ping":
+          break;
       }
     }
-
-    const gap = 8;
-    const edge = 8;
-    const occupied = Array.from(agentGeneral.children).map((node) => {
-      const rect = node.getBoundingClientRect();
-      return {
-        left: rect.left,
-        right: rect.right,
-        top: rect.top,
-        bottom: rect.bottom,
-      };
-    });
-    const overlapsOccupied = (candidate) => occupied.some((rect) => !(
-      candidate.right + gap <= rect.left ||
-      candidate.left >= rect.right + gap ||
-      candidate.bottom + gap <= rect.top ||
-      candidate.top >= rect.bottom + gap
-    ));
-    const availablePlacement = (rect, width, height, desiredTop) => {
-      const maximumLeft = window.innerWidth - width - edge;
-      const right = Math.max(edge, Math.min(rect.right + gap, maximumLeft));
-      const left = Math.max(edge, Math.min(rect.left - width - gap, maximumLeft));
-      const horizontal = rect.right + gap + width <= window.innerWidth - edge
-        ? [right, left]
-        : [left, right];
-      const maximumTop = window.innerHeight - height - edge;
-      const vertical = [
-        desiredTop,
-        ...occupied.flatMap((placed) => [
-          placed.bottom + gap,
-          placed.top - height - gap,
-        ]),
-      ].map((top) => Math.max(edge, Math.min(top, maximumTop)));
-      const candidates = horizontal.flatMap((candidateLeft, side) =>
-        vertical.map((candidateTop) => ({
-          left: candidateLeft,
-          right: candidateLeft + width,
-          top: candidateTop,
-          bottom: candidateTop + height,
-          score: Math.abs(candidateTop - desiredTop) * 2 + side,
-        })))
-        .sort((first, second) => first.score - second.score);
-      return candidates.find((candidate) => !overlapsOccupied(candidate)) ?? candidates[0];
-    };
-    for (const [target, nodes] of anchoredGroups) {
-      const rect = target.getBoundingClientRect();
-      const heights = nodes.map((node) => node.offsetHeight);
-      const totalHeight = heights.reduce((total, height) => total + height, 0) +
-        gap * Math.max(0, nodes.length - 1);
-      let top = Math.max(edge, Math.min(rect.top, window.innerHeight - totalHeight - edge));
-      for (const [index, node] of nodes.entries()) {
-        const width = node.offsetWidth;
-        const height = heights[index] ?? 0;
-        const placement = availablePlacement(rect, width, height, top);
-        node.style.left = `${placement.left}px`;
-        node.style.top = `${placement.top}px`;
-        occupied.push(placement);
-        top = placement.bottom + gap;
-      }
-    }
-  };
-
-  const scheduleAgentPlacement = () => {
-    if (placementFrame !== undefined) return;
-    placementFrame = requestAnimationFrame(placeAgentMessages);
-  };
-
-  const showMessageHighlight = (target) => {
-    const rect = target.getBoundingClientRect();
-    messageHighlight.style.display = "block";
-    messageHighlight.style.left = `${rect.left}px`;
-    messageHighlight.style.top = `${rect.top}px`;
-    messageHighlight.style.width = `${rect.width}px`;
-    messageHighlight.style.height = `${rect.height}px`;
-    if (messageHighlightTimer) clearTimeout(messageHighlightTimer);
-    messageHighlightTimer = setTimeout(() => {
-      messageHighlight.style.display = "none";
-    }, 1800);
-  };
-
-  const revealTarget = (selector) => {
-    let target;
-    try {
-      target = targetForSelector(selector);
-    } catch {
-      target = null;
-    }
-    if (!target || target.getClientRects().length === 0) {
-      showToast("Element is unavailable");
-      return;
-    }
-    target.scrollIntoView({ block: "center", inline: "nearest" });
-    requestAnimationFrame(() => showMessageHighlight(target));
-  };
-
-  const followElementLink = (link, event) => {
-    const href = link.getAttribute("href") ?? "";
-    if (!href.toLowerCase().startsWith("jampot:")) return false;
-    event.preventDefault();
-    let selector;
-    try {
-      selector = decodeURIComponent(href.slice("jampot:".length));
-    } catch {
-      showToast("Element link is invalid");
-      return true;
-    }
-    revealTarget(selector);
-    return true;
-  };
-
-  const addAgentMessage = (data) => {
-    if (
-      !data || typeof data !== "object" || typeof data.id !== "string" ||
-      typeof data.html !== "string" ||
-      !(data.anchor === undefined || typeof data.anchor === "string") ||
-      dismissed.has(data.id) || agentMessages.has(data.id)
-    ) return;
-
-    const node = document.createElement("article");
-    node.className = "agent-message";
-    node.dataset.messageId = data.id;
-    const close = document.createElement("button");
-    close.className = "agent-dismiss";
-    close.type = "button";
-    close.setAttribute("aria-label", "Dismiss agent message");
-    close.textContent = "×";
-    const body = document.createElement("div");
-    body.className = "agent-body";
-    body.innerHTML = data.html;
-    const unavailable = document.createElement("div");
-    unavailable.className = "agent-unavailable";
-    unavailable.textContent = "Target unavailable";
-    unavailable.hidden = true;
-    node.append(close, body, unavailable);
-    const anchor = typeof data.anchor === "string" && samePage(data.page) ? data.anchor : null;
-    if (anchor !== null) {
-      node.classList.add("has-anchor");
-      node.tabIndex = 0;
-      node.setAttribute("aria-label", "Agent message; activate to show its anchor");
-      node.addEventListener("click", (event) => {
-        const interactive = event.target instanceof Element
-          ? event.target.closest("a, button")
-          : null;
-        const selection = window.getSelection();
-        if (interactive || (selection && !selection.isCollapsed)) return;
-        revealTarget(anchor);
-      });
-      node.addEventListener("keydown", (event) => {
-        if (event.target !== node || !["Enter", " "].includes(event.key)) return;
-        event.preventDefault();
-        revealTarget(anchor);
-      });
-    }
-
-    for (const link of body.querySelectorAll("a")) {
-      const href = link.getAttribute("href") ?? "";
-      if (!href.toLowerCase().startsWith("jampot:")) {
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-      }
-    }
-    body.addEventListener("click", (event) => {
-      const link = event.target instanceof Element ? event.target.closest("a") : null;
-      if (link) followElementLink(link, event);
-    });
-    close.addEventListener("click", () => {
-      dismissed.add(data.id);
-      persistDismissed();
-      agentMessages.delete(data.id);
-      node.remove();
-      scheduleAgentPlacement();
-    });
-    agentMessages.set(data.id, {
-      node,
-      unavailable,
-      anchor,
-    });
-    scheduleAgentPlacement();
-  };
-
-  window.addEventListener("resize", scheduleAgentPlacement);
-  window.addEventListener("scroll", scheduleAgentPlacement, true);
-  const placementObserver = new MutationObserver(scheduleAgentPlacement);
-  placementObserver.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    characterData: true,
   });
-
-
-  const updateHighlight = () => {
-    if (
-      !captured || !dialog.open || !(captured.element instanceof Element) ||
-      !captured.element.isConnected
-    ) {
-      highlight.style.display = "none";
-      return;
-    }
-    const rect = captured.element.getBoundingClientRect();
-    highlight.style.display = "block";
-    highlight.style.left = `${rect.left}px`;
-    highlight.style.top = `${rect.top}px`;
-    highlight.style.width = `${rect.width}px`;
-    highlight.style.height = `${rect.height}px`;
-  };
-
-  const stopTracking = () => {
-    window.removeEventListener("resize", updateHighlight);
-    window.removeEventListener("scroll", updateHighlight, true);
-  };
-
-  const closeDialog = () => {
-    if (dialog.open) dialog.close();
-    stopTracking();
-    highlight.style.display = "none";
-    captured = null;
-    selectionPreview.hidden = true;
-    selectionText.textContent = "";
-    status.textContent = "";
-    textarea.value = "";
-    if (pendingReload) window.location.reload();
-  };
-
-  const placeDialog = (x, y) => {
-    const gap = 12;
-    const width = dialog.offsetWidth;
-    const height = dialog.offsetHeight;
-    dialog.style.left = `${Math.max(gap, Math.min(x + gap, window.innerWidth - width - gap))}px`;
-    dialog.style.top = `${Math.max(gap, Math.min(y + gap, window.innerHeight - height - gap))}px`;
-  };
-
-  const showDialog = (nextCapture, x, y, label) => {
-    if (dialog.open) {
-      textarea.focus();
-      return;
-    }
-    captured = nextCapture;
-    dialogLabel.textContent = label;
-    const selectedText = captured.context.target.selectedText;
-    selectionPreview.hidden = selectedText === null;
-    selectionText.textContent = selectedText ?? "";
-    status.textContent = "";
-    reloadNotice.hidden = !pendingReload;
-    textarea.value = "";
-    dialog.showModal();
-    placeDialog(x, y);
-    updateHighlight();
-    window.addEventListener("resize", updateHighlight);
-    window.addEventListener("scroll", updateHighlight, true);
-    textarea.focus();
-  };
-
-  const openDialog = (
-    target,
-    event,
-    selector = cssSelector(target),
-    label = "Comment:",
-  ) => {
-    showDialog(captureTarget(target, event, selector), event.clientX, event.clientY, label);
-  };
-
-  const openPageDialog = () => {
-    showDialog(
-      capturePageTarget(),
-      window.innerWidth / 2,
-      window.innerHeight / 3,
-      "Comment:",
-    );
-  };
-
   document.addEventListener("contextmenu", (event) => {
-    if (event.shiftKey || event.composedPath().includes(host)) return;
+    if (connectionView.incompatible !== null) return;
+    if (event.shiftKey || event.composedPath().includes(ui.host)) return;
     if (!(event.target instanceof Element)) return;
     event.preventDefault();
-    openDialog(event.target, event);
+    dialog.openElement(event.target, event.clientX, event.clientY);
   }, true);
-
-  shadow.addEventListener("contextmenu", (event) => {
-    if (event.shiftKey) return;
+  ui.shadow.addEventListener("contextmenu", (event) => {
+    if (connectionView.incompatible !== null) return;
+    if (!(event instanceof MouseEvent) || event.shiftKey) return;
     const target = event.composedPath().find(
-      (node) => node instanceof Element && node.classList.contains("agent-message"),
+      (node) => node instanceof HTMLElement && node.classList.contains("agent-message")
     );
     if (!(target instanceof HTMLElement) || !target.dataset.messageId) return;
     event.preventDefault();
     event.stopPropagation();
-    openDialog(
+    dialog.openElement(
       target,
-      event,
+      event.clientX,
+      event.clientY,
       `${AGENT_TARGET_PREFIX}${target.dataset.messageId}`,
-      "Comment on agent response:",
+      ANSWER_LABEL
     );
   }, true);
-
   document.addEventListener("keydown", (event) => {
-    if (
-      event.defaultPrevented || event.isComposing || event.key !== "/" ||
-      event.metaKey || event.ctrlKey || event.altKey
-    ) return;
-    const editing = event.composedPath().some(
-      (node) => node instanceof HTMLElement &&
-        (node.isContentEditable || node.matches("input, textarea, select")),
-    );
-    if (editing) return;
+    if (connectionView.incompatible !== null) return;
+    if (event.defaultPrevented || event.isComposing || event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (isEditing(event)) return;
     event.preventDefault();
-    openPageDialog();
+    dialog.openPage();
   }, true);
-
-  // Hands a draft to the joiner: the share's answer, or an error whose
-  // `unsent` says the comment may not have reached the share. `ref` is the
-  // page's id for the comment: sending it again with the same `ref` never
-  // queues it twice.
-  const submitDraft = async (draft, ref) => {
-    let response;
-    try {
-      response = await fetch(COMMENTS_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ref, ...draft }),
-      });
-    } catch {
-      const error = new Error("jampot join is not reachable");
-      error.unsent = true;
-      throw error;
-    }
-    const body = await response.json().catch(() => null);
-    if (!response.ok) {
-      const error = new Error(responseMessage(body, `request failed (${response.status})`));
-      error.unsent = response.status === 503;
-      throw error;
-    }
-    if (!body || typeof body.pending !== "number" || typeof body.id !== "string") {
-      throw new Error("server returned an invalid queue status");
-    }
-    return body;
-  };
-
-  const resend = async (entry) => {
-    if (entry.state !== "unsent") return;
-    entry.state = "sending";
-    renderOutbox();
-    try {
-      const body = await submitDraft(entry.draft, entry.ref);
-      entry.id = body.id;
-      entry.state = "queued";
-      setPending(body.pending);
-    } catch {
-      entry.state = "unsent";
-    }
-    renderOutbox();
-  };
-
-  const resendAll = async () => {
-    for (const entry of outboxEntries.filter((candidate) => candidate.state === "unsent")) {
-      await resend(entry);
-    }
-  };
-
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (!captured) return;
-    const comment = textarea.value.trim();
-    if (!comment) {
-      status.textContent = "Enter a comment before queueing it.";
-      textarea.focus();
-      return;
-    }
-
-    send.disabled = true;
-    cancel.disabled = true;
-    status.textContent = "Queueing…";
-    const context = captured.context;
-    const draft = {
-      page: context.page.url,
-      selector: context.target.selector,
-      selectedText: context.target.selectedText,
-      comment,
-    };
-    const ref = crypto.randomUUID();
-    void submitDraft(draft, ref)
-      .then((body) => {
-        outboxEntries.push({ draft, ref, id: body.id, state: "queued" });
-        renderOutbox();
-        setPending(body.pending);
-        closeDialog();
-        showToast(`Comment queued · ${body.pending} pending`);
-      })
-      .catch((error) => {
-        if (error instanceof Error && error.unsent) {
-          outboxEntries.push({ draft, ref, id: null, state: "unsent" });
-          renderOutbox();
-          closeDialog();
-          showToast("Not sent: kept in the page, sent when the connection is back");
-          return;
-        }
-        status.textContent = error instanceof Error ? error.message : "Could not queue comment";
-        textarea.focus();
-      })
-      .finally(() => {
-        send.disabled = false;
-        cancel.disabled = false;
-      });
-  });
-
-  textarea.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
-  cancel.addEventListener("click", closeDialog);
-  dialog.addEventListener("cancel", (event) => {
-    event.preventDefault();
-    closeDialog();
-  });
-  dialog.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    const rect = dialog.getBoundingClientRect();
-    if (
-      event.clientX < rect.left || event.clientX > rect.right ||
-      event.clientY < rect.top || event.clientY > rect.bottom
-    ) closeDialog();
-  });
-  dialog.addEventListener("close", () => {
-    stopTracking();
-    highlight.style.display = "none";
-  });
-
-  const onRevision = (revision) => {
-    if (LIVE_REVISION === null || typeof revision !== "number") return;
-    if (String(revision) === reloadRevision) return;
-    reloadRevision = String(revision);
-    if (dialog.open) {
-      pendingReload = true;
-      reloadNotice.hidden = false;
-    } else {
-      window.location.reload();
-    }
-  };
-
-  const markDelivered = (ids) => {
-    const delivered = new Set(ids);
-    for (const entry of outboxEntries) {
-      if (entry.state === "queued" && delivered.has(entry.id)) entry.state = "delivered";
-    }
-    renderOutbox();
-  };
-
-  const refreshStatus = () => fetch(STATUS_URL)
-    .then(async (response) => {
-      if (!response.ok) return;
-      const body = await response.json();
-      if (typeof body.pending === "number") setPending(body.pending);
-      if (Array.isArray(body.undelivered)) {
-        const undelivered = new Set(body.undelivered);
-        markDelivered(outboxEntries
-          .filter((entry) => entry.state === "queued" && !undelivered.has(entry.id))
-          .map((entry) => entry.id));
-      }
-      if (Array.isArray(body.answers)) body.answers.forEach(addAgentMessage);
-      shareConnected = body.connected === true;
-      statusLine = typeof body.status === "string" ? body.status : null;
-      renderConnection();
-      onRevision(body.revision);
-    })
-    .catch(() => undefined);
-
-  let events;
-  let lastEvent = Date.now();
-  const connectEvents = () => {
-    events = new EventSource(EVENTS_URL);
-    events.addEventListener("open", () => {
-      sseOpen = true;
-      lastEvent = Date.now();
-      renderConnection();
-      void refreshStatus();
-    });
-    events.addEventListener("error", () => {
-      sseOpen = false;
-      renderConnection();
-    });
-    events.addEventListener("message", (event) => {
-      lastEvent = Date.now();
-      let data;
-      try {
-        data = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      if (!data || typeof data !== "object") return;
-      if (data.type === "answer") addAgentMessage(data);
-      else if (data.type === "reload") onRevision(data.revision);
-      else if (data.type === "delivered" && Array.isArray(data.ids)) {
-        markDelivered(data.ids);
-        void refreshStatus();
-      } else if (data.type === "status") {
-        statusLine = typeof data.line === "string" ? data.line : null;
-        renderConnection();
-      } else if (data.type === "share") {
-        shareConnected = data.connected === true;
-        renderConnection();
-        if (shareConnected) void refreshStatus();
-      }
-    });
-  };
-  // The joiner pings every 15 s; a silent stream is a dead one.
-  setInterval(() => {
-    if (Date.now() - lastEvent < WATCHDOG_MS) return;
-    events.close();
-    sseOpen = false;
-    renderConnection();
-    lastEvent = Date.now();
-    connectEvents();
-  }, 5000);
   renderOutbox();
-  connectEvents();
+  void connection.start();
 }
-
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", install, { once: true });
 } else {

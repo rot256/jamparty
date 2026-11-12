@@ -3,11 +3,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint assets/client.js eslint.config.js"
+    "build": "esbuild client/src/main.ts --bundle --format=esm --target=es2022 --charset=utf8 --legal-comments=none --banner:js=\"// Generated from client/src by \\`npm run build\\`; do not edit.\" --outfile=assets/client.js",
+    "typecheck": "tsc --noEmit -p client",
+    "lint": "eslint client eslint.config.js",
+    "check": "npm run typecheck && npm run lint && npm run build && git diff --exit-code -- assets/client.js"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "esbuild": "0.28.2",
     "eslint": "10.10.0",
-    "globals": "17.12.0"
+    "globals": "17.12.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2"
   }
 }
