@@ -253,15 +253,18 @@ mod tests {
     use crate::{
         adapters::t3::{MAX_MESSAGE, header, messages, request_key},
         core::{ids::CommentId, rng::SystemRng},
-        protocol::comment::{Author, Comment, Draft},
+        protocol::comment::{Author, Comment, Draft, DraftFields},
     };
 
     fn comment(text: &str) -> Comment {
         let author: Author =
             Author::new("alice".parse().unwrap(), "01".repeat(32).parse().unwrap());
-        let draft: Draft = serde_json::from_value(serde_json::json!({
-            "page": "/", "selector": "h1", "comment": text,
-        }))
+        let draft = Draft::try_from(DraftFields {
+            page: "/".to_owned(),
+            selector: "h1".to_owned(),
+            selected_text: None,
+            comment: text.to_owned(),
+        })
         .unwrap();
         Comment::new(CommentId::generate(&SystemRng), author, draft)
     }
