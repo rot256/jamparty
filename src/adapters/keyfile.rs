@@ -15,6 +15,7 @@ use rootcause::{
     option_ext::OptionExt,
     prelude::{ResultExt, bail, report},
 };
+use zeroize::Zeroizing;
 
 use crate::{Report, adapters::endpoint::generate_key, core::rng::SystemRng};
 
@@ -35,6 +36,7 @@ pub(crate) fn default_path() -> Result<PathBuf, Report> {
 pub(crate) fn load_or_create(path: &Path) -> Result<SecretKey, Report> {
     match fs::read_to_string(path) {
         Ok(text) => {
+            let text = Zeroizing::new(text);
             let mode = fs::metadata(path)?.mode();
             if mode & 0o077 != 0 {
                 bail!(
@@ -52,13 +54,20 @@ pub(crate) fn load_or_create(path: &Path) -> Result<SecretKey, Report> {
     }
 }
 
+/// The key's bytes and its hex form only ever sit in fixed buffers wiped
+/// on drop.
+const KEY_BYTES: usize = 32;
+const KEY_HEX: usize = 2 * KEY_BYTES;
+
 fn parse(text: &str) -> Result<SecretKey, Report> {
-    let bytes = HEXLOWER
-        .decode(text.trim().as_bytes())
-        .map_err(|_| report!("a key file holds 64 lowercase hex characters"))?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| report!("a key file holds 64 lowercase hex characters"))?;
+    let hex = text.trim().as_bytes();
+    if hex.len() != KEY_HEX {
+        bail!("a key file holds {KEY_HEX} lowercase hex characters");
+    }
+    let mut bytes = Zeroizing::new([0; KEY_BYTES]);
+    HEXLOWER
+        .decode_mut(hex, bytes.as_mut_slice())
+        .map_err(|_| report!("a key file holds {KEY_HEX} lowercase hex characters"))?;
     Ok(SecretKey::from_bytes(&bytes))
 }
 
@@ -73,7 +82,11 @@ fn create(path: &Path) -> Result<SecretKey, Report> {
         .mode(0o600)
         .open(path)
         .context_with(|| format!("could not create {}", path.display()))?;
-    writeln!(file, "{}", HEXLOWER.encode(&key.to_bytes()))?;
+    let bytes = Zeroizing::new(key.to_bytes());
+    let mut hex = Zeroizing::new([0; KEY_HEX]);
+    HEXLOWER.encode_mut(bytes.as_slice(), hex.as_mut_slice());
+    file.write_all(hex.as_slice())?;
+    file.write_all(b"\n")?;
     Ok(key)
 }
 

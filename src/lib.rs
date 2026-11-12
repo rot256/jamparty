@@ -34,6 +34,7 @@ use tokio::{
     },
     time,
 };
+use zeroize::Zeroizing;
 
 use crate::{
     adapters::{
@@ -199,13 +200,20 @@ impl TokenArg {
         match self {
             Self::Given(token) => Ok(token),
             Self::Stdin => {
-                let mut line = String::new();
-                stdin.take(1024).read_line(&mut line)?;
+                // Wiped after parsing; sized for the whole read, so it never
+                // grows and leaves a copy of the secret behind.
+                let mut line = Zeroizing::new(String::with_capacity(TOKEN_LINE_LIMIT));
+                stdin
+                    .take(u64::try_from(TOKEN_LINE_LIMIT)?)
+                    .read_line(&mut line)?;
                 Ok(line.parse::<PartyToken>().context("the token on stdin")?)
             }
         }
     }
 }
+
+/// How much of stdin `jampot join -` reads for the token.
+const TOKEN_LINE_LIMIT: usize = 1024;
 
 /// Which running share `recv` and `send` talk to.
 #[derive(Debug, Args)]

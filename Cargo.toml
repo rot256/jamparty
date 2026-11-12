@@ -38,6 +38,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2.5.8"
 uuid = { version = "1.26.0", features = ["v4"] }
+zeroize = { version = "1.9.1", features = ["derive"] }
 
 [dev-dependencies]
 proptest = "1.12.0"

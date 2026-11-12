@@ -8,6 +8,7 @@ use iroh::{
     endpoint::{Connection, QuicTransportConfig, VarInt, presets},
 };
 use rootcause::prelude::report;
+use zeroize::Zeroizing;
 
 use crate::{
     Report,
@@ -70,7 +71,8 @@ pub(crate) fn admitted(connection: &Connection) {
 
 /// A fresh iroh secret key from `rng`.
 pub(crate) fn generate_key(rng: &dyn Rng) -> SecretKey {
-    SecretKey::from_bytes(&random_array(rng))
+    let bytes = Zeroizing::new(random_array(rng));
+    SecretKey::from_bytes(&bytes)
 }
 
 /// Binds an endpoint with `key`; `accept` says whether it accepts jampot

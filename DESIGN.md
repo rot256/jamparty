@@ -339,6 +339,23 @@ line).
   the process's arguments, which other local users can see (`ps`) and the
   shell keeps in its history; `jampot join -` reads it from stdin
   instead. `recv` and `send` take only the share id.
+- **Secrets in memory.** The party secret and the joiner's key are wiped
+  when dropped, and so is every copy jampot makes of them: text forms,
+  the hello the joiner writes and the token read from stdin go through
+  buffers sized up front (a growing buffer would leave copies behind) and
+  wiped on drop. The share reads the hello, the control stream's first
+  line, without a buffered reader: chunk by chunk under the admission
+  deadline, straight from the stream into a fixed 1024-byte buffer that is
+  wiped when dropped (after parsing, on refusal, on timeout or
+  cancellation). No newline within 1024 bytes is a `bad_hello`, and so is
+  a hello with a backslash: an honest one has nothing to escape (the name
+  alphabet and base32 need no escapes), and an escape would make
+  serde_json unescape the secret into a scratch buffer of its own that is
+  never wiped; without escapes it only borrows the secret from ours.
+  Bytes that arrived after the hello's newline are not secret and start
+  the buffered reader for the following lines. Copies jampot does not own
+  are not covered: argv, stdout's buffer when the token is printed, and
+  the QUIC, TLS and kernel buffers.
 - **Token holders are bounded, not trusted.** Each can hold only so much
   of the share: connections (64 in all, 4 per key), streams and buffers
   per connection, queue space (100 comments per key) and comment rate
@@ -624,9 +641,9 @@ Must-have cases:
 iroh 1.4.1 (transport), hyper and hyper-util (share serving, from
 komtar, and the joiner's local server), tokio, hyper's client with
 rustls (also the T3 MCP client), serde/serde_json, sha3, data-encoding,
-getrandom, subtle, rootcause (errors); proptest and ts-rs for tests;
-komtar's existing dependencies for static serving, file watching and
-Markdown.
+getrandom, subtle, zeroize (the party secret), rootcause (errors);
+proptest and ts-rs for tests; komtar's existing dependencies for static
+serving, file watching and Markdown.
 
 ## Open questions
 

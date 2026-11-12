@@ -13,9 +13,14 @@ pub(crate) mod agent;
 pub(crate) mod comment;
 pub(crate) mod control;
 
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    io::{self, Write},
+};
 
 use serde::{Serialize, de::DeserializeOwned};
+use zeroize::Zeroizing;
 
 /// The iroh ALPN.
 pub(crate) const ALPN: &[u8] = b"jampot/1";
@@ -44,13 +49,35 @@ impl fmt::Display for FrameError {
 impl Error for FrameError {}
 
 /// `message` as one line: compact JSON and a newline.
-pub(crate) fn encode_line<T: Serialize>(message: &T) -> Result<Vec<u8>, FrameError> {
-    let mut line = serde_json::to_vec(message).map_err(FrameError::Json)?;
-    line.push(b'\n');
-    if line.len() > MAX_LINE_BYTES {
+///
+/// A line may carry the party secret (the hello), so it is measured first
+/// and written into a buffer of exactly its size, wiped on drop: a buffer
+/// that grew would leave the bytes it held behind, unwiped.
+pub(crate) fn encode_line<T: Serialize>(message: &T) -> Result<Zeroizing<Vec<u8>>, FrameError> {
+    let mut length = Length(0);
+    serde_json::to_writer(&mut length, message).map_err(FrameError::Json)?;
+    let length = length.0.saturating_add(1);
+    if length > MAX_LINE_BYTES {
         return Err(FrameError::TooLong);
     }
+    let mut line = Zeroizing::new(Vec::with_capacity(length));
+    serde_json::to_writer(&mut *line, message).map_err(FrameError::Json)?;
+    line.push(b'\n');
     Ok(line)
+}
+
+/// Counts the bytes written to it, keeping none.
+struct Length(usize);
+
+impl Write for Length {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Parses one line, with or without its trailing newline.
@@ -69,7 +96,9 @@ mod tests {
     #[test]
     fn lines_round_trip_and_are_bounded() {
         let line = encode_line(&vec!["a", "b"]).unwrap();
-        assert_eq!(line, b"[\"a\",\"b\"]\n");
+        assert_eq!(line.as_slice(), b"[\"a\",\"b\"]\n");
+        // Sized exactly, so it never reallocated (see encode_line).
+        assert_eq!(line.capacity(), line.len());
         assert_eq!(decode_line::<Vec<String>>(&line).unwrap(), ["a", "b"]);
         assert_eq!(
             decode_line::<Vec<String>>(b"[]").unwrap(),

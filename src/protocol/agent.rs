@@ -71,7 +71,7 @@ mod tests {
         for (request, json) in cases {
             let line = format!(r#"{{"version":1,"message":{json}}}"#);
             assert_eq!(
-                encode_line(&Envelope::from(request.clone())).unwrap(),
+                *encode_line(&Envelope::from(request.clone())).unwrap(),
                 format!("{line}\n").into_bytes()
             );
             let parsed: Envelope<AgentRequest> = decode_line(line.as_bytes()).unwrap();
@@ -82,7 +82,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            reply,
+            reply.as_slice(),
             b"{\"version\":1,\"message\":{\"type\":\"error\",\"error\":\"no\"}}\n"
         );
         let blank = r#"{"version":1,"message":{"type":"send","message":" "}}"#;

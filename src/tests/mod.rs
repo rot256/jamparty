@@ -2,6 +2,7 @@
 //! process, direct addresses, no relays.
 
 mod admission;
+mod admission_hello;
 mod agent;
 mod delivery;
 mod fake_t3;

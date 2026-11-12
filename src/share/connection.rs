@@ -1,12 +1,12 @@
 //! One joiner's connection: admission on the control stream, then request
 //! streams and the control loop until either side leaves.
 
-use std::{sync::Arc, time::Duration};
+use std::{io::Cursor, sync::Arc, time::Duration};
 
 use iroh::endpoint::{Connection, Incoming, RecvStream, SendStream, VarInt};
 use rootcause::prelude::report;
 use tokio::{
-    io::BufReader,
+    io::{AsyncReadExt, BufReader, Chain},
     sync::{
         OwnedSemaphorePermit,
         broadcast::{self, error::RecvError},
@@ -86,10 +86,14 @@ pub(crate) async fn handle(
     }
 }
 
+/// The rest of the control stream after the hello: what arrived with it,
+/// then the stream.
+type ControlReader = BufReader<Chain<Cursor<Vec<u8>>, RecvStream>>;
+
 enum Admission {
     Admitted {
         send: SendStream,
-        recv: BufReader<RecvStream>,
+        recv: ControlReader,
         name: JoinerName,
     },
     Refused {
@@ -105,16 +109,27 @@ async fn admission(
     deadline: Instant,
     shared: &Shared,
 ) -> Result<Admission, Report> {
-    let (send, recv) = timeout_at(deadline, connection.accept_bi()).await??;
-    let mut recv = BufReader::new(recv);
-    let first = timeout_at(deadline, lines::read(&mut recv))
-        .await
-        .unwrap_or_else(|_| Err(report!("no hello before the admission deadline")));
+    let (send, mut recv) = timeout_at(deadline, connection.accept_bi()).await??;
+    // The hello is read without a buffered reader, into a fixed buffer
+    // that is wiped (see `lines::read_hello`); what follows it goes on
+    // through a buffered reader.
+    let (first, leftover) = match timeout_at(deadline, lines::read_hello(&mut recv)).await {
+        Ok(Ok((first, leftover))) => (Ok(first), leftover),
+        Ok(Err(error)) => (Err(error), Vec::new()),
+        Err(_) => (
+            Err(report!("no hello before the admission deadline")),
+            Vec::new(),
+        ),
+    };
     if let Err(error) = &first {
         tracing::debug!(%error, "no usable hello");
     }
     Ok(match admit(first, &shared.token.secret) {
-        Ok(name) => Admission::Admitted { send, recv, name },
+        Ok(name) => Admission::Admitted {
+            send,
+            recv: BufReader::new(Cursor::new(leftover).chain(recv)),
+            name,
+        },
         Err(reason) => Admission::Refused { send, reason },
     })
 }
@@ -136,7 +151,7 @@ async fn refuse(connection: &Connection, mut send: SendStream, reason: RefusedRe
 async fn joined(
     connection: &Connection,
     mut send: SendStream,
-    mut recv: BufReader<RecvStream>,
+    mut recv: ControlReader,
     mut broadcasts: broadcast::Receiver<ShareMessage>,
     author: &Author,
     shared: &Arc<Shared>,

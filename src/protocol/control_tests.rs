@@ -34,7 +34,7 @@ fn joiner_messages_round_trip() {
     for line in &lines {
         let parsed = joiner(line).unwrap_or_else(|error| panic!("{line}: {error}"));
         assert_eq!(
-            encode_line(&parsed).unwrap(),
+            *encode_line(&parsed).unwrap(),
             format!("{line}\n").into_bytes()
         );
     }
@@ -172,7 +172,7 @@ fn share_messages() {
     for (message, json) in cases {
         let line = format!(r#"{{"version":1,"message":{json}}}"#);
         assert_eq!(
-            encode_line(&Envelope::from(message.clone())).unwrap(),
+            *encode_line(&Envelope::from(message.clone())).unwrap(),
             format!("{line}\n").into_bytes()
         );
         let parsed: Envelope<ShareMessage> = decode_line(line.as_bytes()).unwrap();
