@@ -12,7 +12,7 @@ use iroh::endpoint::{Connection, SendStream};
 use rootcause::prelude::report;
 use serde::Serialize;
 use tokio::{
-    sync::{broadcast, mpsc, oneshot, watch},
+    sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot, watch},
     time,
 };
 
@@ -25,13 +25,17 @@ use crate::{
         request::LocalOrigin,
         settings::{Keys, Settings, SettingsChange, Switch},
     },
-    join::markdown,
+    join::{
+        markdown,
+        tabs::{TabError, TabId, Tabs},
+    },
     protocol::{
         comment::{Author, Draft},
         control::{
             AckOutcome, CommentRef, Envelope, JoinerMessage, RefusedReason, ShareMessage,
             StatusLine,
         },
+        presence::{PagePath, Person, Support, Whereabouts},
     },
 };
 
@@ -51,6 +55,8 @@ pub(crate) struct View {
     pub(crate) you: Option<Author>,
     /// Who is connected, this joiner included.
     pub(crate) joiners: Vec<Author>,
+    /// The same people with their colour, page and cursor switch.
+    pub(crate) here: Vec<Person>,
     /// The live-reload revision (shared directories only).
     pub(crate) revision: Option<u64>,
     pub(crate) status: Option<StatusLine>,
@@ -70,6 +76,7 @@ impl View {
             refused: None,
             you: None,
             joiners: Vec::new(),
+            here: Vec::new(),
             revision: None,
             status: None,
             pending: 0,
@@ -161,6 +168,7 @@ pub(crate) enum Event {
     },
     Presence {
         joiners: Vec<Author>,
+        here: Vec<Person>,
     },
     Status {
         line: Option<StatusLine>,
@@ -182,6 +190,8 @@ const WRITE_QUEUE: usize = 16;
 /// acknowledgements are matched by the page's ref.
 pub(crate) struct Control {
     pub(crate) connection: Connection,
+    /// Whether the share takes presence (and cursor) messages.
+    presence: Support,
     lines: mpsc::Sender<Envelope<JoinerMessage>>,
     acks: Mutex<HashMap<CommentRef, oneshot::Sender<AckOutcome>>>,
 }
@@ -189,11 +199,12 @@ pub(crate) struct Control {
 impl Control {
     /// Starts the writer on `writer`; it stops when the stream fails or
     /// the control is dropped.
-    pub(crate) fn new(connection: Connection, writer: SendStream) -> Self {
+    pub(crate) fn new(connection: Connection, writer: SendStream, presence: Support) -> Self {
         let (lines, queued) = mpsc::channel(WRITE_QUEUE);
         tokio::spawn(write_lines(writer, queued));
         Self {
             connection,
+            presence,
             lines,
             acks: Mutex::new(HashMap::new()),
         }
@@ -226,6 +237,23 @@ impl Control {
         time::timeout(ACK_TIMEOUT, acked)
             .await
             .map_err(|_| report!("the share did not acknowledge the comment"))?
+            .map_err(|_| report!("the connection to the share was lost"))
+    }
+
+    /// Tells the share where this joiner is, if it takes that.
+    async fn tell(&self, whereabouts: Whereabouts) -> Result<(), Report> {
+        match self.presence {
+            Support::Supported => {}
+            Support::Unsupported => return Ok(()),
+        }
+        let Whereabouts { name, url, cursor } = whereabouts;
+        self.lines
+            .send(Envelope::from(JoinerMessage::Presence {
+                name,
+                url,
+                cursor,
+            }))
+            .await
             .map_err(|_| report!("the connection to the share was lost"))
     }
 
@@ -277,6 +305,10 @@ pub(crate) struct Session {
     events: broadcast::Sender<Event>,
     /// Ids of this joiner's comments the share has not delivered yet.
     mine: Mutex<HashSet<CommentId>>,
+    tabs: Mutex<Tabs>,
+    /// What the share was last told on the current connection; held while
+    /// telling, so reports go out in order.
+    told: AsyncMutex<Option<Whereabouts>>,
 }
 
 impl Session {
@@ -289,6 +321,56 @@ impl Session {
             control: Mutex::new(None),
             events: broadcast::channel(EVENT_CAPACITY).0,
             mine: Mutex::new(HashSet::new()),
+            tabs: Mutex::new(Tabs::default()),
+            told: AsyncMutex::new(None),
+        }
+    }
+
+    fn tabs(&self) -> MutexGuard<'_, Tabs> {
+        self.tabs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A page opened its event stream as `tab`, on `url`.
+    pub(crate) fn open_tab(&self, tab: TabId, url: PagePath) -> Result<(), TabError> {
+        self.tabs().open(tab, url)
+    }
+
+    /// One of `tab`'s event streams closed.
+    pub(crate) fn close_tab(&self, tab: &TabId) {
+        self.tabs().close(tab);
+    }
+
+    /// `tab` moved to `url` (or became active there).
+    pub(crate) fn visit(&self, tab: &TabId, url: PagePath) -> Result<(), TabError> {
+        self.tabs().visit(tab, url)
+    }
+
+    fn whereabouts(&self) -> Whereabouts {
+        let (name, cursor) = {
+            let preferences = self.preferences();
+            (preferences.name(), preferences.saved.show_cursor)
+        };
+        Whereabouts {
+            name,
+            url: self.tabs().current(),
+            cursor,
+        }
+    }
+
+    /// Tells the share where this joiner is now, if that changed since it
+    /// was last told (on this connection).
+    pub(crate) async fn report(&self) {
+        let mut told = self.told.lock().await;
+        let Some(control) = self.control() else {
+            return;
+        };
+        let now = self.whereabouts();
+        if told.as_ref() == Some(&now) {
+            return;
+        }
+        match control.tell(now.clone()).await {
+            Ok(()) => *told = Some(now),
+            Err(error) => tracing::debug!(%error, "could not report presence"),
         }
     }
 
@@ -350,8 +432,18 @@ impl Session {
 
     /// The share admitted us on `control`; of our comments it still holds
     /// only `undelivered`, the others were delivered while we were away.
-    pub(crate) fn connected(&self, control: Arc<Control>, you: Author, undelivered: &[CommentId]) {
-        *self.control.lock().unwrap_or_else(PoisonError::into_inner) = Some(control);
+    pub(crate) async fn connected(
+        &self,
+        control: Arc<Control>,
+        you: Author,
+        undelivered: &[CommentId],
+    ) {
+        {
+            // A new connection has been told nothing yet.
+            let mut told = self.told.lock().await;
+            *told = None;
+            *self.control.lock().unwrap_or_else(PoisonError::into_inner) = Some(control);
+        }
         let mut delivered = Vec::new();
         self.update_mine(|mine| {
             mine.retain(|id| {
@@ -370,6 +462,7 @@ impl Session {
         if !delivered.is_empty() {
             self.emit(Event::Delivered { ids: delivered });
         }
+        self.report().await;
     }
 
     /// The connection is gone (or never came up).
@@ -387,6 +480,7 @@ impl Session {
             view.connected = false;
             view.refused = refused;
             view.joiners.clear();
+            view.here.clear();
         });
         if was_connected {
             self.emit(Event::Share { connected: false });
@@ -435,10 +529,21 @@ impl Session {
                 self.view.send_modify(|view| view.revision = Some(revision));
                 self.emit(Event::Reload { revision });
             }
-            ShareMessage::Presence { joiners } => {
-                self.view
-                    .send_modify(|view| view.joiners.clone_from(&joiners));
-                self.emit(Event::Presence { joiners });
+            ShareMessage::Presence { joiners, here } => {
+                // An older share says only who is here.
+                let here = if here.is_empty() {
+                    joiners
+                        .iter()
+                        .map(|author| Person::new(author.clone(), None, Switch::Off))
+                        .collect()
+                } else {
+                    here
+                };
+                self.view.send_modify(|view| {
+                    view.joiners.clone_from(&joiners);
+                    view.here.clone_from(&here);
+                });
+                self.emit(Event::Presence { joiners, here });
             }
             ShareMessage::Status { line } => {
                 self.view.send_modify(|view| view.status.clone_from(&line));

@@ -3,12 +3,16 @@ use std::{slice, sync::Arc};
 use jiff::{SignedDuration, Timestamp};
 
 use crate::{
-    core::{clock::ManualClock, ids::EndpointKey, queue::DeliveryResult, rng::SeededRng},
+    core::{
+        clock::ManualClock, ids::EndpointKey, queue::DeliveryResult, rng::SeededRng,
+        settings::Switch,
+    },
     protocol::{
         comment::{Author, Draft},
         control::{AckOutcome, CommentRef},
+        presence::Whereabouts,
     },
-    share::hub::{Hub, MAX_JOINERS, MAX_JOINERS_PER_KEY, MAX_QUEUED_PER_KEY},
+    share::hub::{Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, MAX_QUEUED_PER_KEY},
 };
 
 fn hub() -> (Arc<Hub>, Arc<ManualClock>) {
@@ -141,4 +145,72 @@ fn undelivered_comments_are_matched_by_the_full_key() {
     assert!(hub.undelivered_by(&forger).is_empty());
     let comment = hub.queued().pop().unwrap();
     assert_eq!(comment.author.key, alice.key);
+}
+
+fn whereabouts(name: &str, url: Option<&str>, cursor: Switch) -> Whereabouts {
+    Whereabouts {
+        name: name.parse().unwrap(),
+        url: url.map(|url| url.to_owned().try_into().unwrap()),
+        cursor,
+    }
+}
+
+#[test]
+fn presence_updates_rename_and_move_joiners_within_a_rate() {
+    let (hub, clock) = hub();
+    let alice = hub.join(author("alice", 1)).unwrap();
+    let _bob = hub.join(author("bob", 2)).unwrap();
+    let renamed = alice
+        .update(whereabouts("alicia", Some("/a"), Switch::On))
+        .unwrap();
+    assert_eq!(renamed.name.to_string(), "alicia");
+    assert_eq!(renamed.key, EndpointKey([1; 32]));
+    let here = hub.here();
+    let [first, second] = here.as_slice() else {
+        panic!("{here:?}");
+    };
+    assert_eq!(first.name.to_string(), "alicia");
+    assert_eq!(first.url.clone().map(String::from).as_deref(), Some("/a"));
+    assert_eq!(first.cursor, Switch::On);
+    assert_eq!(second.url, None);
+    assert_eq!(second.cursor, Switch::Off);
+    assert_eq!(hub.presence().first().unwrap().name.to_string(), "alicia");
+
+    // 50 per 10 s: the next ones are dropped and change nothing.
+    for _ in 1..50 {
+        alice
+            .update(whereabouts("alicia", Some("/b"), Switch::On))
+            .unwrap();
+    }
+    assert_eq!(
+        alice.update(whereabouts("mallory", None, Switch::Off)),
+        Err(Ignored::RateLimited)
+    );
+    assert_eq!(hub.here().first().unwrap().name.to_string(), "alicia");
+    clock.advance(SignedDuration::from_secs(1));
+    assert!(alice.update(whereabouts("al", None, Switch::Off)).is_ok());
+}
+
+#[test]
+fn presence_shows_a_key_as_its_latest_connection_says() {
+    let (hub, _) = hub();
+    let first = hub.join(author("alice", 1)).unwrap();
+    let second = hub.join(author("alice", 1)).unwrap();
+    second
+        .update(whereabouts("alice", Some("/two"), Switch::Off))
+        .unwrap();
+    first
+        .update(whereabouts("alice", Some("/one"), Switch::On))
+        .unwrap();
+    let here = hub.here();
+    let [only] = here.as_slice() else {
+        panic!("{here:?}");
+    };
+    assert_eq!(only.url.clone().map(String::from).as_deref(), Some("/one"));
+    drop(first);
+    let here = hub.here();
+    let [only] = here.as_slice() else {
+        panic!("{here:?}");
+    };
+    assert_eq!(only.url.clone().map(String::from).as_deref(), Some("/two"));
 }

@@ -27,6 +27,20 @@ export type Keys = { commentMode: KeyBinding, showCursor: KeyBinding, };
 
 export type Author = { name: JoinerName, fingerprint: Fingerprint, key: EndpointKey, };
 
+export type PagePath = string;
+
+export type Colour = number;
+
+export type Person = { name: JoinerName, fingerprint: Fingerprint, key: EndpointKey, colour: Colour, 
+/**
+ * The page they are on, once their page said.
+ */
+url: PagePath | null, cursor: Switch, };
+
+export type TabId = string;
+
+export type Visit = { tab: TabId, url: PagePath, };
+
 export type PageSettings = { 
 /**
  * The name this joiner goes by now.
@@ -67,6 +81,10 @@ you: Author | null,
  */
 joiners: Array<Author>, 
 /**
+ * The same people with their colour, page and cursor switch.
+ */
+here: Array<Person>, 
+/**
  * The live-reload revision (shared directories only).
  */
 revision: number | null, status: StatusLine | null, 
@@ -101,6 +119,10 @@ you: Author | null,
  */
 joiners: Array<Author>, 
 /**
+ * The same people with their colour, page and cursor switch.
+ */
+here: Array<Person>, 
+/**
  * The live-reload revision (shared directories only).
  */
 revision: number | null, status: StatusLine | null, 
@@ -117,7 +139,7 @@ undelivered: Array<CommentId>,
  */
 answers: Array<Answer>, settings: PageSettings, };
 
-export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings;
+export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings;
 
 export type Submission = { ref: CommentRef, page: string, selector: string, selectedText: string | null, comment: string, };
 

@@ -36,7 +36,7 @@ pub(crate) fn admit(first: FirstLine, secret: &PartySecret) -> Result<JoinerName
         Ok(
             Some(Envelope {
                 version: _,
-                message: JoinerMessage::Comment { .. },
+                message: JoinerMessage::Comment { .. } | JoinerMessage::Presence { .. },
             })
             | None,
         )

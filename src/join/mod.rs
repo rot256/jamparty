@@ -6,6 +6,7 @@ mod connection;
 mod local;
 mod markdown;
 mod session;
+mod tabs;
 
 use std::{
     io::ErrorKind,

@@ -1,7 +1,7 @@
 //! The joiner's own endpoints: `api/comments`, `api/status` and
 //! `api/events` (SSE).
 
-use std::{convert::Infallible, time::Duration};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures_util::stream;
@@ -16,17 +16,22 @@ use tokio::{
     sync::broadcast::{Receiver, error::RecvError},
     time::{Instant, Interval, MissedTickBehavior, interval_at},
 };
+use url::form_urlencoded;
 
 use crate::{
     core::{ids::CommentId, settings::SettingsChange},
     describe,
-    join::session::{Event, Session, View},
+    join::{
+        session::{Event, Session, View},
+        tabs::{TabError, TabId},
+    },
     protocol::{
         MAX_LINE_BYTES,
         comment::{Draft, DraftFields},
         control::{AckOutcome, CommentRef},
+        presence::PagePath,
     },
-    share::body::{AppBody, RequestError, json_response},
+    share::body::{AppBody, RequestError, empty_response, json_response},
 };
 
 /// SSE keep-alive interval: a `ping` event, which pages also use as a
@@ -179,9 +184,50 @@ pub(crate) async fn settings(request: Request<Incoming>, session: &Session) -> R
         Err(error) => Err(error),
     };
     match changed {
-        Ok(settings) => json_response(StatusCode::OK, &settings),
+        Ok(settings) => {
+            // A new name or cursor switch is news for the share.
+            session.report().await;
+            json_response(StatusCode::OK, &settings)
+        }
         Err(error) => error.into(),
     }
+}
+
+/// What a page posts to `api/page`: it moved (a single-page app's route,
+/// a hash change) or became active.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+struct Visit {
+    tab: TabId,
+    url: PagePath,
+}
+
+/// `POST api/page`: the tab is on this URL now. 204, or 404 for a tab
+/// without an open event stream.
+pub(crate) async fn page(request: Request<Incoming>, session: &Session) -> Response<AppBody> {
+    let visited = match read_json::<Visit>(request).await {
+        Ok(Visit { tab, url }) => session.visit(&tab, url).map_err(tab_error),
+        Err(error) => Err(error),
+    };
+    match visited {
+        Ok(()) => {
+            session.report().await;
+            no_content()
+        }
+        Err(error) => error.into(),
+    }
+}
+
+fn tab_error(error: TabError) -> RequestError {
+    match error {
+        TabError::Unknown => RequestError::new(StatusCode::NOT_FOUND, "no such tab"),
+        TabError::Full => RequestError::new(StatusCode::TOO_MANY_REQUESTS, "too many tabs"),
+    }
+}
+
+fn no_content() -> Response<AppBody> {
+    empty_response(StatusCode::NO_CONTENT)
 }
 
 /// `GET api/status`: the session as the joiner sees it.
@@ -196,19 +242,41 @@ pub(crate) fn status(session: &Session) -> Response<AppBody> {
     )
 }
 
-/// `GET api/events`: the connection state first, then every event, with a
-/// `ping` every 15 s.
-pub(crate) fn events(session: &Session) -> Response<AppBody> {
+/// `GET api/events[?tab=<id>&url=<page>]`: the connection state first,
+/// then every event, with a `ping` every 15 s. A page that names its tab
+/// and URL counts as one of the joiner's tabs while the stream is open.
+pub(crate) fn events(session: &Arc<Session>, query: Option<&str>) -> Response<AppBody> {
+    let tab = match tab_of(query) {
+        Ok(tab) => tab,
+        Err(error) => return error.into(),
+    };
+    let tab = match tab {
+        Some((tab, url)) => match session.open_tab(tab.clone(), url) {
+            Ok(()) => {
+                let reporting = Arc::clone(session);
+                tokio::spawn(async move { reporting.report().await });
+                Some(OpenTab {
+                    session: Arc::clone(session),
+                    tab,
+                })
+            }
+            Err(error) => return tab_error(error).into(),
+        },
+        None => None,
+    };
     let receiver = session.subscribe();
     let first = Event::Share {
         connected: session.view().connected,
     };
     let mut keep_alive = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     keep_alive.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let frames = stream::unfold(
-        (Some(first), receiver, keep_alive),
-        |(first, receiver, keep_alive)| next_frame(first, receiver, keep_alive),
-    );
+    let state = Stream {
+        first: Some(first),
+        receiver,
+        keep_alive,
+        _tab: tab,
+    };
+    let frames = stream::unfold(state, next_frame);
     let body = StreamBody::new(frames)
         .map_err(|never: Infallible| match never {})
         .boxed_unsync();
@@ -222,28 +290,68 @@ pub(crate) fn events(session: &Session) -> Response<AppBody> {
     response
 }
 
-type FrameState = (Option<Event>, Receiver<Event>, Interval);
+/// The tab and URL in an event stream's query, if it names them.
+fn tab_of(query: Option<&str>) -> Result<Option<(TabId, PagePath)>, RequestError> {
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    let mut tab = None;
+    let mut url = None;
+    for (name, value) in form_urlencoded::parse(query.as_bytes()) {
+        match name.as_ref() {
+            "tab" => tab = Some(value.into_owned()),
+            "url" => url = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+    match (tab, url) {
+        (None, None) => Ok(None),
+        (Some(tab), Some(url)) => {
+            let tab = TabId::try_from(tab).map_err(|error| bad(error.to_string()))?;
+            let url = PagePath::try_from(url).map_err(|error| bad(error.to_string()))?;
+            Ok(Some((tab, url)))
+        }
+        (Some(_), None) | (None, Some(_)) => Err(bad("tab and url go together".to_owned())),
+    }
+}
 
-async fn next_frame(
+/// A tab while its event stream is open.
+struct OpenTab {
+    session: Arc<Session>,
+    tab: TabId,
+}
+
+impl Drop for OpenTab {
+    fn drop(&mut self) {
+        self.session.close_tab(&self.tab);
+        let session = Arc::clone(&self.session);
+        tokio::spawn(async move { session.report().await });
+    }
+}
+
+struct Stream {
     first: Option<Event>,
-    mut receiver: Receiver<Event>,
-    mut keep_alive: Interval,
-) -> Option<(Result<Frame<Bytes>, Infallible>, FrameState)> {
-    if let Some(event) = first {
-        return Some((Ok(event_frame(&event)), (None, receiver, keep_alive)));
+    receiver: Receiver<Event>,
+    keep_alive: Interval,
+    _tab: Option<OpenTab>,
+}
+
+async fn next_frame(mut state: Stream) -> Option<(Result<Frame<Bytes>, Infallible>, Stream)> {
+    if let Some(event) = state.first.take() {
+        return Some((Ok(event_frame(&event)), state));
     }
     loop {
         tokio::select! {
-            event = receiver.recv() => match event {
-                Ok(event) => return Some((Ok(event_frame(&event)), (None, receiver, keep_alive))),
+            event = state.receiver.recv() => match event {
+                Ok(event) => return Some((Ok(event_frame(&event)), state)),
                 Err(RecvError::Lagged(skipped)) => {
                     tracing::debug!(skipped, "event stream fell behind");
                 }
                 Err(RecvError::Closed) => return None,
             },
-            _ = keep_alive.tick() => {
+            _ = state.keep_alive.tick() => {
                 let frame = Frame::data(Bytes::from_static(b"data: {\"type\":\"ping\"}\n\n"));
-                return Some((Ok(frame), (None, receiver, keep_alive)));
+                return Some((Ok(frame), state));
             }
         }
     }
@@ -271,12 +379,14 @@ mod bindings {
             settings::{KeyBinding, Keys, KeysFields, SettingsChange, Switch},
         },
         join::{
-            api::{API_VERSION, Limited429, Queued, Status, Submission},
+            api::{API_VERSION, Limited429, Queued, Status, Submission, Visit},
             session::{Answer, Event, PageSettings, View},
+            tabs::TabId,
         },
         protocol::{
             comment::Author,
             control::{CommentRef, RefusedReason, StatusLine},
+            presence::{Colour, PagePath, Person},
         },
         share::body::ErrorBody,
     };
@@ -297,6 +407,11 @@ mod bindings {
             KeysFields::decl(&cfg),
             Keys::decl(&cfg),
             Author::decl(&cfg),
+            PagePath::decl(&cfg),
+            Colour::decl(&cfg),
+            Person::decl(&cfg),
+            TabId::decl(&cfg),
+            Visit::decl(&cfg),
             PageSettings::decl(&cfg),
             SettingsChange::decl(&cfg),
             Answer::decl(&cfg),

@@ -23,11 +23,13 @@ use crate::{
     protocol::{
         comment::Author,
         control::{Envelope, JoinerMessage, RefusedReason, ShareMessage},
+        presence::{Support, Whereabouts},
     },
     share::{
         Shared,
         admission::{REFUSED_CODE, admit, reason_text},
         http::serve_stream,
+        hub::Presence,
     },
 };
 
@@ -73,7 +75,16 @@ pub(crate) async fn handle(
             };
             endpoint::admitted(&connection);
             tracing::info!(name = %author.name, fingerprint = %author.fingerprint, "joiner admitted");
-            let ended = joined(&connection, send, recv, broadcasts, &author, &shared).await;
+            let ended = joined(
+                &connection,
+                send,
+                recv,
+                broadcasts,
+                &author,
+                &presence,
+                &shared,
+            )
+            .await;
             drop(presence);
             tracing::info!(name = %author.name, fingerprint = %author.fingerprint, reason = %ended, "joiner left");
             connection.close(VarInt::from_u32(DROPPED_CODE), ended.as_bytes());
@@ -154,11 +165,13 @@ async fn joined(
     mut recv: ControlReader,
     mut broadcasts: broadcast::Receiver<ShareMessage>,
     author: &Author,
+    presence: &Presence,
     shared: &Arc<Shared>,
 ) -> &'static str {
     let mut greeting = vec![ShareMessage::Admitted {
         you: author.clone(),
         undelivered: shared.hub.undelivered_by(author),
+        presence: Support::Supported,
     }];
     if let Some(reload) = shared.site.reload() {
         greeting.push(ShareMessage::Reload {
@@ -189,6 +202,8 @@ async fn joined(
     // mid-line; acknowledgements go to the writer through a channel.
     let (acks, mut ack_rx) = mpsc::channel(16);
     let reader = async {
+        // Renamed by presence updates; comments are signed with the latest.
+        let mut author = author.clone();
         loop {
             let message = match lines::read::<Envelope<JoinerMessage>, _>(&mut recv).await {
                 Ok(Some(Envelope {
@@ -203,9 +218,18 @@ async fn joined(
             };
             let ack = match message {
                 JoinerMessage::Comment { reference, draft } => ShareMessage::CommentAck {
-                    outcome: shared.hub.comment(author, reference.clone(), draft),
+                    outcome: shared.hub.comment(&author, reference.clone(), draft),
                     reference,
                 },
+                JoinerMessage::Presence { name, url, cursor } => {
+                    match presence.update(Whereabouts { name, url, cursor }) {
+                        Ok(renamed) => author = renamed,
+                        Err(ignored) => {
+                            tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "presence update ignored");
+                        }
+                    }
+                    continue;
+                }
                 JoinerMessage::Hello { .. } => return "second hello",
             };
             if acks.send(ack).await.is_err() {
@@ -221,7 +245,7 @@ async fn joined(
                     None => return "control stream closed",
                 },
                 message = broadcasts.recv() => match message {
-                    Ok(message) => message,
+                    Ok(message) => presence.redact(message),
                     Err(RecvError::Lagged(_)) => return "fell behind",
                     Err(RecvError::Closed) => return "share stopped",
                 },

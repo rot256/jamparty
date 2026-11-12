@@ -1,8 +1,9 @@
 //! Control-stream messages. Every line is an [`Envelope`]:
 //! `{"version":1,"message":{"type":...}}`.
 //!
-//! Joiner to share: [`JoinerMessage::Hello`] first, then comments. Parsed
-//! strictly (unknown fields are refused): it is untrusted input.
+//! Joiner to share: [`JoinerMessage::Hello`] first, then comments and,
+//! when the share says it takes them, presence. Parsed strictly (unknown
+//! fields are refused): it is untrusted input.
 //!
 //! Share to joiner: admission or refusal, comment acknowledgements,
 //! answers, delivered comments, live-reload revisions, the status line and
@@ -16,11 +17,15 @@ use crate::{
         ids::CommentId,
         invalid::Invalid,
         name::JoinerName,
+        settings::Switch,
         text::{check_line, check_text},
         token::PartySecret,
         version::Version1,
     },
-    protocol::comment::{Author, Draft},
+    protocol::{
+        comment::{Author, Draft},
+        presence::{PagePath, Person, Support},
+    },
 };
 
 pub(crate) const MAX_STATUS_LINE: usize = 200;
@@ -60,6 +65,16 @@ pub(crate) enum JoinerMessage {
         reference: CommentRef,
         draft: Draft,
     },
+    /// Where the joiner is and how it is called now: sent after admission
+    /// and on every change, only to a share that supports it (see
+    /// [`ShareMessage::Admitted`]).
+    Presence {
+        name: JoinerName,
+        /// The page the joiner's most recently active tab is on.
+        #[serde(default)]
+        url: Option<PagePath>,
+        cursor: Switch,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +87,9 @@ pub(crate) enum ShareMessage {
         you: Author,
         #[serde(default)]
         undelivered: Vec<CommentId>,
+        /// Whether the share takes `presence` (and `cursor`) messages.
+        #[serde(default)]
+        presence: Support,
     },
     /// The hello was refused; the share closes the connection after this.
     Refused { reason: RefusedReason },
@@ -95,8 +113,14 @@ pub(crate) enum ShareMessage {
     Reload { revision: u64 },
     /// The status line (`null` clears it).
     Status { line: Option<StatusLine> },
-    /// Who is connected now.
-    Presence { joiners: Vec<Author> },
+    /// Who is connected now: `joiners` once per key (what older joiners
+    /// read), `here` the same people with their colour, page and cursor
+    /// switch.
+    Presence {
+        joiners: Vec<Author>,
+        #[serde(default)]
+        here: Vec<Person>,
+    },
 }
 
 /// The comment an answer replies to, with where it was made so pages can

@@ -1,10 +1,11 @@
 //! The share's state: the comment queue and its delivery state, the rate
-//! limiter, who is connected, the status line and recent answers;
-//! broadcasts to every joiner's control stream.
+//! limiter, who is connected (and where), the status line and recent
+//! answers; broadcasts to every joiner's control stream.
 
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::Duration,
 };
 
 #[cfg(test)]
@@ -22,10 +23,12 @@ use crate::{
         queue::{DeliveryQueue, DeliveryResult, DeliveryState, QueueError},
         ratelimit::{RateLimit, RateLimiter},
         rng::Rng,
+        settings::Switch,
     },
     protocol::{
         comment::{Author, Comment, Draft},
         control::{AckOutcome, Anchor, AnswerText, CommentRef, ShareMessage, StatusLine},
+        presence::{PagePath, Person, Whereabouts},
     },
 };
 
@@ -44,12 +47,16 @@ pub(crate) const MAX_JOINERS_PER_KEY: usize = 4;
 pub(crate) const MAX_QUEUED_PER_KEY: usize = 100;
 /// Comment refs remembered, so a comment sent again is queued once.
 const MAX_REFS: usize = 1000;
+/// Presence changes reach joiners at most this often, together.
+const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct Hub {
     inner: Mutex<Inner>,
     broadcast: broadcast::Sender<ShareMessage>,
     /// Poked when a comment is queued (or by tests after moving the clock).
     wakeup: Notify,
+    /// Poked when a joiner's whereabouts changed; see [`flush_presence`].
+    presence_changed: Notify,
     clock: Arc<dyn Clock>,
     rng: Arc<dyn Rng>,
 }
@@ -60,8 +67,11 @@ struct Inner {
     limiter: RateLimiter<EndpointKey>,
     /// Everyone's comments together.
     global: RateLimiter<()>,
-    /// Connected joiners, by connection.
-    joiners: Vec<(u64, Author)>,
+    /// Connected joiners, in order of admission.
+    joiners: Vec<Seat>,
+    /// Counts presence changes, to tell which of a key's connections is the
+    /// latest.
+    changes: u64,
     /// Recently queued comments by joiner key and the page's ref.
     refs: VecDeque<(EndpointKey, CommentRef, CommentId)>,
     next_connection: u64,
@@ -78,6 +88,7 @@ impl Hub {
                 limiter: RateLimiter::new(RateLimit::PER_JOINER),
                 global: RateLimiter::new(RateLimit::GLOBAL),
                 joiners: Vec::new(),
+                changes: 0,
                 refs: VecDeque::new(),
                 next_connection: 0,
                 status: None,
@@ -86,6 +97,7 @@ impl Hub {
             }),
             broadcast: broadcast::channel(BROADCAST_CAPACITY).0,
             wakeup: Notify::new(),
+            presence_changed: Notify::new(),
             clock,
             rng,
         })
@@ -113,14 +125,23 @@ impl Hub {
             let same_key = inner
                 .joiners
                 .iter()
-                .filter(|(_, joiner)| joiner.key == author.key)
+                .filter(|seat| seat.author.key == author.key)
                 .count();
             if inner.joiners.len() >= MAX_JOINERS || same_key >= MAX_JOINERS_PER_KEY {
                 return None;
             }
             let connection = inner.next_connection;
             inner.next_connection = connection.wrapping_add(1);
-            inner.joiners.push((connection, author));
+            inner.changes = inner.changes.wrapping_add(1);
+            let changed = inner.changes;
+            inner.joiners.push(Seat {
+                connection,
+                author,
+                url: None,
+                cursor: Switch::Off,
+                changed,
+                limiter: RateLimiter::new(RateLimit::PRESENCE),
+            });
             connection
         };
         self.broadcast_presence();
@@ -131,21 +152,55 @@ impl Hub {
     }
 
     fn broadcast_presence(&self) {
-        let joiners = self.presence();
-        self.broadcast(ShareMessage::Presence { joiners });
+        let here = self.here();
+        let joiners = here
+            .iter()
+            .map(|person| Author {
+                name: person.name.clone(),
+                fingerprint: person.fingerprint,
+                key: person.key,
+            })
+            .collect();
+        self.broadcast(ShareMessage::Presence { joiners, here });
     }
 
     /// Who is connected, in order of admission, once per key.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn presence(&self) -> Vec<Author> {
+        self.here()
+            .into_iter()
+            .map(|person| Author {
+                name: person.name,
+                fingerprint: person.fingerprint,
+                key: person.key,
+            })
+            .collect()
+    }
+
+    /// Who is connected and where, once per key (in order of the key's
+    /// first admission, as its latest connection says).
+    #[must_use]
+    pub(crate) fn here(&self) -> Vec<Person> {
         let inner = self.lock();
-        let mut authors: Vec<Author> = Vec::new();
-        for (_, author) in &inner.joiners {
-            if !authors.iter().any(|known| known.key == author.key) {
-                authors.push(author.clone());
+        let mut latest: Vec<&Seat> = Vec::new();
+        for seat in &inner.joiners {
+            match latest
+                .iter_mut()
+                .find(|known| known.author.key == seat.author.key)
+            {
+                Some(known) => {
+                    if seat.changed > known.changed {
+                        *known = seat;
+                    }
+                }
+                None => latest.push(seat),
             }
         }
-        authors
+        latest
+            .into_iter()
+            .map(|seat| Person::new(seat.author.clone(), seat.url.clone(), seat.cursor))
+            .collect()
     }
 
     /// What a newly admitted joiner is told besides presence: recent answers
@@ -379,10 +434,99 @@ fn status_line(text: &str) -> Option<StatusLine> {
     StatusLine::try_from(text.to_owned()).ok()
 }
 
+/// One admitted connection.
+struct Seat {
+    connection: u64,
+    author: Author,
+    url: Option<PagePath>,
+    cursor: Switch,
+    /// When its whereabouts last changed (see `Inner::changes`).
+    changed: u64,
+    /// Its presence updates.
+    limiter: RateLimiter<()>,
+}
+
+/// Why a joiner's message changed nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ignored {
+    /// Over its rate limit; dropped.
+    RateLimited,
+    /// The connection left presence meanwhile.
+    Gone,
+}
+
 /// A joiner's place in presence; leaving is announced on drop.
 pub(crate) struct Presence {
     hub: Arc<Hub>,
     connection: u64,
+}
+
+impl Presence {
+    /// Records where the joiner is now and what it is called; everyone
+    /// hears of it shortly (see [`flush_presence`]). Returns how its
+    /// comments are signed from now on.
+    pub(crate) fn update(&self, whereabouts: Whereabouts) -> Result<Author, Ignored> {
+        let Whereabouts { name, url, cursor } = whereabouts;
+        let author = {
+            let mut guard = self.hub.lock();
+            let inner = &mut *guard;
+            inner.changes = inner.changes.wrapping_add(1);
+            let changed = inner.changes;
+            let seat = inner
+                .joiners
+                .iter_mut()
+                .find(|seat| seat.connection == self.connection)
+                .ok_or(Ignored::Gone)?;
+            seat.limiter
+                .check((), self.hub.clock.as_ref())
+                .map_err(|_| Ignored::RateLimited)?;
+            seat.author.name = name;
+            seat.url = url;
+            seat.cursor = cursor;
+            seat.changed = changed;
+            seat.author.clone()
+        };
+        self.hub.presence_changed.notify_one();
+        Ok(author)
+    }
+}
+
+impl Presence {
+    /// The page this joiner is on, as it last said.
+    #[must_use]
+    pub(crate) fn url(&self) -> Option<PagePath> {
+        self.hub
+            .lock()
+            .joiners
+            .iter()
+            .find(|seat| seat.connection == self.connection)
+            .and_then(|seat| seat.url.clone())
+    }
+
+    /// `message` as this joiner gets it: in presence, only the pages of
+    /// people on its own page (everyone sees who is here, nobody where
+    /// the others are).
+    #[must_use]
+    pub(crate) fn redact(&self, message: ShareMessage) -> ShareMessage {
+        match message {
+            ShareMessage::Presence { joiners, mut here } => {
+                let mine = self.url();
+                for person in &mut here {
+                    if person.url != mine {
+                        person.url = None;
+                    }
+                }
+                ShareMessage::Presence { joiners, here }
+            }
+            other @ (ShareMessage::Admitted { .. }
+            | ShareMessage::Refused { .. }
+            | ShareMessage::CommentAck { .. }
+            | ShareMessage::Answer { .. }
+            | ShareMessage::Delivered { .. }
+            | ShareMessage::Reload { .. }
+            | ShareMessage::Status { .. }) => other,
+        }
+    }
 }
 
 impl Drop for Presence {
@@ -390,8 +534,18 @@ impl Drop for Presence {
         self.hub
             .lock()
             .joiners
-            .retain(|(connection, _)| *connection != self.connection);
+            .retain(|seat| seat.connection != self.connection);
         self.hub.broadcast_presence();
+    }
+}
+
+/// Tells everyone about changed whereabouts, at most every
+/// [`PRESENCE_INTERVAL`]: changes in between go out together.
+pub(crate) async fn flush_presence(hub: Arc<Hub>) {
+    loop {
+        hub.presence_changed.notified().await;
+        hub.broadcast_presence();
+        time::sleep(PRESENCE_INTERVAL).await;
     }
 }
 

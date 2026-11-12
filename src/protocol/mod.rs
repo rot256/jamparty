@@ -12,6 +12,7 @@
 pub(crate) mod agent;
 pub(crate) mod comment;
 pub(crate) mod control;
+pub(crate) mod presence;
 
 use std::{
     error::Error,

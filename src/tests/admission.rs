@@ -16,7 +16,10 @@ use crate::{
         rng::SystemRng,
         token::{PartySecret, PartyToken},
     },
-    protocol::control::{Envelope, RefusedReason, ShareMessage},
+    protocol::{
+        control::{Envelope, RefusedReason, ShareMessage},
+        presence::Support,
+    },
     share::{REFUSED_CODE, Source, delivery::Target},
     tests::harness::{
         config, connected, fixture_dir, get, joiner, net, raw_connection, share_files, start,
@@ -124,11 +127,17 @@ async fn right_secret_is_admitted_then_served() {
         .await
         .unwrap()
         .unwrap();
-    let ShareMessage::Admitted { you, undelivered } = admitted.message else {
+    let ShareMessage::Admitted {
+        you,
+        undelivered,
+        presence,
+    } = admitted.message
+    else {
         panic!("expected admission, got {admitted:?}");
     };
     assert_eq!(you.name.to_string(), "mallory");
     assert!(undelivered.is_empty());
+    assert_eq!(presence, Support::Supported);
     let answered = String::from_utf8(try_request(&connection).await).unwrap();
     assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
     assert!(answered.contains("Fixture"));

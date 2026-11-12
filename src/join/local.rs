@@ -65,12 +65,13 @@ pub(crate) async fn serve(listener: TcpListener, session: Arc<Session>) {
     }
 }
 
-async fn handle(request: Request<Incoming>, session: &Session) -> Response<AppBody> {
+async fn handle(request: Request<Incoming>, session: &Arc<Session>) -> Response<AppBody> {
     let decision = session.origin.decide(&facts(&request));
     let mut response = match decision {
         Ok(Route::Comments) => api::comment(request, session).await,
         Ok(Route::Status) => api::status(session),
-        Ok(Route::Events) => api::events(session),
+        Ok(Route::Events) => api::events(session, request.uri().query()),
+        Ok(Route::Page) => api::page(request, session).await,
         Ok(Route::Settings) => api::settings(request, session).await,
         Ok(Route::Proxy) => forward(request, session)
             .await

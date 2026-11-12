@@ -24,6 +24,7 @@ pub(crate) const COMMENTS_PATH: &str = "/_jampot/api/comments";
 pub(crate) const STATUS_PATH: &str = "/_jampot/api/status";
 pub(crate) const EVENTS_PATH: &str = "/_jampot/api/events";
 pub(crate) const SETTINGS_PATH: &str = "/_jampot/api/settings";
+pub(crate) const PAGE_PATH: &str = "/_jampot/api/page";
 
 /// The request method, as far as the decision cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +79,8 @@ pub(crate) enum Route {
     Events,
     /// POST a change to the joiner's settings.
     Settings,
+    /// POST the URL a tab is on.
+    Page,
     /// Forward to the share.
     Proxy,
 }
@@ -177,6 +180,7 @@ fn route(facts: &RequestFacts<'_>) -> Result<Route, Refusal> {
         STATUS_PATH => (Route::Status, Method::Get),
         EVENTS_PATH => (Route::Events, Method::Get),
         SETTINGS_PATH => (Route::Settings, Method::Post),
+        PAGE_PATH => (Route::Page, Method::Post),
         _ => return Ok(Route::Proxy),
     };
     if facts.method == method && facts.upgrade == Upgrade::No {

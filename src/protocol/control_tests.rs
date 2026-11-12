@@ -1,5 +1,5 @@
 use crate::{
-    core::{ids::EndpointKey, rng::SeededRng, token::PartySecret},
+    core::{ids::EndpointKey, rng::SeededRng, settings::Switch, token::PartySecret},
     protocol::{
         MAX_LINE_BYTES,
         comment::{Author, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT, MAX_SELECTOR},
@@ -8,6 +8,7 @@ use crate::{
             MAX_STATUS_LINE, RefusedReason, ShareMessage, StatusLine,
         },
         decode_line, encode_line,
+        presence::{MAX_PAGE_PATH, Person, Support},
     },
 };
 
@@ -30,6 +31,8 @@ fn joiner_messages_round_trip() {
         ),
         r#"{"version":1,"message":{"type":"comment","ref":"7","draft":{"page":"/","selector":"main > h1","selectedText":"Hi","comment":"Bigger"}}}"#.to_owned(),
         r#"{"version":1,"message":{"type":"comment","ref":"a-B-9","draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"presence","name":"alice","url":"/docs?x=1#y","cursor":"on"}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"presence","name":"alice","url":null,"cursor":"off"}}"#.to_owned(),
     ];
     for line in &lines {
         let parsed = joiner(line).unwrap_or_else(|error| panic!("{line}: {error}"));
@@ -81,6 +84,16 @@ fn invalid_joiner_messages_are_rejected() {
             r#"{{"version":1,"message":{{"type":"comment","ref":"1","draft":{{"page":"/","selector":"","comment":"{}"}}}}}}"#,
             "x".repeat(MAX_COMMENT + 1)
         ),
+        // Presence: names and pages are checked, nothing else is taken.
+        r#"{"version":1,"message":{"type":"presence","name":"a b","cursor":"on"}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"presence","name":"a","url":"http://evil/","cursor":"on"}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"presence","name":"a","url":"/\"","cursor":"on"}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"presence","name":"a","cursor":"maybe"}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"presence","name":"a","cursor":"on","colour":1}}"#.to_owned(),
+        format!(
+            r#"{{"version":1,"message":{{"type":"presence","name":"a","url":"/{}","cursor":"on"}}}}"#,
+            "p".repeat(MAX_PAGE_PATH)
+        ),
     ];
     for line in bad {
         assert!(joiner(&line).is_err(), "{line}");
@@ -116,8 +129,8 @@ fn share_messages() {
     let reference = |raw: &str| CommentRef::try_from(raw.to_owned()).unwrap();
     let cases = [
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()] },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"]}}"#),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"presence":"supported"}}"#),
         ),
         (
             ShareMessage::Refused { reason: RefusedReason::WrongSecret },
@@ -165,8 +178,11 @@ fn share_messages() {
         ),
         (ShareMessage::Status { line: None }, r#"{"type":"status","line":null}"#.to_owned()),
         (
-            ShareMessage::Presence { joiners: vec![author] },
-            format!(r#"{{"type":"presence","joiners":[{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}}]}}"#),
+            ShareMessage::Presence {
+                joiners: vec![author.clone()],
+                here: vec![Person::new(author.clone(), Some("/a?b#c".to_owned().try_into().unwrap()), Switch::On)],
+            },
+            format!(r#"{{"type":"presence","joiners":[{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}}],"here":[{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}","colour":3,"url":"/a?b#c","cursor":"on"}}]}}"#),
         ),
     ];
     for (message, json) in cases {
@@ -178,6 +194,21 @@ fn share_messages() {
         let parsed: Envelope<ShareMessage> = decode_line(line.as_bytes()).unwrap();
         assert_eq!(parsed.message, message);
     }
+    // What an older share sends still parses: no presence support, no
+    // `here`.
+    let older = format!(
+        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{key}"}}}}}}"#
+    );
+    let Envelope {
+        message: ShareMessage::Admitted { presence, .. },
+        ..
+    } = decode_line::<Envelope<ShareMessage>>(older.as_bytes()).unwrap()
+    else {
+        panic!("not admitted");
+    };
+    assert_eq!(presence, Support::Unsupported);
+    let older = r#"{"version":1,"message":{"type":"presence","joiners":[]}}"#;
+    assert!(decode_line::<Envelope<ShareMessage>>(older.as_bytes()).is_ok());
     // A newer share may add fields.
     let extra = r#"{"version":1,"message":{"type":"reload","revision":3,"at":"now"}}"#;
     assert!(decode_line::<Envelope<ShareMessage>>(extra.as_bytes()).is_ok());

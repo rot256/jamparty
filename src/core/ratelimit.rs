@@ -55,6 +55,12 @@ impl RateLimit {
         interval: SignedDuration::from_secs(6),
         burst: SignedDuration::from_secs(54),
     };
+    /// 50 presence updates per 10 s from one connection (the joiner sends
+    /// one per page change, name change or cursor switch).
+    pub(crate) const PRESENCE: Self = Self {
+        interval: SignedDuration::from_millis(200),
+        burst: SignedDuration::from_millis(9800),
+    };
     /// 60 comments per minute: everyone's together.
     pub(crate) const GLOBAL: Self = Self {
         interval: SignedDuration::from_secs(1),

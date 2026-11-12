@@ -13,6 +13,7 @@ use hyper_util::rt::TokioIo;
 use iroh::{Endpoint, SecretKey, endpoint::Connection};
 use tempfile::TempDir;
 use tokio::{net::TcpStream, time};
+use url::form_urlencoded;
 
 use crate::{
     adapters::endpoint::{Accept, Discovery, NetConfig, bind, connect, generate_key},
@@ -254,9 +255,21 @@ pub(crate) async fn post_comment(joiner: &Joiner, body: &str) -> Reply {
 
 /// Opens the joiner's event stream.
 pub(crate) async fn events(joiner: &Joiner) -> Incoming {
-    let request = local(joiner, "GET", "/_jampot/api/events")
-        .body(Full::default())
-        .unwrap();
+    open_events(joiner, "/_jampot/api/events").await
+}
+
+/// Opens the joiner's event stream as tab `tab` on page `url`, as a page
+/// does.
+pub(crate) async fn tab_events(joiner: &Joiner, tab: &str, url: &str) -> Incoming {
+    let query: String = form_urlencoded::Serializer::new(String::new())
+        .append_pair("tab", tab)
+        .append_pair("url", url)
+        .finish();
+    open_events(joiner, &format!("/_jampot/api/events?{query}")).await
+}
+
+async fn open_events(joiner: &Joiner, path: &str) -> Incoming {
+    let request = local(joiner, "GET", path).body(Full::default()).unwrap();
     let response = send(joiner.local_addr(), request).await;
     assert_eq!(response.status(), 200);
     response.into_body()

@@ -152,6 +152,7 @@ impl Share {
             Arc::clone(&shared),
         ));
         tasks.spawn(connection::forward_reloads(Arc::clone(&shared)));
+        tasks.spawn(hub::flush_presence(Arc::clone(&shared.hub)));
         Ok(Self {
             endpoint,
             shared,

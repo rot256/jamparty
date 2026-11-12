@@ -94,7 +94,11 @@ async fn host_and_cross_site_rules() {
         ("sec-fetch-site", "cross-site"),
         ("origin", origin.as_str()),
     ];
-    for path in ["/_jampot/api/comments", "/_jampot/api/settings"] {
+    for path in [
+        "/_jampot/api/comments",
+        "/_jampot/api/settings",
+        "/_jampot/api/page",
+    ] {
         for headers in [&post_navigate[..], &cross_post[..]] {
             assert_eq!(send("POST", path, headers).await.status, 403, "{path}");
         }
