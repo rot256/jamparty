@@ -1,11 +1,8 @@
 name: Release
 
+# Manual only while jamjam is under construction: a push must not publish a
+# release or a crate.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - Cargo.toml
   workflow_dispatch:
 
 permissions:
