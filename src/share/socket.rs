@@ -1,7 +1,7 @@
 //! The share's end of the runtime socket: `recv` and `send` requests from
 //! the user's own processes (see [`crate::protocol::agent`]).
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use tokio::{
     io::BufReader,
@@ -14,7 +14,7 @@ use tokio::{
 };
 
 use crate::{
-    adapters::lines,
+    adapters::{lines, runtime},
     protocol::{
         agent::{AgentReply, AgentRequest},
         control::Envelope,
@@ -22,6 +22,13 @@ use crate::{
     share::{delivery::RecvRequest, hub::Hub},
 };
 
+/// How long `jamjam recv` has to confirm it printed a batch; after that
+/// the batch goes back to the queue.
+const PRINTED_TIMEOUT: Duration = Duration::from_secs(30);
+/// The pause after a failed accept.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+
+/// Serves the user's own processes only (checked by their credentials).
 pub(crate) async fn serve(
     listener: UnixListener,
     hub: Arc<Hub>,
@@ -30,10 +37,17 @@ pub(crate) async fn serve(
     let mut clients = JoinSet::new();
     loop {
         match listener.accept().await {
-            Ok((stream, _)) => {
-                clients.spawn(handle(stream, Arc::clone(&hub), recv.clone()));
+            Ok((stream, _)) => match runtime::check_peer(&stream) {
+                Ok(()) => {
+                    clients.spawn(handle(stream, Arc::clone(&hub), recv.clone()));
+                }
+                Err(error) => tracing::warn!(%error, "refused a runtime socket client"),
+            },
+            Err(error) => {
+                tracing::warn!(%error, "runtime socket accept failed");
+                // Out of descriptors, say: let it pass rather than spin.
+                tokio::time::sleep(ACCEPT_BACKOFF).await;
             }
-            Err(error) => tracing::warn!(%error, "runtime socket accept failed"),
         }
         while clients.try_join_next().is_some() {}
     }
@@ -121,10 +135,15 @@ async fn serve_recv(
     {
         return;
     }
-    if let Ok(Some(Envelope {
+    let printed = tokio::time::timeout(
+        PRINTED_TIMEOUT,
+        lines::read::<Envelope<AgentRequest>, _>(&mut read),
+    )
+    .await;
+    if let Ok(Ok(Some(Envelope {
         version: _,
         message: AgentRequest::Printed,
-    })) = lines::read::<Envelope<AgentRequest>, _>(&mut read).await
+    }))) = printed
     {
         let _ = printed_tx.send(());
     }
