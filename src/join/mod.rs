@@ -8,7 +8,8 @@ mod markdown;
 mod session;
 
 use std::{
-    net::{Ipv4Addr, SocketAddr},
+    io::ErrorKind,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
 };
 
@@ -37,6 +38,32 @@ pub(crate) struct JoinConfig {
     pub(crate) share_addrs: Vec<SocketAddr>,
 }
 
+/// Ports tried before giving up on one free on both loopback addresses.
+const BIND_ATTEMPTS: usize = 16;
+
+/// Listeners on one port of 127.0.0.1 and [::1] both (`localhost` may
+/// resolve to either), so no other local user can take the IPv6 side.
+/// Without IPv6 loopback, nobody can, and 127.0.0.1 alone will do.
+async fn bind_local() -> Result<Vec<TcpListener>, BoxError> {
+    for _ in 0..BIND_ATTEMPTS {
+        let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let port = v4.local_addr()?.port();
+        match TcpListener::bind((Ipv6Addr::LOCALHOST, port)).await {
+            Ok(v6) => return Ok(vec![v4, v6]),
+            Err(error) if error.kind() == ErrorKind::AddrInUse => {}
+            Err(error)
+                if error.kind() == ErrorKind::AddrNotAvailable
+                    || error.raw_os_error() == Some(nix::libc::EAFNOSUPPORT) =>
+            {
+                tracing::debug!(%error, "no IPv6 loopback; listening on 127.0.0.1 only");
+                return Ok(vec![v4]);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err("could not find a port free on both 127.0.0.1 and [::1]".into())
+}
+
 /// A running joiner; dropping it stops it.
 pub(crate) struct Joiner {
     endpoint: Endpoint,
@@ -55,8 +82,12 @@ impl Joiner {
             net,
             share_addrs,
         } = config;
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
-        let port = listener.local_addr()?.port();
+        let listeners = bind_local().await?;
+        let port = listeners
+            .first()
+            .ok_or("no local listener")?
+            .local_addr()?
+            .port();
         let session = Arc::new(Session::new(LocalOrigin::new(&token.share.sid(), port)));
         let endpoint = bind(&net, key, Accept::Nothing).await?;
         let dial = Dial {
@@ -67,7 +98,9 @@ impl Joiner {
         };
         let mut tasks = JoinSet::new();
         tasks.spawn(connection::run(dial, Arc::clone(&session)));
-        tasks.spawn(local::serve(listener, Arc::clone(&session)));
+        for listener in listeners {
+            tasks.spawn(local::serve(listener, Arc::clone(&session)));
+        }
         Ok(Self {
             endpoint,
             session,
