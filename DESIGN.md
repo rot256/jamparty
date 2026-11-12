@@ -337,6 +337,34 @@ Kept out of the first version on purpose; the protocol leaves room:
   `rate_limited`, `queue_full`), `answer`, `delivered{ids}`,
   `reload{revision}`, `status{line}`, `presence{joiners}`. Joiner messages
   are parsed strictly; unknown fields in share messages are ignored.
+- Admission: the first stream the joiner opens is the control stream; the
+  share reads its hello within 10 s and accepts no other stream before
+  admitting. A refusal is a `refused` line and then a connection close
+  with code 1 and the reason (`wrong_secret`, `bad_hello`) as the close
+  reason, so the joiner sees it either way. A refused joiner stops
+  (`jamjam join` exits with the reason); any other loss reconnects with
+  the delivery backoff (1 s doubling to 60 s). On admission the share sends
+  `admitted`, the current `reload` revision (directories only), then
+  presence to everyone. A joiner that falls behind the share's broadcasts
+  is disconnected and reconnects.
+- Live-reload revisions count from 0; the injected client script carries
+  the revision its page was served at (`client.js?live=<n>`).
+- Client injection needs a `Content-Length` of at most 2 MB; chunked
+  (streamed) HTML passes through untouched.
+- Joiner endpoints: `api/comments` takes a draft (`page`, `selector`,
+  `selectedText`, `comment`; nothing else) and answers 202 `{id, pending}`,
+  429 `{error, retryAfterSecs}`, or 503 when the share is unreachable or
+  its queue is full (`pending`: this joiner's comments not yet delivered).
+  `api/status` is `{connected, refused, you, joiners, revision, status,
+  pending}`; `api/events` sends `data: <json>` with `type` `share`
+  (`connected`, first on every stream), `reload`, `presence`, `status` or
+  `delivered`. The local server sends a second
+  `Content-Security-Policy: frame-ancestors 'self'` header rather than
+  replacing the site's own.
+- Offline use and the browser tests: hidden flags `--local` on
+  `serve`/`proxy` (no relays or address lookup, bound on `127.0.0.1`,
+  prints the direct address) and `--share-addr <addr>` on `join` (dial that
+  address, no relays or address lookup).
 
 ## Logo
 
@@ -352,7 +380,7 @@ JamJam?".
 | `core/` | Pure, no I/O, no clock or randomness of its own: the token (format, parse, `<sid>`), joiner names, the joiner's request decision (Host, fetch metadata, Origin, reserved paths), the comment queue and delivery state machine, the rate limiter, ids, clock and rng traits |
 | `protocol/` | Control-stream messages and limits |
 | `share/` | iroh accept loop and admission, request streams on komtar's hyper serving and injection, control stream, delivery, runtime socket |
-| `join/` | iroh connection, local HTTP server (axum), event stream, reconnection |
+| `join/` | iroh connection, local HTTP server (hyper), event stream, reconnection |
 | `adapters/` | iroh endpoint setup, T3 MCP client, command target, filesystem |
 
 - Clock and randomness are injected: backoff and rate limits are tested
@@ -408,12 +436,15 @@ Must-have cases:
    hosted parts (cookies, entry tokens, allowlist, sessions, pairing,
    front-door access); add the token, names and the joiner's request
    decision.
-4. Share: iroh accept loop and admission, request streams on komtar's
-   serving, control stream, runtime socket.
-5. Joiner: connection, local server with its request decision, event
-   stream, reconnection; in-process share and joiner tests.
-6. Comments, delivery (command target first), answers, presence,
-   connection state; browser tests.
+4. Share (done): iroh accept loop and admission, request streams on
+   komtar's serving, control stream (comments queued, presence, reload).
+5. Joiner (done): connection, local server with its request decision,
+   event stream, reconnection; in-process share and joiner tests; browser
+   tests for serve, proxy and join.
+6. Runtime socket, `recv` and `send`, delivery (command target first),
+   answers (komtar's Markdown renderer and `jamjam agent` guidance come
+   back from `agent.rs` in git history, removed with the FIFO transport),
+   connection state in the page; more browser tests.
 7. T3 target: fake MCP, then the contract test on the box.
 8. Install jamjam in the `t3` container (infra repo) with its config and
    T3 token; end-to-end check: share from `t3`, join from the laptop,
@@ -421,8 +452,8 @@ Must-have cases:
 
 ## Crates
 
-iroh 1.4.1 (transport), hyper and hyper-util (share serving, from komtar),
-axum (joiner's local server), tokio, reqwest (T3 MCP), serde/serde_json,
+iroh 1.4.1 (transport), hyper and hyper-util (share serving, from komtar,
+and the joiner's local server), tokio, reqwest (T3 MCP), serde/serde_json,
 sha2, data-encoding, getrandom, subtle; proptest for tests; komtar's
 existing dependencies for static serving, file watching and Markdown.
 
