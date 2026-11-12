@@ -1,4 +1,7 @@
 mod agent;
+// Pure core; the server and share wire it in (implementation plan steps 4 and 5).
+#[allow(dead_code)]
+mod core;
 mod fifo;
 mod live;
 mod model;
