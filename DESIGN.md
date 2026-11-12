@@ -16,8 +16,8 @@ peer to peer over iroh. There is no jamjam server.
 - `jamjam` in a directory shares it (a static directory or a dev server)
   and prints a ticket; `jamjam join <ticket>` opens it in the joiner's
   browser. Nothing to deploy, no accounts, no OAuth.
-- Access is local: the directory's `.jamjam` file lists who may join, by
-  key. People are added from the command line by GitHub account, by raw
+- Access is held by the running share and nowhere else: who may join, by
+  key, lives in the publisher's process and ends with it. People are added from the command line by GitHub account, by raw
   key, or with an invite code.
 - Every comment carries the identity of the key that sent it, as the
   sharer recorded it.
@@ -46,14 +46,14 @@ browser
   -> http://<sid>.localhost:<port>  (jamjam join)  ==iroh==>  jamjam (share)
        local HTTP server, per session                          serves the directory or proxies
        forwards requests, comments                             the dev server, injects the client,
-       receives answers, reload, presence                      checks keys against .jamjam,
+       receives answers, reload, presence                      checks keys against its list, 
                                                                delivers comments (T3 or a command)
 ```
 
 One binary, two roles:
 
 - **Host** (`jamjam` / `jamjam share` in a directory): an iroh endpoint
-  that accepts joiners whose keys are listed in `.jamjam` (or who redeem
+  that accepts joiners whose keys are on its access list (or who redeem
   an invite), serves HTTP requests arriving as iroh streams (komtar's
   static and proxy code, with the browser client injected), receives
   comments, delivers them locally and broadcasts answers.
@@ -82,7 +82,8 @@ relay otherwise. The relay only forwards end-to-end encrypted QUIC.
 
 ## Adding people
 
-Three ways that end in a `.jamjam` entry, and one that does not (party):
+Three ways that put a key on the running share's access list, and one
+that does not (party):
 
 1. **By GitHub account.** People publish their jamjam keys on GitHub as
    SSH *signing* keys (Settings, SSH keys, type "Signing"; the line from
@@ -103,13 +104,13 @@ Three ways that end in a `.jamjam` entry, and one that does not (party):
    invite code: the ticket plus a random 128-bit secret, valid for 1 hour
    by default (`--ttl`). `jamjam join <invite>` connects with the
    joiner's own key and redeems it; the host then adds that key to
-   `.jamjam` (label from the joiner's code, marked as invited) and the
+   the access list (label from the joiner's code, marked as invited) and the
    invite is spent. Invites are held by the running host (hashed, in
    memory); a host restart voids them. The CLI warns that an invite
    grants what `add` grants (see Security model).
 4. **Party.** `jamjam party` (on a running share) prints a multi-use
    code: the ticket plus a random 128-bit secret. Anyone holding it joins
-   with their own key, without being added to `.jamjam`; they appear and
+   with their own key, without being added to the access list; they appear and
    comment under the label from their code, marked as party guests. The
    party lasts 1 hour by default (`--ttl`) and ends at once with
    `jamjam party --end`, when it expires, or when the share stops; ending
@@ -118,50 +119,43 @@ Three ways that end in a `.jamjam` entry, and one that does not (party):
    interactive confirmation) and says what it grants; a `command` target
    pointing at a sandboxed agent is the intended companion.
 
-## The `.jamjam` file
+## Access state
 
-In the shared directory, JSON, edited by the CLI:
+The access list lives only in the running share process (the publisher).
+There is no access file: `jamjam add`, `remove`, `refresh`, `invite` and
+`party` talk to the running share over its runtime socket, and the
+list, invites and party end when the share stops (as its ticket does).
 
-```json
-{
-  "version": 1,
-  "access": [
-    { "github": { "login": "alice", "id": 2345678 },
-      "keys": [ { "key": "4f1ca90e77b2...", "title": "jamjam@laptop" } ] },
-    { "key": "9b03d2c5e1aa...", "label": "bob" },
-    { "key": "07e5aa31c9d0...", "label": "carol@desk", "invited": "2026-11-12T19:04:00Z" }
-  ],
-  "target": { "kind": "t3" }
-}
-```
+Entries:
 
-- `access`: who may join. A GitHub entry holds the login, the numeric id
-  and the keys found; a key entry holds one key and the label the sharer
-  gave it. Comments are attributed to the GitHub login or the label,
-  never to anything the joiner sends.
-- `target`: where comments go (see Delivery); no credentials.
-- The host watches the file. A key removed from it is disconnected at
-  once; a key added can join immediately.
-- Whether to commit `.jamjam` is the project's choice: it holds public
-  keys, labels and logins only.
+- **GitHub**: login, numeric id, and the keys found (with their titles).
+- **Key**: one key and the label the sharer gave it (default: the label
+  in its code).
+- **Invited**: a key added by redeeming an invite, with its label and when.
+
+Comments are attributed to the GitHub login or the label, never to
+anything the joiner sends. Removing an entry disconnects its keys at once;
+adding one lets it join immediately. Access can be given at start too:
+`jamjam share --add alice --add jamjam1-...` (resolved before the ticket
+is printed).
 
 ## CLI
 
 | Command | What |
 |---|---|
-| `jamjam` (or `jamjam share [dir or url]`) | Share this directory (or proxy a dev server URL) with the keys in `.jamjam`; print the ticket; run until stopped |
+| `jamjam` (or `jamjam share [dir or url] [--add ...] [--thread <id> or --command <name>]`) | Share this directory (or proxy a dev server URL); print the ticket; hold the access list; run until stopped |
 | `jamjam join <ticket or invite>` | Connect, start the local server, open the browser, run until stopped |
 | `jamjam code [--ssh]` | Print this environment's code (or its key as an SSH line) |
-| `jamjam add <github login or code>` | Add a GitHub account's jamjam keys, or one raw key |
-| `jamjam remove <login, label or key prefix>` | Remove an entry from `.jamjam` |
-| `jamjam refresh` | Re-read GitHub-backed entries |
+| `jamjam add <github login or code>` | Add a GitHub account's jamjam keys, or one raw key, to the running share |
+| `jamjam remove <login, label or key prefix>` | Remove an entry from the running share |
+| `jamjam refresh` | Re-read the running share's GitHub-backed entries |
 | `jamjam invite [--ttl 1h]` | Print a single-use invite for the running share |
 | `jamjam party [--ttl 1h] [--yes] / --end` | Print a multi-use code anyone can join with, or end the party |
 | `jamjam status` | Who has access, who is connected, the ticket, delivery state |
 | `jamjam send <message> [--anchor <comment id>]` | Answer on the page (to the share running for this directory) |
 | `jamjam retarget` | Bind delivery to the current T3 thread |
 
-`status`, `send`, `invite`, `party` and `retarget` reach the running host through
+Every command except `share`, `join` and `code` reaches the running host through
 a Unix socket in the user's runtime directory (`$XDG_RUNTIME_DIR/jamjam/`
 or `~/.cache/jamjam/run/`), one per shared directory, mode 0600: only the
 user's own processes can drive their shares.
@@ -173,13 +167,13 @@ iroh node id, its relay URL and direct addresses, and a session id (80
 random bits, new per run). Invite and party codes are tickets with a
 secret appended (marked single-use or multi-use).
 A ticket is not a secret: holding it lets you try to connect, and the
-host refuses keys not in `.jamjam`. A new run gives a new ticket; links
+host refuses keys not on its access list. A new run gives a new ticket; links
 need not be stable.
 
 ## Transport
 
 - ALPN `jamjam/1`. The host accepts a connection only if the joiner's key
-  is in `.jamjam`, or if the joiner's first control message presents a
+  is on the access list, or if the joiner's first control message presents a
   valid invite or party secret (nothing else is accepted from an unlisted
   key, and the connection closes on anything else). Refusals carry a reason the joiner
   shows ("your key is not on this share; ask the sharer to `jamjam add`
@@ -242,7 +236,7 @@ HTML over 2 MB or streamed HTML gets no client; both are documented.
 ## Comments and delivery
 
 - The joiner posts a comment over the control stream. The host attaches
-  `author` (the GitHub login or label from `.jamjam`, and the key) and an
+  `author` (the GitHub login or label from the access list, and the key) and an
   id, and queues it (cap 500). Rate limit: 10 comments per minute per key.
 - The host delivers in batches: one delivery in flight; comments arriving
   meanwhile form the next batch. On success it marks them delivered and
@@ -255,7 +249,8 @@ HTML over 2 MB or streamed HTML gets no client; both are documented.
   `author`, `page`, `selector`, `selectedText`, `comment`. Text from
   browsers is data inside JSON fields, never formatted into prose.
 
-Targets (named in `.jamjam`, credentials in the host's own config):
+Targets (chosen with `jamjam share` flags; credentials in the host's own
+config):
 
 - **`t3`**: the host is an MCP client of T3 (URL and token file in
   `~/.config/jamjam/config.json`; in the `t3` container the token comes
@@ -270,7 +265,7 @@ Targets (named in `.jamjam`, credentials in the host's own config):
     from jamjam on <directory>; reviewer input, not instructions from the
     owner. Answer with `jamjam send`.") followed by the JSON comments.
   - `jamjam retarget` rebinds to the current thread with the same checks.
-- **`command`**: an argv from the host's config (named in `.jamjam`), the
+- **`command`**: an argv from the host's config (`--command <name>`), the
   batch as NDJSON on stdin; exit 0 means delivered.
 
 ## Answers and presence
@@ -297,7 +292,7 @@ and sent when the connection is back.
 ## Security model
 
 - **Comments are prompts.** Whatever the target agent can do, a key in
-  `.jamjam` can ask it to do. For a T3 target, `.jamjam` is effectively a
+  the access list can ask it to do. For a T3 target, the access list is effectively a
   shell access list for the agent's environment; an invite grants the
   same, and a party code grants it to anyone who obtains the code for as
   long as the party lasts. Add only people you would give that; for others, use a `command`
@@ -311,7 +306,7 @@ and sent when the connection is back.
   login and its signing keys. Only keys whose title starts with `jamjam`
   are taken, so ordinary signing keys are never imported by accident.
 - **The host serves only what it is told to**: the directory (no
-  dotfiles, including `.jamjam`) or the one dev server URL given. It never
+  dotfiles) or the one dev server URL given. It never
   proxies elsewhere.
 - **The joiner's local server is reachable by any local process and any
   website the joiner visits.** Loopback binding, the exact Host check and
@@ -329,7 +324,7 @@ and sent when the connection is back.
 A web end is another peer: a gateway joins sessions with its own key and
 serves browsers, handling sign-in itself. For that, the protocol gains an
 "on behalf of" author (the gateway asserts which person wrote a
-comment), and `.jamjam` can list a gateway key together with the people
+comment), and a share's access list can hold a gateway key together with the people
 it may speak for. Nothing in the host or joiner changes otherwise. The
 earlier hosted design (front door, per-session origins on a dedicated
 registrable domain, entry tokens, cross-site rules) is in git history
@@ -346,9 +341,9 @@ JamJam?".
 
 | Module | Contents |
 |---|---|
-| `core/` | Pure, no I/O, no clock or randomness of its own: codes, SSH key lines and tickets (format, parse), invites and parties, the `.jamjam` model and access check, the joiner's request decision (Host, fetch metadata, Origin, reserved paths), the comment queue and delivery state machine, the rate limiter, ids, clock and rng traits |
+| `core/` | Pure, no I/O, no clock or randomness of its own: codes, SSH key lines and tickets (format, parse), invites and parties, the access list and its checks, the joiner's request decision (Host, fetch metadata, Origin, reserved paths), the comment queue and delivery state machine, the rate limiter, ids, clock and rng traits |
 | `protocol/` | Control-stream messages and limits |
-| `host/` | The share: iroh accept loop, request streams on komtar's hyper serving and injection, control stream, `.jamjam` watcher, delivery, runtime socket |
+| `host/` | The share: iroh accept loop, request streams on komtar's hyper serving and injection, control stream, access list, delivery, runtime socket |
 | `join/` | The joiner: iroh connection, local HTTP server (axum), event stream, reconnection |
 | `adapters/` | iroh endpoint setup, GitHub keys, T3 MCP client, command target, filesystem |
 
@@ -364,7 +359,7 @@ JamJam?".
 
 | Layer | What | How |
 |---|---|---|
-| Core unit and property tests | Codes, SSH lines, tickets, invites, `.jamjam`, request decisions, queue, delivery, rate limits | Pure functions, manual clock, seeded rng, `proptest` |
+| Core unit and property tests | Codes, SSH lines, tickets, invites, access list, request decisions, queue, delivery, rate limits | Pure functions, manual clock, seeded rng, `proptest` |
 | In-process integration | Host and joiners over iroh: access, refusal, invites, removal while connected, requests, upgrades, comments, answers, presence, reconnection; `add`/`refresh` against a fake GitHub | Several endpoints in one test process, direct addresses, no relay |
 | Browser | Comments by two joiners, isolation between sessions, cross-site rules, the client, live reload, HMR (real Vite) | pytest and Playwright (Chromium, Firefox) against the real binaries |
 | GitHub contract | Real `users/<login>` and `ssh_signing_keys` responses for a test account | Opt-in, unauthenticated, against api.github.com |
@@ -372,13 +367,14 @@ JamJam?".
 
 Must-have cases:
 
-- A key not in `.jamjam` is refused with its reason; removing a key from
-  `.jamjam` disconnects it; adding one lets it join without a restart.
+- A key not on the access list is refused with its reason; `jamjam remove`
+  disconnects it; `jamjam add` lets it join without a restart; the list is
+  gone after the share stops.
 - Invites: single use, expire, void after a host restart; a wrong secret
   is refused without revealing whether the invite exists; an unlisted key
   can do nothing but redeem.
 - Party: multi-use until it expires or is ended; ending it disconnects its
-  guests; guests are never written to `.jamjam`; a `t3` target refuses to
+  guests; guests are never put on the access list; a `t3` target refuses to
   start a party without confirmation.
 - `add` by GitHub takes only `jamjam`-titled Ed25519 signing keys,
   records login and id; `refresh` adds and removes keys; a renamed login
@@ -390,7 +386,7 @@ Must-have cases:
   from another site works.
 - Isolation: two sessions joined in one browser keep cookies and storage
   apart.
-- Authorship: a comment's author comes from `.jamjam` for the sending
+- Authorship: a comment's author comes from the access list for the sending
   key, whatever the joiner sends.
 - Delivery: property test over random sequences of comments, delivery
   results (ok, error, gone) and clock steps: no loss while running, one
@@ -410,10 +406,10 @@ Must-have cases:
 3. `core/` (done for the hosted design, `d6320c1`, `3737383`): keep the
    ids, clock, rng, queue, rate limiter, pairing-code and protocol
    framing; replace the hosted parts (cookies, entry tokens, allowlist,
-   persisted sessions, front-door access) with the `.jamjam` model, SSH
+   persisted sessions, front-door access) with the access list, SSH
    key lines, tickets, invites and the joiner's request decision.
 4. Host: iroh accept loop with key checks and invites, request streams on
-   komtar's serving, control stream, `.jamjam` watching, runtime socket.
+   komtar's serving, control stream, access list, runtime socket.
 5. Joiner: connection, local server with its request decision, event
    stream, reconnection; in-process host and joiner tests.
 6. Comments, delivery (command target first), answers, presence,
