@@ -13,6 +13,7 @@ import queue
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import tempfile
 import threading
@@ -1369,3 +1370,200 @@ def test_cursors_follow_pointers_on_the_same_page(
         time.sleep(1)
         assert cursor_messages(shared, "bob") == 0
         expect(cursors(alice_page)).to_have_count(0)
+
+
+def avatars(page: Page) -> dict[str, str]:
+    """Each avatar's name (its title) and colour."""
+    return cast(
+        dict[str, str],
+        page.evaluate(
+            """() => Object.fromEntries(
+                [...document.querySelector("#jampot").shadowRoot
+                    .querySelectorAll(".avatar")]
+                .map((avatar) => [avatar.title, getComputedStyle(avatar).backgroundColor]))"""
+        ),
+    )
+
+
+def test_presence_in_every_page(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        for page in (alice_page, bob_page):
+            overlay(page, "#gear").click()
+            expect(overlay(page, "#here-count")).to_have_text("2 here")
+        with (
+            join(tmp_path / "carol", shared, "carol") as carol,
+            pages(browser, carol) as (carol_page,),
+        ):
+            overlay(carol_page, "#gear").click()
+            everyone = (alice_page, bob_page, carol_page)
+            for page in everyone:
+                expect(overlay(page, "#here-count")).to_have_text("3 here")
+                expect(overlay(page, ".avatar")).to_have_count(3)
+            # The joiner's own avatar is outlined, the others filled in
+            # their colour, the same colour in every page.
+            expect(overlay(alice_page, '.avatar[data-you="true"]')).to_have_attribute(
+                "title", "alice (you)"
+            )
+            expect(overlay(alice_page, '.avatar[data-you="true"]')).to_have_css(
+                "border-top-color", "rgb(255, 255, 255)"
+            )
+            bob_colour = avatars(alice_page)["bob"]
+            assert bob_colour == avatars(carol_page)["bob"] != "rgb(22, 22, 22)"
+            assert avatars(alice_page)["carol"] == avatars(bob_page)["carol"]
+
+            # A rename reaches everyone.
+            overlay(bob_page, "#name-field").fill("robert")
+            overlay(bob_page, "#name-field").press("Enter")
+            for page in (alice_page, carol_page):
+                expect(overlay(page, '.avatar[title="robert"]')).to_have_count(1)
+                expect(overlay(page, '.avatar[title="bob"]')).to_have_count(0)
+            assert avatars(carol_page)["robert"] == bob_colour
+        # Carol leaves.
+        for page in (alice_page, bob_page):
+            expect(overlay(page, "#here-count")).to_have_text("2 here")
+            expect(overlay(page, '.avatar[title="carol"]')).to_have_count(0)
+
+
+def test_comments_stay_with_their_author(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        comment_on_intro(alice_page, "Alice's comment.")
+        expect(overlay(alice_page, "#badge")).to_have_text("1 queued")
+        [line] = jampot(tmp_path, "recv").splitlines()
+        assert (
+            cast(dict[str, object], json.loads(line))["comment"] == "Alice's comment."
+        )
+        comment_on_intro(bob_page, "Bob's comment.")
+        expect(overlay(bob_page, "#badge")).to_have_text("1 queued")
+
+        alice_rows = overlay(alice_page, "#outbox-list li")
+        bob_rows = overlay(bob_page, "#outbox-list li")
+        expect(alice_rows).to_have_count(1)
+        expect(alice_rows.locator(".text")).to_have_text("Alice's comment.")
+        expect(alice_rows).to_have_attribute("data-state", "delivered")
+        expect(overlay(alice_page, "#badge")).to_have_text("0 queued")
+        # Bob sees only his own, still queued: alice's delivery is not his.
+        expect(bob_rows).to_have_count(1)
+        expect(bob_rows.locator(".text")).to_have_text("Bob's comment.")
+        expect(bob_rows).to_have_attribute("data-state", "queued")
+        expect(overlay(bob_page, "#badge")).to_have_text("1 queued")
+
+
+def free_port() -> int:
+    """A port free on 127.0.0.1 and [::1] (as far as can be told)."""
+    with socket.socket(socket.AF_INET6) as v6:
+        v6.bind(("::1", 0))
+        port = cast(int, v6.getsockname()[1])
+    with socket.socket(socket.AF_INET) as v4:
+        v4.bind(("127.0.0.1", port))
+    return port
+
+
+RECONNECT = 20_000
+
+
+def test_a_joiner_that_drops_comes_back(tmp_path: Path, browser: Browser) -> None:
+    port = free_port()
+    bob_context = browser.new_context(viewport={"width": 1280, "height": 720})
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "carol", shared, "carol") as carol,
+        pages(browser, alice, carol) as (alice_page, carol_page),
+    ):
+        try:
+            with join(tmp_path / "bob", shared, "bob", port=port) as bob:
+                bob_page = bob_context.new_page()
+                _ = bob_page.goto(bob.url)
+                for page in (alice_page, carol_page):
+                    overlay(page, "#gear").click()
+                    expect(overlay(page, "#here-count")).to_have_text("3 here")
+                bob_page.locator("h1").click()
+                bob_page.keyboard.press("x")
+                expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
+                    "aria-checked", "true"
+                )
+                time.sleep(0.3)
+                bob_page.mouse.move(400, 300)
+                expect(cursors(alice_page)).to_have_count(1)
+
+            # Bob's joiner stopped: the others see him go, cursor and all.
+            for page in (alice_page, carol_page):
+                expect(overlay(page, "#here-count")).to_have_text("2 here")
+            expect(cursors(alice_page)).to_have_count(0)
+            expect(overlay(bob_page, "#connection")).not_to_have_attribute(
+                "data-state", "green"
+            )
+            comment_on_intro(bob_page, "Written while away.")
+            expect(overlay(bob_page, "#outbox-list li")).to_have_attribute(
+                "data-state", "unsent"
+            )
+
+            # Back on the same port (the same page): the comment goes out.
+            with join(tmp_path / "bob", shared, "bob", port=port):
+                expect(overlay(bob_page, "#connection")).to_have_attribute(
+                    "data-state", "green", timeout=RECONNECT
+                )
+                expect(overlay(bob_page, "#outbox-list li")).to_have_attribute(
+                    "data-state", "queued", timeout=RECONNECT
+                )
+                [line] = jampot(tmp_path, "recv").splitlines()
+                record = cast(dict[str, object], json.loads(line))
+                assert record["comment"] == "Written while away."
+                for page in (alice_page, carol_page):
+                    expect(overlay(page, "#here-count")).to_have_text("3 here")
+                bob_page.mouse.move(420, 310)
+                bob_page.mouse.move(430, 320)
+                expect(cursors(alice_page)).to_have_count(1)
+                expect(cursors(alice_page).locator(".tag")).to_have_text("bob")
+        finally:
+            bob_context.close()
+
+
+def test_reconnecting_after_a_client_side_move(
+    tmp_path: Path, browser: Browser
+) -> None:
+    port = free_port()
+    bob_context = browser.new_context(viewport={"width": 1280, "height": 720})
+    with (
+        share(tmp_path, "serve", str(SPA)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "carol", shared, "carol") as carol,
+        pages(browser, alice, carol) as (alice_page, carol_page),
+    ):
+        try:
+            carol_page.locator("#to-other").click()
+            expect(carol_page.locator("#title")).to_have_text("Other")
+            with join(tmp_path / "bob", shared, "bob", port=port) as bob:
+                bob_page = bob_context.new_page()
+                _ = bob_page.goto(bob.url)
+                bob_page.locator("#title").click()
+                bob_page.keyboard.press("x")
+                expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
+                    "aria-checked", "true"
+                )
+                bob_page.locator("#to-other").click()
+                expect(bob_page.locator("#title")).to_have_text("Other")
+            # The event stream reconnects by itself, to a URL naming "/".
+            with join(tmp_path / "bob", shared, "bob", port=port):
+                expect(overlay(bob_page, "#connection")).to_have_attribute(
+                    "data-state", "green", timeout=RECONNECT
+                )
+                time.sleep(0.5)
+                for step in range(5):
+                    bob_page.mouse.move(300 + step * 10, 250)
+                    time.sleep(0.1)
+                expect(cursors(carol_page)).to_have_count(1)
+                time.sleep(0.5)
+                expect(cursors(alice_page)).to_have_count(0)
+        finally:
+            bob_context.close()
