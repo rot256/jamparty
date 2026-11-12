@@ -55,71 +55,18 @@ jobs:
           echo "Releasing $REF_NAME"
           echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
 
-  test:
+  checks:
     name: Checks
     needs: version
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
-
-      - name: Run Rust tests
-        run: cargo test --locked
-
-      - name: Check crates.io package
-        run: cargo publish --locked --dry-run
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-
-      - name: Install JavaScript lint dependencies
-        run: npm ci
-
-      - name: Lint JavaScript
-        run: npm run lint
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          enable-cache: false
-
-      - name: Install Python dependencies and browsers
-        run: |
-          uv sync --locked
-          uv run --locked playwright install --with-deps chromium firefox
-
-      - name: Check Python formatting
-        run: uv run --locked ruff format --check .
-
-      - name: Lint Python
-        run: uv run --locked ruff check .
-
-      - name: Type check Python
-        run: uv run --locked basedpyright
-
-      - name: Run browser tests
-        run: uv run --locked pytest
-
-      - name: Build release binary
-        run: cargo build --locked --release
+    permissions:
+      contents: read # the checks only read the repository
+    uses: $/.github/workflows/ci.yml
 
   build:
     name: Build ${{ matrix.name }}
     needs:
       - version
-      - test
+      - checks
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -189,9 +136,12 @@ jobs:
     name: Publish to crates.io
     needs:
       - version
-      - test
+      - checks
       - build
     runs-on: ubuntu-24.04
+    # The registry token is an environment secret, so only this job, under
+    # the environment's protection rules, can read it.
+    environment: crates-io
     permissions:
       contents: read # check out the crate sources
       id-token: write # crates.io trusted publishing (OIDC)
