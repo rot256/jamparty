@@ -47,7 +47,7 @@ fn parses_the_commands() {
 
 #[test]
 fn agent_commands_parse_and_stay_out_of_help() {
-    let id = "mzuhvlpymk6xo3ep";
+    let id = "tzrjdfymwrg5sqai";
     let comment = "0f8fad5b-d9cb-469f-a165-70867728950e";
     let send =
         Cli::try_parse_from(["jampot", "send", "hi", "--anchor", comment, "--share", id]).unwrap();

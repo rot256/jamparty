@@ -50,7 +50,7 @@ const RECORD: &str = r#"Comments are JSON, one object per comment:
   {"id":"0f8fad5b-d9cb-469f-a165-70867728950e",
    "author":{"name":"alice@laptop","fingerprint":"0123456789",
              "key":"0123456789abcdef...(64 hex characters)"},
-   "page":"http://mzuhvlpymk6xo3ep.localhost:4321/about",
+   "page":"http://tzrjdfymwrg5sqai.localhost:4321/about",
    "selector":"main > h1","selectedText":"Welcome","comment":"Bigger, please"}
 
   id            pass it to `jampot send --anchor <id>` to answer next to it

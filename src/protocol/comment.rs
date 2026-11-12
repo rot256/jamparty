@@ -121,7 +121,7 @@ mod tests {
 
     fn fields(comment: &str) -> DraftFields {
         DraftFields {
-            page: "http://mzuhvlpymk6xo3ep.localhost:4321/".to_owned(),
+            page: "http://tzrjdfymwrg5sqai.localhost:4321/".to_owned(),
             selector: "main > h1".to_owned(),
             selected_text: None,
             comment: comment.to_owned(),

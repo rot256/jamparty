@@ -13,7 +13,7 @@ use data_encoding::HEXLOWER;
 use hyper::Uri;
 use rootcause::prelude::{ResultExt, bail};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha3::{Digest, Sha3_256};
 
 use crate::{
     Report,
@@ -237,7 +237,7 @@ fn messages(header: &str, batch: &[Comment]) -> Vec<String> {
 /// comment ids and the index, so a retry of the batch (sent again
 /// unchanged, split the same way) does not post a message twice.
 fn request_key(batch: &[Comment], index: usize) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha3_256::new();
     for comment in batch {
         hasher.update(comment.id.to_string().as_bytes());
         hasher.update(b"\n");

@@ -4,7 +4,7 @@
 use std::sync::{Mutex, PoisonError};
 
 #[cfg(test)]
-use sha2::{Digest, Sha256};
+use sha3::{Digest, Sha3_256};
 
 /// A source of random bytes. Production uses [`SystemRng`]; tests use
 /// [`SeededRng`].
@@ -35,7 +35,7 @@ impl Rng for SystemRng {
     }
 }
 
-/// A deterministic generator for tests: SHA-256 over (seed, counter).
+/// A deterministic generator for tests: SHA3-256 over (seed, counter).
 /// Not for production use.
 #[cfg(test)]
 #[derive(Debug)]
@@ -60,7 +60,7 @@ impl Rng for SeededRng {
     fn fill(&self, dest: &mut [u8]) {
         let mut counter = self.counter.lock().unwrap_or_else(PoisonError::into_inner);
         for chunk in dest.chunks_mut(32) {
-            let block = Sha256::new()
+            let block = Sha3_256::new()
                 .chain_update(self.seed.to_le_bytes())
                 .chain_update(counter.to_le_bytes())
                 .finalize();

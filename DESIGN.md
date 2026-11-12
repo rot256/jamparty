@@ -82,7 +82,7 @@ stops, both are gone and the token is dead; a new run has a new token.
 - The secret is what admits them. The token is a credential: anyone who
   has it can join and comment until the share stops.
 - The key also names the session on the joiner's side: `<sid>` is the
-  first 16 characters of the lowercase base32 SHA-256 of the public key,
+  first 16 characters of the lowercase base32 SHA3-256 of the public key,
   a valid hostname label.
 
 ## Joiners
@@ -505,7 +505,7 @@ Kept out of the first version on purpose; the protocol leaves room:
   archived thread is `thread_not_sendable`
   (`apps/server/src/mcp/OrchestratorMcpService.ts`). jampot reads with
   `limit: 1`, sends with `mode: 'queue'` and `clientRequestId` =
-  `jampot-<sha256 of the batch's comment ids and the message's index>`
+  `jampot-<SHA3-256 of the batch's comment ids and the message's index>`
   (a retry after a lost reply, of the same batch split the same way, is
   not posted twice), and splits a batch too long for one message into
   several. The token file is read for every request; HTTP requests time
@@ -623,7 +623,7 @@ Must-have cases:
 
 iroh 1.4.1 (transport), hyper and hyper-util (share serving, from
 komtar, and the joiner's local server), tokio, hyper's client with
-rustls (also the T3 MCP client), serde/serde_json, sha2, data-encoding,
+rustls (also the T3 MCP client), serde/serde_json, sha3, data-encoding,
 getrandom, subtle, rootcause (errors); proptest for tests; komtar's
 existing dependencies for static serving, file watching and Markdown.
 

@@ -8,8 +8,8 @@ use crate::core::{
     },
 };
 
-const HOST: &str = "mzuhvlpymk6xo3ep.localhost:4321";
-const ORIGIN: &str = "http://mzuhvlpymk6xo3ep.localhost:4321";
+const HOST: &str = "tzrjdfymwrg5sqai.localhost:4321";
+const ORIGIN: &str = "http://tzrjdfymwrg5sqai.localhost:4321";
 const OTHER_ORIGIN: &str = "https://evil.example";
 
 fn local() -> LocalOrigin {
@@ -184,15 +184,15 @@ fn wrong_hosts_are_refused() {
         Some("127.0.0.1:4321"),
         Some("localhost:4321"),
         Some("[::1]:4321"),
-        Some("mzuhvlpymk6xo3ep.localhost"),
-        Some("mzuhvlpymk6xo3ep.localhost:4322"),
-        Some("mzuhvlpymk6xo3ep.localhost:4321."),
-        Some("mzuhvlpymk6xo3ep.localhost.:4321"),
+        Some("tzrjdfymwrg5sqai.localhost"),
+        Some("tzrjdfymwrg5sqai.localhost:4322"),
+        Some("tzrjdfymwrg5sqai.localhost:4321."),
+        Some("tzrjdfymwrg5sqai.localhost.:4321"),
         Some("MZUHVLPYMK6XO3EP.localhost:4321"),
         Some("aaaaaaaaaaaaaaaa.localhost:4321"),
-        Some("x.mzuhvlpymk6xo3ep.localhost:4321"),
-        Some("mzuhvlpymk6xo3ep.localhost:4321@evil.example"),
-        Some("mzuhvlpymk6xo3ep.localhost.evil.example:4321"),
+        Some("x.tzrjdfymwrg5sqai.localhost:4321"),
+        Some("tzrjdfymwrg5sqai.localhost:4321@evil.example"),
+        Some("tzrjdfymwrg5sqai.localhost.evil.example:4321"),
     ];
     let local = local();
     for host in hosts {
@@ -274,9 +274,9 @@ fn writes_and_upgrades_need_the_exact_origin() {
         None,
         Some("null"),
         Some(OTHER_ORIGIN),
-        Some("http://mzuhvlpymk6xo3ep.localhost:4322"),
-        Some("https://mzuhvlpymk6xo3ep.localhost:4321"),
-        Some("http://mzuhvlpymk6xo3ep.localhost:4321/"),
+        Some("http://tzrjdfymwrg5sqai.localhost:4322"),
+        Some("https://tzrjdfymwrg5sqai.localhost:4321"),
+        Some("http://tzrjdfymwrg5sqai.localhost:4321/"),
         Some("http://aaaaaaaaaaaaaaaa.localhost:4321"),
     ];
     for origin in origins {

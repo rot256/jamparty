@@ -5,7 +5,7 @@ use std::{fmt, str::FromStr};
 
 use data_encoding::{BASE32_NOPAD, HEXLOWER};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha3::{Digest, Sha3_256};
 use uuid::Uuid;
 
 use crate::core::{
@@ -83,10 +83,10 @@ impl EndpointKey {
     }
 
     /// The session's host label: the first 16 characters of the lowercase
-    /// base32 SHA-256 of the key bytes.
+    /// base32 SHA3-256 of the key bytes.
     #[must_use]
     pub(crate) fn sid(&self) -> Sid {
-        let digest = Sha256::digest(self.0);
+        let digest = Sha3_256::digest(self.0);
         let encoded = BASE32_NOPAD.encode(&digest).to_ascii_lowercase();
         Sid(encoded.chars().take(SID_LEN).collect())
     }
@@ -253,10 +253,10 @@ mod tests {
 
     #[test]
     fn sid_known_answer() {
-        // Computed independently with Python's hashlib and base64.
-        assert_eq!(EndpointKey([0; 32]).sid().as_str(), "mzuhvlpymk6xo3ep");
+        // Computed independently with Python's hashlib.sha3_256 and base64.
+        assert_eq!(EndpointKey([0; 32]).sid().as_str(), "tzrjdfymwrg5sqai");
         assert_eq!(
-            "mzuhvlpymk6xo3ep".parse::<Sid>(),
+            "tzrjdfymwrg5sqai".parse::<Sid>(),
             Ok(EndpointKey([0; 32]).sid())
         );
         for bad in [
