@@ -1,10 +1,12 @@
 mod agent;
-// Pure core; the server and share wire it in (implementation plan steps 4 and 5).
+// Pure core and wire types; the server and share wire them in (implementation plan steps 4 and 5).
 #[allow(dead_code)]
 mod core;
 mod fifo;
 mod live;
 mod model;
+#[allow(dead_code)]
+mod protocol;
 mod server;
 
 use std::{
