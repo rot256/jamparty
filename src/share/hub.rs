@@ -21,7 +21,7 @@ use crate::{
     },
     protocol::{
         comment::{Author, Comment, Draft},
-        control::{AckOutcome, Anchor, AnswerText, MAX_STATUS_LINE, ShareMessage, StatusLine},
+        control::{AckOutcome, Anchor, AnswerText, CommentRef, ShareMessage, StatusLine},
     },
 };
 
@@ -32,6 +32,14 @@ const BROADCAST_CAPACITY: usize = 256;
 const MAX_ANCHORS: usize = 1000;
 /// Answers replayed to joiners on admission.
 const MAX_ANSWERS: usize = 100;
+/// Admitted connections at once, in all and per joiner key. This also
+/// bounds a presence line (64 authors of at most ~160 bytes).
+pub(crate) const MAX_JOINERS: usize = 64;
+pub(crate) const MAX_JOINERS_PER_KEY: usize = 4;
+/// Undelivered comments one joiner key may have in the queue.
+pub(crate) const MAX_QUEUED_PER_KEY: usize = 100;
+/// Comment refs remembered, so a comment sent again is queued once.
+const MAX_REFS: usize = 1000;
 
 pub(crate) struct Hub {
     inner: Mutex<Inner>,
@@ -44,9 +52,14 @@ pub(crate) struct Hub {
 
 struct Inner {
     queue: DeliveryQueue<Comment>,
-    limiter: RateLimiter,
+    /// Per joiner key.
+    limiter: RateLimiter<EndpointKey>,
+    /// Everyone's comments together.
+    global: RateLimiter<()>,
     /// Connected joiners, by connection.
     joiners: Vec<(u64, Author)>,
+    /// Recently queued comments by joiner key and the page's ref.
+    refs: VecDeque<(EndpointKey, CommentRef, CommentId)>,
     next_connection: u64,
     status: Option<StatusLine>,
     anchors: VecDeque<Anchor>,
@@ -58,8 +71,10 @@ impl Hub {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 queue: DeliveryQueue::new(),
-                limiter: RateLimiter::new(RateLimit::default()),
+                limiter: RateLimiter::new(RateLimit::PER_JOINER),
+                global: RateLimiter::new(RateLimit::GLOBAL),
                 joiners: Vec::new(),
+                refs: VecDeque::new(),
                 next_connection: 0,
                 status: None,
                 anchors: VecDeque::new(),
@@ -85,20 +100,30 @@ impl Hub {
         let _ = self.broadcast.send(message);
     }
 
-    /// Adds an admitted joiner to presence until the returned guard drops.
-    pub(crate) fn join(self: &Arc<Self>, author: Author) -> Presence {
+    /// Adds an admitted joiner to presence until the returned guard drops;
+    /// `None` if the share has [`MAX_JOINERS`] connections, or
+    /// [`MAX_JOINERS_PER_KEY`] with this key.
+    pub(crate) fn join(self: &Arc<Self>, author: Author) -> Option<Presence> {
         let connection = {
             let mut inner = self.lock();
+            let same_key = inner
+                .joiners
+                .iter()
+                .filter(|(_, joiner)| joiner.key == author.key)
+                .count();
+            if inner.joiners.len() >= MAX_JOINERS || same_key >= MAX_JOINERS_PER_KEY {
+                return None;
+            }
             let connection = inner.next_connection;
             inner.next_connection = connection.wrapping_add(1);
             inner.joiners.push((connection, author));
             connection
         };
         self.broadcast_presence();
-        Presence {
+        Some(Presence {
             hub: Arc::clone(self),
             connection,
-        }
+        })
     }
 
     fn broadcast_presence(&self) {
@@ -106,14 +131,17 @@ impl Hub {
         self.broadcast(ShareMessage::Presence { joiners });
     }
 
-    /// Who is connected, in order of admission.
+    /// Who is connected, in order of admission, once per key.
     #[must_use]
     pub(crate) fn presence(&self) -> Vec<Author> {
-        self.lock()
-            .joiners
-            .iter()
-            .map(|(_, author)| author.clone())
-            .collect()
+        let inner = self.lock();
+        let mut authors: Vec<Author> = Vec::new();
+        for (_, author) in &inner.joiners {
+            if !authors.iter().any(|known| known.key == author.key) {
+                authors.push(author.clone());
+            }
+        }
+        authors
     }
 
     /// What a newly admitted joiner is told besides presence: recent answers
@@ -136,20 +164,54 @@ impl Hub {
         self.lock()
             .queue
             .iter()
-            .filter(|comment| comment.author.fingerprint == author.fingerprint)
+            .filter(|comment| comment.author.key == author.key)
             .map(|comment| comment.id)
             .collect()
     }
 
-    /// Rate-limits and queues a comment from `joiner`, signed as `author`.
-    pub(crate) fn comment(&self, joiner: EndpointKey, author: &Author, draft: Draft) -> AckOutcome {
-        let mut inner = self.lock();
-        if let Err(limited) = inner.limiter.check(joiner, self.clock.as_ref()) {
+    /// Rate-limits and queues a comment from `author`. A `reference` this
+    /// joiner sent before gets the comment it queued then.
+    pub(crate) fn comment(
+        &self,
+        author: &Author,
+        reference: CommentRef,
+        draft: Draft,
+    ) -> AckOutcome {
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        let earlier = inner
+            .refs
+            .iter()
+            .find(|(key, known, _)| *key == author.key && *known == reference)
+            .map(|(_, _, id)| *id);
+        if let Some(id) = earlier {
+            let held = inner.queue.iter().any(|comment| comment.id == id);
+            return if held {
+                AckOutcome::Queued { id }
+            } else {
+                AckOutcome::Delivered { id }
+            };
+        }
+        let clock = self.clock.as_ref();
+        let limited = inner
+            .global
+            .peek(&(), clock)
+            .and_then(|()| inner.limiter.check(author.key, clock))
+            .and_then(|()| inner.global.check((), clock));
+        if let Err(limited) = limited {
             let retry = limited.retry_after;
             let secs = retry.as_secs() + i64::from(retry.subsec_nanos() > 0);
             return AckOutcome::RateLimited {
                 retry_after_secs: u64::try_from(secs).unwrap_or(0),
             };
+        }
+        let mine = inner
+            .queue
+            .iter()
+            .filter(|comment| comment.author.key == author.key)
+            .count();
+        if mine >= MAX_QUEUED_PER_KEY {
+            return AckOutcome::QueueFull;
         }
         let id = CommentId::generate(self.rng.as_ref());
         let comment = Comment::new(id, author.clone(), draft);
@@ -164,7 +226,11 @@ impl Hub {
                     inner.anchors.pop_front();
                 }
                 inner.anchors.push_back(anchor);
-                drop(inner);
+                if inner.refs.len() == MAX_REFS {
+                    inner.refs.pop_front();
+                }
+                inner.refs.push_back((author.key, reference, id));
+                drop(guard);
                 self.wakeup.notify_one();
                 tracing::info!(%id, author = %author.name, fingerprint = %author.fingerprint, "comment queued");
                 AckOutcome::Queued { id }
@@ -200,8 +266,9 @@ impl Hub {
         }
     }
 
-    /// Records the in-flight batch's result; `detail` says what went wrong.
-    /// Delivered ids go to every joiner; the status line follows the state.
+    /// Records the in-flight batch's result; `detail` says what went wrong
+    /// and goes only to the share's log. Delivered ids go to every joiner;
+    /// the status line follows the state.
     pub(crate) fn finish(&self, result: DeliveryResult, detail: &str) {
         let now = self.clock.now();
         let (delivered, status) = {
@@ -212,13 +279,8 @@ impl Hub {
             };
             let status = match inner.queue.state() {
                 DeliveryState::Ready | DeliveryState::InFlight => None,
-                DeliveryState::Retrying { at } => status_line(&format!(
-                    "delivery failed ({detail}); retrying in {}s",
-                    now.duration_until(at).as_secs().max(1)
-                )),
-                DeliveryState::Held => status_line(&format!(
-                    "the agent is gone ({detail}); comments are kept until the share restarts"
-                )),
+                DeliveryState::Retrying { .. } => status_line(RETRYING),
+                DeliveryState::Held => status_line(HELD),
             };
             let changed = inner.status != status;
             inner.status.clone_from(&status);
@@ -303,14 +365,12 @@ impl Hub {
     }
 }
 
-/// `text` as a status line: control characters become spaces, cut to fit.
+/// The status lines joiners see; what went wrong is in the share's log.
+pub(crate) const RETRYING: &str = "delivery failing, retrying";
+pub(crate) const HELD: &str = "agent unavailable; comments are kept until the share restarts";
+
 fn status_line(text: &str) -> Option<StatusLine> {
-    let line: String = text
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .take(MAX_STATUS_LINE)
-        .collect();
-    StatusLine::try_from(line).ok()
+    StatusLine::try_from(text.to_owned()).ok()
 }
 
 /// A joiner's place in presence; leaving is announced on drop.
@@ -328,3 +388,7 @@ impl Drop for Presence {
         self.hub.broadcast_presence();
     }
 }
+
+#[cfg(test)]
+#[path = "hub_tests.rs"]
+mod tests;

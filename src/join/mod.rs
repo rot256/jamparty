@@ -112,6 +112,13 @@ impl Joiner {
             .map(|control| control.connection.clone())
     }
 
+    /// The current control stream, if admitted.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn control(&self) -> Option<Arc<session::Control>> {
+        self.session.control()
+    }
+
     pub(crate) async fn stop(self) {
         self.endpoint.close().await;
     }

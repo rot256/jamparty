@@ -541,9 +541,12 @@ function install() {
   const loadOutbox = () => {
     try {
       const stored = JSON.parse(sessionStorage.getItem(OUTBOX_KEY) ?? "[]");
-      return Array.isArray(stored)
-        ? stored.filter((entry) => entry && typeof entry === "object" && entry.draft)
-        : [];
+      if (!Array.isArray(stored)) return [];
+      const entries = stored.filter((entry) => entry && typeof entry === "object" && entry.draft);
+      for (const entry of entries) {
+        if (typeof entry.ref !== "string") entry.ref = crypto.randomUUID();
+      }
+      return entries;
     } catch {
       return [];
     }
@@ -976,14 +979,16 @@ function install() {
   }, true);
 
   // Hands a draft to the joiner: the share's answer, or an error whose
-  // `unsent` says the comment never reached the share.
-  const submitDraft = async (draft) => {
+  // `unsent` says the comment may not have reached the share. `ref` is the
+  // page's id for the comment: sending it again with the same `ref` never
+  // queues it twice.
+  const submitDraft = async (draft, ref) => {
     let response;
     try {
       response = await fetch(COMMENTS_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
+        body: JSON.stringify({ ref, ...draft }),
       });
     } catch {
       const error = new Error("jamjam join is not reachable");
@@ -1007,7 +1012,7 @@ function install() {
     entry.state = "sending";
     renderOutbox();
     try {
-      const body = await submitDraft(entry.draft);
+      const body = await submitDraft(entry.draft, entry.ref);
       entry.id = body.id;
       entry.state = "queued";
       setPending(body.pending);
@@ -1043,9 +1048,10 @@ function install() {
       selectedText: context.target.selectedText,
       comment,
     };
-    void submitDraft(draft)
+    const ref = crypto.randomUUID();
+    void submitDraft(draft, ref)
       .then((body) => {
-        outboxEntries.push({ draft, id: body.id, state: "queued" });
+        outboxEntries.push({ draft, ref, id: body.id, state: "queued" });
         renderOutbox();
         setPending(body.pending);
         closeDialog();
@@ -1053,7 +1059,7 @@ function install() {
       })
       .catch((error) => {
         if (error instanceof Error && error.unsent) {
-          outboxEntries.push({ draft, id: null, state: "unsent" });
+          outboxEntries.push({ draft, ref, id: null, state: "unsent" });
           renderOutbox();
           closeDialog();
           showToast("Not sent: kept in the page, sent when the connection is back");

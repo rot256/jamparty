@@ -1,16 +1,17 @@
-//! A per-joiner token bucket (keyed by the joiner's endpoint key) on the injected clock, in its GCRA form: each
-//! joiner has a "theoretical arrival time" instead of a token count.
+//! A token bucket per key (a joiner's endpoint key, or `()` for one shared
+//! bucket) on the injected clock, in its GCRA form: each key has a
+//! "theoretical arrival time" instead of a token count.
 //!
 //! With capacity `n` per `period`, a request costs `period / n`; a joiner may
 //! run up to `n` requests ahead of the steady rate.
 
-use std::collections::HashMap;
 #[cfg(test)]
 use std::fmt;
+use std::{collections::HashMap, hash::Hash};
 
 use jiff::{SignedDuration, Timestamp};
 
-use crate::core::{clock::Clock, ids::EndpointKey};
+use crate::core::clock::Clock;
 
 /// Entries are swept when the map grows past this many joiners.
 const SWEEP_THRESHOLD: usize = 1024;
@@ -48,14 +49,17 @@ impl RateLimit {
     }
 }
 
-impl Default for RateLimit {
-    /// 10 comments per minute.
-    fn default() -> Self {
-        Self {
-            interval: SignedDuration::from_secs(6),
-            burst: SignedDuration::from_secs(54),
-        }
-    }
+impl RateLimit {
+    /// 10 comments per minute: one joiner's limit.
+    pub(crate) const PER_JOINER: Self = Self {
+        interval: SignedDuration::from_secs(6),
+        burst: SignedDuration::from_secs(54),
+    };
+    /// 60 comments per minute: everyone's together.
+    pub(crate) const GLOBAL: Self = Self {
+        interval: SignedDuration::from_secs(1),
+        burst: SignedDuration::from_secs(59),
+    };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,12 +68,12 @@ pub(crate) struct RateLimited {
 }
 
 #[derive(Debug)]
-pub(crate) struct RateLimiter {
+pub(crate) struct RateLimiter<K> {
     limit: RateLimit,
-    arrival: HashMap<EndpointKey, Timestamp>,
+    arrival: HashMap<K, Timestamp>,
 }
 
-impl RateLimiter {
+impl<K: Hash + Eq> RateLimiter<K> {
     #[must_use]
     pub(crate) fn new(limit: RateLimit) -> Self {
         Self {
@@ -78,19 +82,11 @@ impl RateLimiter {
         }
     }
 
-    /// Takes one token for `joiner`, or says how long to wait.
-    pub(crate) fn check(
-        &mut self,
-        joiner: EndpointKey,
-        clock: &dyn Clock,
-    ) -> Result<(), RateLimited> {
-        let now = clock.now();
-        if self.arrival.len() > SWEEP_THRESHOLD {
-            self.arrival.retain(|_, arrival| *arrival > now);
-        }
+    /// `key`'s next arrival time if it may take a token now.
+    fn next_arrival(&self, key: &K, now: Timestamp) -> Result<Timestamp, RateLimited> {
         let arrival = self
             .arrival
-            .get(&joiner)
+            .get(key)
             .copied()
             .map_or(now, |arrival| arrival.max(now));
         let ahead = arrival.duration_since(now);
@@ -99,8 +95,22 @@ impl RateLimiter {
                 retry_after: ahead - self.limit.burst,
             });
         }
-        let next = arrival.checked_add(self.limit.interval).unwrap_or(arrival);
-        self.arrival.insert(joiner, next);
+        Ok(arrival.checked_add(self.limit.interval).unwrap_or(arrival))
+    }
+
+    /// Whether `key` may take a token now, without taking it.
+    pub(crate) fn peek(&self, key: &K, clock: &dyn Clock) -> Result<(), RateLimited> {
+        self.next_arrival(key, clock.now()).map(|_| ())
+    }
+
+    /// Takes one token for `key`, or says how long to wait.
+    pub(crate) fn check(&mut self, key: K, clock: &dyn Clock) -> Result<(), RateLimited> {
+        let now = clock.now();
+        if self.arrival.len() > SWEEP_THRESHOLD {
+            self.arrival.retain(|_, arrival| *arrival > now);
+        }
+        let next = self.next_arrival(&key, now)?;
+        self.arrival.insert(key, next);
         Ok(())
     }
 
@@ -137,7 +147,7 @@ mod tests {
     #[test]
     fn ten_per_minute_by_default() {
         let clock = clock();
-        let mut limiter = RateLimiter::new(RateLimit::default());
+        let mut limiter = RateLimiter::new(RateLimit::PER_JOINER);
         for _ in 0..10 {
             assert_eq!(limiter.check(key(1), &clock), Ok(()));
         }
@@ -163,7 +173,11 @@ mod tests {
     fn configurable_and_validated() {
         assert_eq!(
             RateLimit::new(10, SignedDuration::from_secs(60)),
-            Ok(RateLimit::default())
+            Ok(RateLimit::PER_JOINER)
+        );
+        assert_eq!(
+            RateLimit::new(60, SignedDuration::from_secs(60)),
+            Ok(RateLimit::GLOBAL)
         );
         assert!(RateLimit::new(0, SignedDuration::from_secs(60)).is_err());
         assert!(RateLimit::new(1, SignedDuration::ZERO).is_err());
@@ -178,7 +192,7 @@ mod tests {
     #[test]
     fn idle_joiners_are_swept() {
         let clock = clock();
-        let mut limiter = RateLimiter::new(RateLimit::default());
+        let mut limiter = RateLimiter::new(RateLimit::PER_JOINER);
         for joiner in 0..2000 {
             limiter.check(key(joiner), &clock).unwrap();
         }
@@ -192,7 +206,7 @@ mod tests {
         fn never_more_than_capacity_plus_elapsed(steps in proptest::collection::vec(0i64..20_000, 1..300)) {
             let clock = clock();
             let start = clock.now();
-            let mut limiter = RateLimiter::new(RateLimit::default());
+            let mut limiter = RateLimiter::new(RateLimit::PER_JOINER);
             let mut accepted = 0i64;
             for step in steps {
                 clock.advance(SignedDuration::from_millis(step));

@@ -250,7 +250,7 @@ mod tests {
 
     fn comment(text: &str) -> Comment {
         let author: Author =
-            serde_json::from_str(r#"{"name":"alice","fingerprint":"0123456789"}"#).unwrap();
+            Author::new("alice".parse().unwrap(), "01".repeat(32).parse().unwrap());
         let draft: Draft = serde_json::from_value(serde_json::json!({
             "page": "/", "selector": "h1", "comment": text,
         }))

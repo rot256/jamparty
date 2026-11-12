@@ -294,7 +294,9 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         )
         cross = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}
         assert request(joined, "/", headers=cross)[0] == 403
-        comment = json.dumps({"page": "/", "selector": "h1", "comment": "Hi"}).encode()
+        comment = json.dumps(
+            {"ref": "test-1", "page": "/", "selector": "h1", "comment": "Hi"}
+        ).encode()
         posted = request(
             joined,
             "/_jamjam/api/comments",

@@ -48,6 +48,7 @@ pub(crate) fn reason_text(reason: RefusedReason) -> &'static str {
     match reason {
         RefusedReason::WrongSecret => "wrong_secret",
         RefusedReason::BadHello => "bad_hello",
+        RefusedReason::Full => "full",
     }
 }
 
@@ -58,6 +59,7 @@ impl TryFrom<&[u8]> for RefusedReason {
         match text {
             b"wrong_secret" => Ok(Self::WrongSecret),
             b"bad_hello" => Ok(Self::BadHello),
+            b"full" => Ok(Self::Full),
             _ => Err(()),
         }
     }
@@ -102,7 +104,7 @@ mod tests {
         })
         .unwrap();
         let comment = JoinerMessage::Comment {
-            reference: 1,
+            reference: "1".to_owned().try_into().unwrap(),
             draft,
         };
         assert_eq!(
@@ -115,7 +117,11 @@ mod tests {
 
     #[test]
     fn reasons_round_trip() {
-        for reason in [RefusedReason::WrongSecret, RefusedReason::BadHello] {
+        for reason in [
+            RefusedReason::WrongSecret,
+            RefusedReason::BadHello,
+            RefusedReason::Full,
+        ] {
             assert_eq!(
                 RefusedReason::try_from(reason_text(reason).as_bytes()),
                 Ok(reason)

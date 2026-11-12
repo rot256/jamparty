@@ -1,6 +1,8 @@
 //! Admission: nothing is served before the right hello; the joiner only
 //! accepts the share in its token.
 
+use std::time::Duration;
+
 use iroh::endpoint::{Connection, ConnectionError, VarInt};
 use tokio::io::BufReader;
 
@@ -15,9 +17,10 @@ use crate::{
         token::{PartySecret, PartyToken},
     },
     protocol::control::{Envelope, RefusedReason, ShareMessage},
-    share::REFUSED_CODE,
+    share::{REFUSED_CODE, Source, delivery::Target},
     tests::harness::{
-        connected, fixture_dir, get, joiner, net, raw_connection, share_files, within,
+        config, connected, fixture_dir, get, joiner, net, raw_connection, share_files, start,
+        within,
     },
 };
 
@@ -185,4 +188,100 @@ async fn a_second_hello_ends_the_session() {
     let _admitted = lines::read::<Envelope<ShareMessage>, _>(&mut recv).await;
     send.write_all(&line).await.unwrap();
     within("the close", connection.closed()).await;
+}
+
+/// Whether `future` is still pending after a while.
+async fn stays_pending<T>(future: impl std::future::Future<Output = T>) -> bool {
+    tokio::time::timeout(Duration::from_millis(500), future)
+        .await
+        .is_err()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn before_admission_only_the_control_stream_opens() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let (_endpoint, connection) = raw_connection(&share).await;
+    let (mut send, recv) = connection.open_bi().await.unwrap();
+    send.write_all(b"{").await.unwrap();
+    assert!(stays_pending(connection.open_bi()).await, "a second stream");
+    assert!(
+        stays_pending(connection.open_uni()).await,
+        "a unidirectional stream"
+    );
+
+    // Admission lifts the limit: several request streams at once.
+    send.write_all(&hello(&share.token().secret.to_string()).split_off(1))
+        .await
+        .unwrap();
+    let mut recv = BufReader::new(recv);
+    let admitted = lines::read::<Envelope<ShareMessage>, _>(&mut recv)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(admitted.message, ShareMessage::Admitted { .. }));
+    let mut open = Vec::new();
+    for _ in 0..8 {
+        open.push(
+            within("a request stream", connection.open_bi())
+                .await
+                .unwrap(),
+        );
+    }
+    assert!(stays_pending(connection.open_uni()).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_deadline_covers_the_whole_admission() {
+    // The harness allows 2 s: the stream opens after 1.2 s and the hello
+    // completes after 2.4 s, each within 2 s of the step before.
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let (_endpoint, connection) = raw_connection(&share).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let (mut send, recv) = connection.open_bi().await.unwrap();
+    let line = hello(&share.token().secret.to_string());
+    let (start, rest) = line.split_at(1);
+    send.write_all(start).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let _ = send.write_all(rest).await;
+    let reply = lines::read::<Envelope<ShareMessage>, _>(&mut BufReader::new(recv))
+        .await
+        .ok()
+        .flatten()
+        .map(|envelope| envelope.message);
+    let closed = within("the close", connection.closed()).await;
+    assert_refused(reply, &closed, RefusedReason::BadHello);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn connections_waiting_for_admission_are_capped() {
+    let dir = fixture_dir();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let mut config = config(Source::Files(root), Target::Recv);
+    config.max_unadmitted = 1;
+    let share = start(config).await;
+    let (_first_endpoint, first) = raw_connection(&share).await;
+    let endpoint = bind(&net(), generate_key(&SystemRng), Accept::Nothing)
+        .await
+        .unwrap();
+    let refused = within(
+        "the refused handshake",
+        connect(&endpoint, share.token().share, &share.direct_addrs()),
+    )
+    .await;
+    assert!(refused.is_err(), "a second unadmitted connection");
+
+    // Once the first is admitted, the next may wait its turn.
+    let (mut send, recv) = first.open_bi().await.unwrap();
+    send.write_all(&hello(&share.token().secret.to_string()))
+        .await
+        .unwrap();
+    let admitted = lines::read::<Envelope<ShareMessage>, _>(&mut BufReader::new(recv))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(admitted.message, ShareMessage::Admitted { .. }));
+    let joiner = joiner(share.token().clone(), share.direct_addrs(), "alice").await;
+    connected(&joiner).await;
 }

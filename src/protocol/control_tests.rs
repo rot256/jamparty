@@ -4,8 +4,8 @@ use crate::{
         MAX_LINE_BYTES,
         comment::{Author, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT, MAX_SELECTOR},
         control::{
-            AckOutcome, Anchor, Envelope, JoinerMessage, MAX_STATUS_LINE, RefusedReason,
-            ShareMessage, StatusLine,
+            AckOutcome, Anchor, CommentRef, Envelope, JoinerMessage, MAX_COMMENT_REF,
+            MAX_STATUS_LINE, RefusedReason, ShareMessage, StatusLine,
         },
         decode_line, encode_line,
     },
@@ -28,8 +28,8 @@ fn joiner_messages_round_trip() {
         format!(
             r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"alice@laptop"}}}}"#
         ),
-        r#"{"version":1,"message":{"type":"comment","ref":7,"draft":{"page":"/","selector":"main > h1","selectedText":"Hi","comment":"Bigger"}}}"#.to_owned(),
-        r#"{"version":1,"message":{"type":"comment","ref":8,"draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"comment","ref":"7","draft":{"page":"/","selector":"main > h1","selectedText":"Hi","comment":"Bigger"}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"comment","ref":"a-B-9","draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
     ];
     for line in &lines {
         let parsed = joiner(line).unwrap_or_else(|error| panic!("{line}: {error}"));
@@ -68,11 +68,17 @@ fn invalid_joiner_messages_are_rejected() {
         hello(&format!(r#""secret":"{secret}","name":"""#)),
         hello(&format!(r#""secret":"{secret}""#)),
         // Comments: authorship is the share's, caps hold.
-        r#"{"version":1,"message":{"type":"comment","ref":1,"draft":{"page":"/","selector":"","comment":"x","author":{"name":"bob","fingerprint":"0000000000"}}}}"#.to_owned(),
-        r#"{"version":1,"message":{"type":"comment","ref":1,"draft":{"page":"/","selector":"","comment":" "}}}"#.to_owned(),
-        r#"{"version":1,"message":{"type":"comment","ref":-1,"draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"comment","ref":"1","draft":{"page":"/","selector":"","comment":"x","author":{"name":"bob","fingerprint":"0000000000"}}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"comment","ref":"1","draft":{"page":"/","selector":"","comment":" "}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"comment","ref":1,"draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"comment","ref":"","draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
+        r#"{"version":1,"message":{"type":"comment","ref":"a b","draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
         format!(
-            r#"{{"version":1,"message":{{"type":"comment","ref":1,"draft":{{"page":"/","selector":"","comment":"{}"}}}}}}"#,
+            r#"{{"version":1,"message":{{"type":"comment","ref":"{}","draft":{{"page":"/","selector":"","comment":"x"}}}}}}"#,
+            "r".repeat(MAX_COMMENT_REF + 1)
+        ),
+        format!(
+            r#"{{"version":1,"message":{{"type":"comment","ref":"1","draft":{{"page":"/","selector":"","comment":"{}"}}}}}}"#,
             "x".repeat(MAX_COMMENT + 1)
         ),
     ];
@@ -92,7 +98,7 @@ fn a_maximal_draft_fits_in_a_line() {
         comment: format!("x{}", escaped(MAX_COMMENT - 1)),
     };
     let message = Envelope::from(JoinerMessage::Comment {
-        reference: u64::MAX,
+        reference: "r".repeat(MAX_COMMENT_REF).try_into().unwrap(),
         draft: draft.try_into().unwrap(),
     });
     let line = encode_line(&message).unwrap();
@@ -102,30 +108,36 @@ fn a_maximal_draft_fits_in_a_line() {
 
 #[test]
 fn share_messages() {
-    let author = Author {
-        name: "alice@laptop".to_owned().try_into().unwrap(),
-        fingerprint: EndpointKey([0xab; 32]).fingerprint(),
-    };
+    let author = Author::new(
+        "alice@laptop".to_owned().try_into().unwrap(),
+        EndpointKey([0xab; 32]),
+    );
+    let key = "ab".repeat(32);
+    let reference = |raw: &str| CommentRef::try_from(raw.to_owned()).unwrap();
     let cases = [
         (
             ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()] },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab"}},"undelivered":["{ID}"]}}"#),
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"]}}"#),
         ),
         (
             ShareMessage::Refused { reason: RefusedReason::WrongSecret },
             r#"{"type":"refused","reason":"wrong_secret"}"#.to_owned(),
         ),
         (
-            ShareMessage::CommentAck { reference: 7, outcome: AckOutcome::Queued { id: ID.parse().unwrap() } },
-            format!(r#"{{"type":"comment_ack","ref":7,"outcome":{{"result":"queued","id":"{ID}"}}}}"#),
+            ShareMessage::Refused { reason: RefusedReason::Full },
+            r#"{"type":"refused","reason":"full"}"#.to_owned(),
         ),
         (
-            ShareMessage::CommentAck { reference: 8, outcome: AckOutcome::RateLimited { retry_after_secs: 6 } },
-            r#"{"type":"comment_ack","ref":8,"outcome":{"result":"rate_limited","retry_after_secs":6}}"#.to_owned(),
+            ShareMessage::CommentAck { reference: reference("7"), outcome: AckOutcome::Queued { id: ID.parse().unwrap() } },
+            format!(r#"{{"type":"comment_ack","ref":"7","outcome":{{"result":"queued","id":"{ID}"}}}}"#),
         ),
         (
-            ShareMessage::CommentAck { reference: 9, outcome: AckOutcome::QueueFull },
-            r#"{"type":"comment_ack","ref":9,"outcome":{"result":"queue_full"}}"#.to_owned(),
+            ShareMessage::CommentAck { reference: reference("8"), outcome: AckOutcome::RateLimited { retry_after_secs: 6 } },
+            r#"{"type":"comment_ack","ref":"8","outcome":{"result":"rate_limited","retry_after_secs":6}}"#.to_owned(),
+        ),
+        (
+            ShareMessage::CommentAck { reference: reference("9"), outcome: AckOutcome::QueueFull },
+            r#"{"type":"comment_ack","ref":"9","outcome":{"result":"queue_full"}}"#.to_owned(),
         ),
         (
             ShareMessage::Answer {
@@ -154,7 +166,7 @@ fn share_messages() {
         (ShareMessage::Status { line: None }, r#"{"type":"status","line":null}"#.to_owned()),
         (
             ShareMessage::Presence { joiners: vec![author] },
-            r#"{"type":"presence","joiners":[{"name":"alice@laptop","fingerprint":"ababababab"}]}"#.to_owned(),
+            format!(r#"{{"type":"presence","joiners":[{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}}]}}"#),
         ),
     ];
     for (message, json) in cases {

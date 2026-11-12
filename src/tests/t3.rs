@@ -12,7 +12,11 @@ use crate::{
     adapters::t3::{self, T3Delivery, T3Target, Thread},
     core::{clock::ManualClock, queue::DeliveryResult},
     protocol::comment::{Author, Comment, Draft},
-    share::{Source, delivery::Target},
+    share::{
+        Source,
+        delivery::Target,
+        hub::{HELD, RETRYING},
+    },
     tests::{
         fake_t3::{FakeT3, FakeThread, State},
         harness::{
@@ -192,11 +196,8 @@ async fn an_http_error_backs_off_on_the_clock_then_delivers() {
     .status
     .clone()
     .unwrap();
-    let status = String::from(status);
-    assert!(
-        status.contains("500") && status.contains("retrying"),
-        "{status}"
-    );
+    // The HTTP error stays in the share's log.
+    assert_eq!(String::from(status), RETRYING);
     assert_eq!(fake.calls_to("t3_thread_send").len(), 1);
 
     clock.advance(SignedDuration::from_secs(1));
@@ -232,18 +233,13 @@ async fn a_thread_gone_during_delivery_holds_comments() {
     .status
     .clone()
     .unwrap();
-    let status = String::from(status);
-    assert!(
-        status.contains("gone") && status.contains("archived"),
-        "{status}"
-    );
+    assert_eq!(String::from(status), HELD);
     assert_eq!(share.queued().len(), 1);
     assert_eq!(share.hub().wake_at(), None);
 }
 
 fn comment(text: &str) -> Comment {
-    let author: Author =
-        serde_json::from_str(r#"{"name":"alice","fingerprint":"0123456789"}"#).unwrap();
+    let author: Author = Author::new("alice".parse().unwrap(), "01".repeat(32).parse().unwrap());
     let draft: Draft =
         serde_json::from_value(serde_json::json!({"page": "/", "selector": "h1", "comment": text}))
             .unwrap();

@@ -3,15 +3,13 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::Duration,
 };
 
 use iroh::endpoint::{Connection, SendStream};
 use serde::Serialize;
-use tokio::sync::{broadcast, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::{
     BoxError,
@@ -20,7 +18,10 @@ use crate::{
     join::markdown,
     protocol::{
         comment::{Author, Draft},
-        control::{AckOutcome, Envelope, JoinerMessage, RefusedReason, ShareMessage, StatusLine},
+        control::{
+            AckOutcome, CommentRef, Envelope, JoinerMessage, RefusedReason, ShareMessage,
+            StatusLine,
+        },
     },
 };
 
@@ -86,48 +87,64 @@ pub(crate) enum Event {
     Answer(Answer),
 }
 
-/// The admitted control stream: writes comments, matches their
-/// acknowledgements.
+/// How long to wait for the share to acknowledge a comment.
+const ACK_TIMEOUT: Duration = Duration::from_secs(10);
+/// Lines waiting for the control stream's writer.
+const WRITE_QUEUE: usize = 16;
+
+/// The admitted control stream: one task writes comments, in whole lines;
+/// acknowledgements are matched by the page's ref.
 pub(crate) struct Control {
     pub(crate) connection: Connection,
-    writer: tokio::sync::Mutex<SendStream>,
-    acks: Mutex<HashMap<u64, oneshot::Sender<AckOutcome>>>,
-    next_ref: AtomicU64,
+    lines: mpsc::Sender<Envelope<JoinerMessage>>,
+    acks: Mutex<HashMap<CommentRef, oneshot::Sender<AckOutcome>>>,
 }
 
 impl Control {
+    /// Starts the writer on `writer`; it stops when the stream fails or
+    /// the control is dropped.
     pub(crate) fn new(connection: Connection, writer: SendStream) -> Self {
+        let (lines, queued) = mpsc::channel(WRITE_QUEUE);
+        tokio::spawn(write_lines(writer, queued));
         Self {
             connection,
-            writer: tokio::sync::Mutex::new(writer),
+            lines,
             acks: Mutex::new(HashMap::new()),
-            next_ref: AtomicU64::new(0),
         }
     }
 
-    fn acks(&self) -> MutexGuard<'_, HashMap<u64, oneshot::Sender<AckOutcome>>> {
+    fn acks(&self) -> MutexGuard<'_, HashMap<CommentRef, oneshot::Sender<AckOutcome>>> {
         self.acks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Sends a comment and waits for its acknowledgement; fails if the
-    /// connection goes away first.
-    pub(crate) async fn comment(&self, draft: Draft) -> Result<AckOutcome, BoxError> {
-        let reference = self.next_ref.fetch_add(1, Ordering::Relaxed);
+    /// connection goes away or the share does not answer in time. Safe to
+    /// cancel: the line is written whole or not at all, and the wait is
+    /// forgotten.
+    pub(crate) async fn comment(
+        &self,
+        reference: CommentRef,
+        draft: Draft,
+    ) -> Result<AckOutcome, BoxError> {
         let (ack, acked) = oneshot::channel();
-        self.acks().insert(reference, ack);
+        self.acks().insert(reference.clone(), ack);
+        let _waiting = Waiting {
+            control: self,
+            reference: reference.clone(),
+        };
         let line = Envelope::from(JoinerMessage::Comment { reference, draft });
-        let written = lines::write(&mut *self.writer.lock().await, &line).await;
-        if let Err(error) = written {
-            self.acks().remove(&reference);
-            return Err(error);
-        }
-        Ok(acked
+        self.lines
+            .send(line)
             .await
+            .map_err(|_| "the connection to the share was lost")?;
+        Ok(tokio::time::timeout(ACK_TIMEOUT, acked)
+            .await
+            .map_err(|_| "the share did not acknowledge the comment")?
             .map_err(|_| "the connection to the share was lost")?)
     }
 
-    fn acknowledge(&self, reference: u64, outcome: AckOutcome) {
-        if let Some(ack) = self.acks().remove(&reference) {
+    fn acknowledge(&self, reference: &CommentRef, outcome: AckOutcome) {
+        if let Some(ack) = self.acks().remove(reference) {
             let _ = ack.send(outcome);
         }
     }
@@ -135,6 +152,34 @@ impl Control {
     /// Fails every comment still waiting for its acknowledgement.
     pub(crate) fn abandon(&self) {
         self.acks().clear();
+    }
+
+    /// Comments waiting for their acknowledgement.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn waiting(&self) -> usize {
+        self.acks().len()
+    }
+}
+
+/// A comment waiting for its acknowledgement; forgotten when dropped.
+struct Waiting<'a> {
+    control: &'a Control,
+    reference: CommentRef,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.control.acks().remove(&self.reference);
+    }
+}
+
+async fn write_lines(mut writer: SendStream, mut queued: mpsc::Receiver<Envelope<JoinerMessage>>) {
+    while let Some(line) = queued.recv().await {
+        if let Err(error) = lines::write(&mut writer, &line).await {
+            tracing::debug!(%error, "control stream write failed");
+            return;
+        }
     }
 }
 
@@ -227,6 +272,15 @@ impl Session {
         }
     }
 
+    /// One of our comments, sent again, was delivered already as `id`;
+    /// returns how many are pending.
+    pub(crate) fn already_delivered(&self, id: CommentId) -> usize {
+        self.emit(Event::Delivered { ids: vec![id] });
+        self.update_mine(|mine| {
+            mine.remove(&id);
+        })
+    }
+
     /// One of our comments was queued under `id`; returns how many are
     /// pending.
     pub(crate) fn queued(&self, id: CommentId) -> usize {
@@ -254,7 +308,7 @@ impl Session {
     pub(crate) fn apply(&self, control: &Control, message: ShareMessage) {
         match message {
             ShareMessage::CommentAck { reference, outcome } => {
-                control.acknowledge(reference, outcome);
+                control.acknowledge(&reference, outcome);
             }
             ShareMessage::Reload { revision } => {
                 self.view.send_modify(|view| view.revision = Some(revision));

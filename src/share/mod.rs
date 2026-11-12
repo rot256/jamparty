@@ -8,7 +8,7 @@ mod connection;
 pub(crate) mod delivery;
 mod files;
 mod http;
-mod hub;
+pub(crate) mod hub;
 mod inject;
 mod live;
 pub(crate) mod proxy;
@@ -17,7 +17,7 @@ mod socket;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use iroh::Endpoint;
-use tokio::task::JoinSet;
+use tokio::{sync::Semaphore, task::JoinSet};
 
 use crate::{
     BoxError,
@@ -43,6 +43,9 @@ use crate::{
 
 pub(crate) use crate::share::admission::REFUSED_CODE;
 
+/// Connections waiting for admission at once, by default.
+const MAX_UNADMITTED: usize = 32;
+
 /// What to share.
 #[derive(Clone, Debug)]
 pub(crate) enum Source {
@@ -59,8 +62,11 @@ pub(crate) struct ShareConfig {
     pub(crate) target: Target,
     /// Where the runtime socket goes.
     pub(crate) runtime_dir: PathBuf,
-    /// How long a new connection has to present its hello.
-    pub(crate) hello_timeout: Duration,
+    /// How long a new connection has, from its first packet, to present
+    /// its hello.
+    pub(crate) admission_timeout: Duration,
+    /// Connections waiting for admission at once; more are refused.
+    pub(crate) max_unadmitted: usize,
     pub(crate) clock: Arc<dyn Clock>,
 }
 
@@ -77,7 +83,8 @@ impl ShareConfig {
             net,
             target,
             runtime_dir,
-            hello_timeout: Duration::from_secs(10),
+            admission_timeout: Duration::from_secs(10),
+            max_unadmitted: MAX_UNADMITTED,
             clock: Arc::new(SystemClock),
         }
     }
@@ -88,7 +95,7 @@ pub(crate) struct Shared {
     token: PartyToken,
     site: Site,
     hub: Arc<Hub>,
-    hello_timeout: Duration,
+    admission_timeout: Duration,
 }
 
 /// A running share. Dropping it stops serving; [`Share::stop`] also tells
@@ -109,7 +116,8 @@ impl Share {
             net,
             target,
             runtime_dir,
-            hello_timeout,
+            admission_timeout,
+            max_unadmitted,
             clock,
         } = config;
         let (site, watcher) = match source {
@@ -131,12 +139,16 @@ impl Share {
             token,
             site,
             hub: Hub::new(clock, Arc::new(SystemRng)),
-            hello_timeout,
+            admission_timeout,
         });
         let mut tasks = JoinSet::new();
         let recv = delivery::start(target, Arc::clone(&shared.hub), &mut tasks);
         tasks.spawn(socket::serve(listener, Arc::clone(&shared.hub), recv));
-        tasks.spawn(accept(endpoint.clone(), Arc::clone(&shared)));
+        tasks.spawn(accept(
+            endpoint.clone(),
+            Arc::new(Semaphore::new(max_unadmitted)),
+            Arc::clone(&shared),
+        ));
         tasks.spawn(connection::forward_reloads(Arc::clone(&shared)));
         Ok(Self {
             endpoint,
@@ -203,10 +215,15 @@ impl Share {
     }
 }
 
-async fn accept(endpoint: Endpoint, shared: Arc<Shared>) {
+async fn accept(endpoint: Endpoint, unadmitted: Arc<Semaphore>, shared: Arc<Shared>) {
     let mut connections = JoinSet::new();
     while let Some(incoming) = endpoint.accept().await {
-        connections.spawn(connection::handle(incoming, Arc::clone(&shared)));
+        let Ok(permit) = Arc::clone(&unadmitted).try_acquire_owned() else {
+            tracing::debug!("too many connections waiting for admission; refusing one");
+            incoming.refuse();
+            continue;
+        };
+        connections.spawn(connection::handle(incoming, permit, Arc::clone(&shared)));
         // Reap finished connections so the set does not grow.
         while connections.try_join_next().is_some() {}
     }

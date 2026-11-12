@@ -13,6 +13,7 @@ use crate::{
     share::{
         Source,
         delivery::{CommandTarget, Target},
+        hub::{HELD, RETRYING},
     },
     tests::harness::{
         DRAFT, TestShare, config, fixture_dir, join, post_comment, start, until, within,
@@ -80,7 +81,7 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
     .status
     .clone()
     .unwrap();
-    assert!(String::from(status).contains("retrying"));
+    assert_eq!(String::from(status), RETRYING);
 
     // The retry waits for the clock, then backs off further.
     clock.advance(SignedDuration::from_secs(1));
@@ -134,7 +135,8 @@ async fn a_missing_command_holds_comments() {
     .status
     .clone()
     .unwrap();
-    assert!(String::from(status).contains("gone"));
+    // What went wrong stays in the share's log.
+    assert_eq!(String::from(status), HELD);
     // New comments still queue, nothing is sent.
     assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
     assert_eq!(share.queued().len(), 2);
@@ -166,11 +168,7 @@ async fn a_command_that_takes_too_long_is_killed_and_retried() {
     .status
     .clone()
     .unwrap();
-    let status = String::from(status);
-    assert!(
-        status.contains("killed") && status.contains("retrying"),
-        "{status}"
-    );
+    assert_eq!(String::from(status), RETRYING);
     assert_eq!(
         share.hub().wake_at(),
         Some(t0() + SignedDuration::from_secs(1))

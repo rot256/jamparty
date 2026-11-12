@@ -48,12 +48,14 @@ const TOKEN: &str = "\
 const RECORD: &str = r#"Comments are JSON, one object per comment:
 
   {"id":"0f8fad5b-d9cb-469f-a165-70867728950e",
-   "author":{"name":"alice@laptop","fingerprint":"0123456789"},
+   "author":{"name":"alice@laptop","fingerprint":"0123456789",
+             "key":"0123456789abcdef...(64 hex characters)"},
    "page":"http://mzuhvlpymk6xo3ep.localhost:4321/about",
    "selector":"main > h1","selectedText":"Welcome","comment":"Bigger, please"}
 
   id            pass it to `jamjam send --anchor <id>` to answer next to it
-  author        a self-chosen name (unverified) and a stable key fingerprint
+  author        a self-chosen name (unverified), the joiner's key (stable:
+                what tells people apart) and its short fingerprint
   page          the page as the person saw it; the host differs per person,
                 use the path
   selector      CSS selector of the element; empty for a page comment;

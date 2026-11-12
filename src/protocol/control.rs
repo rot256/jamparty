@@ -50,11 +50,13 @@ pub(crate) enum JoinerMessage {
         secret: PartySecret,
         name: JoinerName,
     },
-    /// A comment; `ref` is the joiner's own number for it, echoed in the
-    /// acknowledgement.
+    /// A comment; `ref` is the page's own id for it, echoed in the
+    /// acknowledgement. The share queues a `ref` once per joiner: sending
+    /// it again ("send again" after a lost acknowledgement) gets the same
+    /// comment id back.
     Comment {
         #[serde(rename = "ref")]
-        reference: u64,
+        reference: CommentRef,
         draft: Draft,
     },
 }
@@ -75,7 +77,7 @@ pub(crate) enum ShareMessage {
     /// What became of the joiner's comment `ref`.
     CommentAck {
         #[serde(rename = "ref")]
-        reference: u64,
+        reference: CommentRef,
         outcome: AckOutcome,
     },
     /// An answer from the agent (`jamjam send`), Markdown; `id` is the
@@ -113,6 +115,9 @@ pub(crate) enum RefusedReason {
     /// The first line was not a valid hello (malformed, too long or
     /// another version).
     BadHello,
+    /// The share has as many joiners as it takes (in all, or with this
+    /// key); the joiner retries later.
+    Full,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,10 +125,43 @@ pub(crate) enum RefusedReason {
 pub(crate) enum AckOutcome {
     /// Queued for delivery under `id`.
     Queued { id: CommentId },
+    /// Sent before (same `ref`) as `id`, which is delivered already.
+    Delivered { id: CommentId },
     /// Over 10 per minute; try again after this many seconds.
     RateLimited { retry_after_secs: u64 },
-    /// The share's queue is full.
+    /// The share's queue is full, or holds as many of this joiner's
+    /// comments as it takes.
     QueueFull,
+}
+
+pub(crate) const MAX_COMMENT_REF: usize = 64;
+
+/// The page's id for a comment: 1 to 64 characters of `[A-Za-z0-9-]`
+/// (the page uses a random UUID).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub(crate) struct CommentRef(String);
+
+impl TryFrom<String> for CommentRef {
+    type Error = String;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        let valid = (1..=MAX_COMMENT_REF).contains(&raw.len())
+            && raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        if valid {
+            Ok(Self(raw))
+        } else {
+            Err(format!(
+                "a comment ref is 1 to {MAX_COMMENT_REF} characters of A-Z, a-z, 0-9 and -"
+            ))
+        }
+    }
+}
+
+impl From<CommentRef> for String {
+    fn from(reference: CommentRef) -> Self {
+        reference.0
+    }
 }
 
 /// A short status line shown on the page as is.

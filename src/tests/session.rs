@@ -1,5 +1,8 @@
 //! Comments, presence, the share stopping and reconnection.
 
+use std::time::Duration;
+
+use futures_util::FutureExt;
 use http_body_util::{BodyExt, Full};
 use iroh::endpoint::VarInt;
 use tokio::net::UnixStream;
@@ -8,6 +11,8 @@ use crate::{
     adapters::endpoint::generate_key,
     agent,
     core::{ids::EndpointKey, rng::SystemRng},
+    protocol::comment::Draft,
+    share::hub::MAX_JOINERS_PER_KEY,
     tests::harness::{
         DRAFT, connected, fixture_dir, get, join, joiner_with_key, local, post_comment, send,
         share_files, until, within,
@@ -19,7 +24,7 @@ async fn comments_are_queued_with_the_author_from_admission() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let key = generate_key(&SystemRng);
-    let fingerprint = EndpointKey::from(key.public()).fingerprint();
+    let public = EndpointKey::from(key.public());
     let joiner = joiner_with_key(share.token().clone(), share.direct_addrs(), "alice", key).await;
     connected(&joiner).await;
 
@@ -32,7 +37,8 @@ async fn comments_are_queued_with_the_author_from_admission() {
         panic!("expected one queued comment, got {queued:?}");
     };
     assert_eq!(comment.author.name.to_string(), "alice");
-    assert_eq!(comment.author.fingerprint, fingerprint);
+    assert_eq!(comment.author.key, public);
+    assert_eq!(comment.author.fingerprint, public.fingerprint());
     let you = joiner.watch().borrow().you.clone().unwrap();
     assert_eq!(comment.author, you);
     assert_eq!(comment.comment, "Bigger, please");
@@ -185,4 +191,57 @@ async fn a_reconnecting_joiner_learns_what_was_delivered_meanwhile() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_comment_sent_again_is_queued_once() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let joiner = join(&share, "alice").await;
+    let body = DRAFT.replacen('{', r#"{"ref":"page-ref-1","#, 1);
+    let first = post_comment(&joiner, &body).await;
+    assert_eq!(first.status, 202, "{}", first.body);
+    let again = post_comment(&joiner, &body).await;
+    assert_eq!(again.status, 202, "{}", again.body);
+    assert_eq!(first.body, again.body);
+    assert_eq!(share.queued().len(), 1);
+
+    // A wait given up (the page went away, a timeout) leaves nothing behind.
+    let control = joiner.control().unwrap();
+    let draft: Draft = serde_json::from_str(DRAFT).unwrap();
+    let reference = "page-ref-2".to_owned().try_into().unwrap();
+    // Polled once (the line goes out), then dropped.
+    let given_up = control.comment(reference, draft).now_or_never();
+    assert!(given_up.is_none(), "{given_up:?}");
+    assert_eq!(control.waiting(), 0);
+    // The comment may still have reached the share; sending it again is safe.
+    let body = DRAFT.replacen('{', r#"{"ref":"page-ref-2","#, 1);
+    assert_eq!(post_comment(&joiner, &body).await.status, 202);
+    until("both queued", || share.queued().len() == 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_full_share_is_retried_not_final() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let key = generate_key(&SystemRng);
+    let mut joiners = Vec::new();
+    for _ in 0..MAX_JOINERS_PER_KEY {
+        let joiner = joiner_with_key(
+            share.token().clone(),
+            share.direct_addrs(),
+            "alice",
+            key.clone(),
+        )
+        .await;
+        connected(&joiner).await;
+        joiners.push(joiner);
+    }
+    let extra = joiner_with_key(share.token().clone(), share.direct_addrs(), "alice", key).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!extra.watch().borrow().connected);
+    assert_eq!(extra.watch().borrow().refused, None);
+    assert_eq!(share.presence().len(), 1);
+    joiners.pop().unwrap().stop().await;
+    connected(&extra).await;
 }

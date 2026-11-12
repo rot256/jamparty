@@ -6,14 +6,18 @@ use std::{sync::Arc, time::Duration};
 use iroh::endpoint::{Connection, Incoming, RecvStream, SendStream, VarInt};
 use tokio::{
     io::BufReader,
-    sync::{broadcast::error::RecvError, mpsc},
+    sync::{
+        OwnedSemaphorePermit,
+        broadcast::{self, error::RecvError},
+        mpsc,
+    },
     task::JoinSet,
-    time::timeout,
+    time::{Instant, timeout, timeout_at},
 };
 
 use crate::{
     BoxError,
-    adapters::lines,
+    adapters::{endpoint, lines},
     core::{ids::EndpointKey, name::JoinerName},
     protocol::{
         comment::Author,
@@ -33,23 +37,43 @@ const REFUSAL_GRACE: Duration = Duration::from_secs(2);
 /// Close code for a joiner the share drops after admission.
 const DROPPED_CODE: u32 = 2;
 
-pub(crate) async fn handle(incoming: Incoming, shared: Arc<Shared>) {
-    let connection = match incoming.await {
-        Ok(connection) => connection,
-        Err(error) => {
+pub(crate) async fn handle(
+    incoming: Incoming,
+    unadmitted: OwnedSemaphorePermit,
+    shared: Arc<Shared>,
+) {
+    // One deadline for the whole admission: handshake, control stream and
+    // hello.
+    let deadline = Instant::now() + shared.admission_timeout;
+    let connection = match timeout_at(deadline, incoming).await {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(error)) => {
             tracing::debug!(%error, "incoming connection failed");
+            return;
+        }
+        Err(_) => {
+            tracing::debug!("incoming connection timed out");
             return;
         }
     };
     let key = EndpointKey::from(connection.remote_id());
-    match admission(&connection, &shared).await {
+    let admission = admission(&connection, deadline, &shared).await;
+    drop(unadmitted);
+    match admission {
         Ok(Admission::Admitted { send, recv, name }) => {
-            let author = Author {
-                name,
-                fingerprint: key.fingerprint(),
+            let author = Author::new(name, key);
+            // Subscribed before joining, so this joiner hears its own
+            // presence too.
+            let broadcasts = shared.hub.subscribe();
+            let Some(presence) = shared.hub.join(author.clone()) else {
+                tracing::info!(name = %author.name, fingerprint = %author.fingerprint, "joiner refused: the share is full");
+                refuse(&connection, send, RefusedReason::Full).await;
+                return;
             };
+            endpoint::admitted(&connection);
             tracing::info!(name = %author.name, fingerprint = %author.fingerprint, "joiner admitted");
-            let ended = joined(&connection, send, recv, key, &author, &shared).await;
+            let ended = joined(&connection, send, recv, broadcasts, &author, &shared).await;
+            drop(presence);
             tracing::info!(name = %author.name, fingerprint = %author.fingerprint, reason = %ended, "joiner left");
             connection.close(VarInt::from_u32(DROPPED_CODE), ended.as_bytes());
         }
@@ -73,12 +97,16 @@ enum Admission {
     },
 }
 
-/// Waits for the control stream and its hello; no other stream is accepted
-/// before this returns.
-async fn admission(connection: &Connection, shared: &Shared) -> Result<Admission, BoxError> {
-    let (send, recv) = timeout(shared.hello_timeout, connection.accept_bi()).await??;
+/// Waits for the control stream and its hello until `deadline`; no other
+/// stream is accepted before this returns.
+async fn admission(
+    connection: &Connection,
+    deadline: Instant,
+    shared: &Shared,
+) -> Result<Admission, BoxError> {
+    let (send, recv) = timeout_at(deadline, connection.accept_bi()).await??;
     let mut recv = BufReader::new(recv);
-    let first = timeout(shared.hello_timeout, lines::read(&mut recv))
+    let first = timeout_at(deadline, lines::read(&mut recv))
         .await
         .map_err(|_| ())
         .and_then(|line| line.map_err(|_| ()));
@@ -106,11 +134,10 @@ async fn joined(
     connection: &Connection,
     mut send: SendStream,
     mut recv: BufReader<RecvStream>,
-    key: EndpointKey,
+    mut broadcasts: broadcast::Receiver<ShareMessage>,
     author: &Author,
     shared: &Arc<Shared>,
 ) -> &'static str {
-    let mut broadcasts = shared.hub.subscribe();
     let mut greeting = vec![ShareMessage::Admitted {
         you: author.clone(),
         undelivered: shared.hub.undelivered_by(author),
@@ -129,12 +156,13 @@ async fn joined(
             return "control stream closed";
         }
     }
-    let _presence = shared.hub.join(author.clone());
 
     let mut requests = JoinSet::new();
     let accept = async {
         while let Ok((send, recv)) = connection.accept_bi().await {
             requests.spawn(serve_stream(send, recv, shared.site.clone()));
+            // Reap finished requests so the set does not grow.
+            while requests.try_join_next().is_some() {}
         }
         "connection closed"
     };
@@ -157,8 +185,8 @@ async fn joined(
             };
             let ack = match message {
                 JoinerMessage::Comment { reference, draft } => ShareMessage::CommentAck {
+                    outcome: shared.hub.comment(author, reference.clone(), draft),
                     reference,
-                    outcome: shared.hub.comment(key, author, draft),
                 },
                 JoinerMessage::Hello { .. } => return "second hello",
             };

@@ -11,15 +11,20 @@ use hyper::{
     body::{Frame, Incoming},
     header::{self, CACHE_CONTROL, CONTENT_TYPE},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     sync::broadcast::{Receiver, error::RecvError},
     time::{Instant, Interval, MissedTickBehavior, interval_at},
 };
 
 use crate::{
+    core::ids::CommentId,
     join::session::{Event, Session},
-    protocol::{MAX_LINE_BYTES, comment::Draft, control::AckOutcome},
+    protocol::{
+        MAX_LINE_BYTES,
+        comment::{Draft, DraftFields},
+        control::{AckOutcome, CommentRef},
+    },
     share::body::{AppBody, RequestError, json_response},
 };
 
@@ -27,8 +32,19 @@ use crate::{
 /// watchdog.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
-/// How long to wait for the share to acknowledge a comment.
-const ACK_TIMEOUT: Duration = Duration::from_secs(10);
+/// What a page posts: its ref for the comment (sent again unchanged on
+/// "send again") and the draft's fields.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Submission {
+    #[serde(rename = "ref")]
+    reference: CommentRef,
+    page: String,
+    selector: String,
+    #[serde(default)]
+    selected_text: Option<String>,
+    comment: String,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,8 +88,21 @@ async fn submit(
         .await
         .map_err(|_| RequestError::new(StatusCode::PAYLOAD_TOO_LARGE, "comment is too large"))?
         .to_bytes();
-    let draft: Draft = serde_json::from_slice(&body)
-        .map_err(|error| RequestError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+    let bad = |error: String| RequestError::new(StatusCode::BAD_REQUEST, error);
+    let Submission {
+        reference,
+        page,
+        selector,
+        selected_text,
+        comment,
+    } = serde_json::from_slice(&body).map_err(|error| bad(error.to_string()))?;
+    let draft = Draft::try_from(DraftFields {
+        page,
+        selector,
+        selected_text,
+        comment,
+    })
+    .map_err(bad)?;
     let not_sent = || {
         RequestError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -81,21 +110,22 @@ async fn submit(
         )
     };
     let control = session.control().ok_or_else(not_sent)?;
-    let outcome = tokio::time::timeout(ACK_TIMEOUT, control.comment(draft))
+    let outcome = control
+        .comment(reference, draft)
         .await
-        .map_err(|_| not_sent())?
         .map_err(|_| not_sent())?;
+    let queued = |id: CommentId, pending| {
+        json_response(
+            StatusCode::ACCEPTED,
+            &Queued {
+                id: id.to_string(),
+                pending,
+            },
+        )
+    };
     Ok(match outcome {
-        AckOutcome::Queued { id } => {
-            let pending = session.queued(id);
-            json_response(
-                StatusCode::ACCEPTED,
-                &Queued {
-                    id: id.to_string(),
-                    pending,
-                },
-            )
-        }
+        AckOutcome::Queued { id } => queued(id, session.queued(id)),
+        AckOutcome::Delivered { id } => queued(id, session.already_delivered(id)),
         AckOutcome::RateLimited { retry_after_secs } => json_response(
             StatusCode::TOO_MANY_REQUESTS,
             &Limited429 {

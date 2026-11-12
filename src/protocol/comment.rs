@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::{
-    ids::{CommentId, Fingerprint},
+    ids::{CommentId, EndpointKey, Fingerprint},
     name::JoinerName,
     text::{check_len, check_text},
 };
@@ -17,12 +17,25 @@ pub(crate) const MAX_SELECTED_TEXT: usize = 2000;
 pub(crate) const MAX_COMMENT: usize = 10_000;
 
 /// Who wrote a comment: set by the share from the joiner's admission,
-/// never from the comment body.
+/// never from the comment body. `key` is the joiner's full key, what
+/// identifies it; `fingerprint` is its short form, for display only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Author {
     pub(crate) name: JoinerName,
     pub(crate) fingerprint: Fingerprint,
+    pub(crate) key: EndpointKey,
+}
+
+impl Author {
+    #[must_use]
+    pub(crate) fn new(name: JoinerName, key: EndpointKey) -> Self {
+        Self {
+            name,
+            fingerprint: key.fingerprint(),
+            key,
+        }
+    }
 }
 
 /// The fields of a draft; only reachable through a validated [`Draft`].
@@ -121,10 +134,10 @@ mod tests {
             ..fields("Bigger, please")
         })
         .unwrap();
-        let author = Author {
-            name: "alice@laptop".to_owned().try_into().unwrap(),
-            fingerprint: EndpointKey([0xab; 32]).fingerprint(),
-        };
+        let author = Author::new(
+            "alice@laptop".to_owned().try_into().unwrap(),
+            EndpointKey([0xab; 32]),
+        );
         let comment = Comment::new(CommentId::generate(&SeededRng::new(1)), author, draft);
         let value = serde_json::to_value(&comment).unwrap();
         let mut keys: Vec<&str> = value
@@ -147,7 +160,11 @@ mod tests {
         );
         assert_eq!(
             value.pointer("/author"),
-            Some(&serde_json::json!({"name": "alice@laptop", "fingerprint": "ababababab"}))
+            Some(&serde_json::json!({
+                "name": "alice@laptop",
+                "fingerprint": "ababababab",
+                "key": "ab".repeat(32),
+            }))
         );
         assert_eq!(
             value.pointer("/selectedText"),

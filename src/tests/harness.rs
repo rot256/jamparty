@@ -63,7 +63,7 @@ pub(crate) fn fixture_dir() -> TempDir {
 /// timeout; [`start`] gives it a runtime directory.
 pub(crate) fn config(source: Source, target: Target) -> ShareConfig {
     let mut config = ShareConfig::new(source, net(), target, PathBuf::new());
-    config.hello_timeout = Duration::from_secs(2);
+    config.admission_timeout = Duration::from_secs(2);
     config
 }
 
@@ -212,13 +212,21 @@ pub(crate) async fn get(joiner: &Joiner, path: &str) -> Reply {
 /// A comment draft on the fixture's title.
 pub(crate) const DRAFT: &str = r##"{"page":"http://x.localhost/","selector":"#title","selectedText":"Fixture","comment":"Bigger, please"}"##;
 
-/// Posts a comment the way the page does.
+/// Posts a comment the way the page does, with a fresh `ref` unless
+/// `body` (a JSON object) has one.
 pub(crate) async fn post_comment(joiner: &Joiner, body: &str) -> Reply {
+    let mut json: serde_json::Value = serde_json::from_str(body).unwrap();
+    if let Some(object) = json.as_object_mut() {
+        object
+            .entry("ref")
+            .or_insert_with(|| uuid::Uuid::new_v4().to_string().into());
+    }
+    let body = json.to_string();
     let request = local(joiner, "POST", "/_jamjam/api/comments")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ORIGIN, joiner.origin().origin())
         .header("sec-fetch-site", "same-origin")
-        .body(Full::new(Bytes::from(body.to_owned())))
+        .body(Full::new(Bytes::from(body)))
         .unwrap();
     fetch(joiner, request).await
 }

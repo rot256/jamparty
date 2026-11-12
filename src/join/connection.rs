@@ -93,12 +93,12 @@ async fn attempt(dial: &Dial, session: &Session) -> Ended {
             message: ShareMessage::Refused { reason },
         })) => {
             connection.close(VarInt::from_u32(0), b"refused");
-            return Ended::Refused(reason);
+            return refused(reason);
         }
         Ok(_) | Err(_) => {
             let closed = tokio::time::timeout(CLOSE_WAIT, connection.closed()).await;
             return match refusal(closed.ok()) {
-                Some(reason) => Ended::Refused(reason),
+                Some(reason) => refused(reason),
                 None => Ended::Failed("the share closed the connection during admission".into()),
             };
         }
@@ -108,6 +108,14 @@ async fn attempt(dial: &Dial, session: &Session) -> Ended {
     receive(&mut recv, &control, session).await;
     control.connection.close(VarInt::from_u32(0), b"bye");
     Ended::Lost
+}
+
+/// A refusal: final, except a full share, which is retried.
+fn refused(reason: RefusedReason) -> Ended {
+    match reason {
+        RefusedReason::Full => Ended::Failed("the share is full".into()),
+        RefusedReason::WrongSecret | RefusedReason::BadHello => Ended::Refused(reason),
+    }
 }
 
 /// Applies the share's messages until the stream ends.

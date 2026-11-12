@@ -5,7 +5,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use iroh::{
     Endpoint, EndpointAddr, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey,
-    endpoint::{Connection, QuicTransportConfig, presets},
+    endpoint::{Connection, QuicTransportConfig, VarInt, presets},
 };
 
 use crate::{
@@ -49,6 +49,24 @@ impl NetConfig {
     }
 }
 
+/// What a share buffers per stream of a joiner's.
+const STREAM_WINDOW: u32 = 1024 * 1024;
+/// What a share buffers for a joiner it has not admitted yet, across its
+/// streams (only the control stream is allowed then).
+const UNADMITTED_WINDOW: u32 = 64 * 1024;
+/// What a share buffers for an admitted joiner, across its streams.
+const ADMITTED_WINDOW: u32 = 4 * 1024 * 1024;
+/// Streams an admitted joiner may have open at once (requests, upgrades
+/// and the control stream).
+const ADMITTED_STREAMS: u32 = 64;
+
+/// Lets an admitted joiner open request streams, with a larger receive
+/// window.
+pub(crate) fn admitted(connection: &Connection) {
+    connection.set_max_concurrent_bi_streams(VarInt::from_u32(ADMITTED_STREAMS));
+    connection.set_receive_window(VarInt::from_u32(ADMITTED_WINDOW));
+}
+
 /// A fresh iroh secret key from `rng`.
 pub(crate) fn generate_key(rng: &dyn Rng) -> SecretKey {
     SecretKey::from_bytes(&random_array(rng))
@@ -64,7 +82,19 @@ pub(crate) async fn bind(
     let transport = QuicTransportConfig::builder()
         .keep_alive_interval(config.keep_alive)
         .max_idle_timeout(Some(config.idle_timeout.try_into()?))
-        .build();
+        // Nobody uses unidirectional streams.
+        .max_concurrent_uni_streams(VarInt::from_u32(0));
+    let transport = match accept {
+        // Before admission a joiner may open only its control stream, and
+        // the share buffers little for it; [`admitted`] raises both.
+        Accept::Jamjam => transport
+            .max_concurrent_bidi_streams(VarInt::from_u32(1))
+            .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))
+            .receive_window(VarInt::from_u32(UNADMITTED_WINDOW)),
+        // The share never opens streams to a joiner.
+        Accept::Nothing => transport.max_concurrent_bidi_streams(VarInt::from_u32(0)),
+    }
+    .build();
     let builder = match config.discovery {
         Discovery::Public => match &config.relay {
             None => Endpoint::builder(presets::N0),
