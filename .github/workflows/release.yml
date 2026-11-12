@@ -1,92 +1,63 @@
 name: Release
 
-# Manual only while nabe is under construction: a push must not publish a
-# release or a crate.
+# Publishes on a pushed tag vX.Y.Z that matches the Cargo.toml version.
+# workflow_dispatch retries a release that failed before publishing (pick
+# the tag as the ref); any other ref fails the version check.
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   # Fail every compile step, including release builds, on any warning.
   RUSTFLAGS: -D warnings
 
 jobs:
-  metadata:
-    name: Read release version
+  version:
+    name: Check tag against Cargo.toml
     runs-on: ubuntu-24.04
     outputs:
-      publish: ${{ steps.package.outputs.publish }}
-      tag: ${{ steps.package.outputs.tag }}
+      tag: ${{ steps.check.outputs.tag }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate package version
-        id: package
+      - name: Compare tag and package version
+        id: check
         env:
-          BEFORE_SHA: ${{ github.event.before }}
-          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "nabe") | .version')"
           if [ -z "$version" ] || [ "$version" = "null" ]; then
             echo "Could not read the nabe package version" >&2
             exit 1
           fi
-
-          if [ "$EVENT_NAME" = "push" ]; then
-            base_ref="$BEFORE_SHA"
-          else
-            base_ref="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
-          fi
-
-          previous_version="$(
-            if [ -n "$base_ref" ]; then
-              git show "${base_ref}:Cargo.toml"
-            fi |
-              awk '
-                /^\[package\]$/ { in_package = 1; next }
-                /^\[/ { in_package = 0 }
-                in_package && /^version[[:space:]]*=/ {
-                  value = $0
-                  sub(/^[^=]*=[[:space:]]*"/, "", value)
-                  sub(/".*$/, "", value)
-                  print value
-                  exit
-                }
-              '
-          )"
-
-          if [ "$version" = "$previous_version" ]; then
-            echo "Package version remains $version; no release needed"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Package version changed from ${previous_version:-unreleased} to $version"
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-
-      - name: Require a new version
-        if: steps.package.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ steps.package.outputs.tag }}
-        run: |
-          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "$RELEASE_TAG already exists; bump the Cargo.toml version" >&2
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "Releases run on a tag; got $REF_TYPE $REF_NAME" >&2
             exit 1
           fi
+          if [ "$REF_NAME" != "v$version" ]; then
+            echo "Tag $REF_NAME does not match Cargo.toml version $version (expected v$version)" >&2
+            exit 1
+          fi
+          echo "Releasing $REF_NAME"
+          echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
 
   test:
-    name: Test
-    if: needs.metadata.outputs.publish == 'true'
-    needs: metadata
+    name: Checks
+    needs: version
     runs-on: ubuntu-24.04
 
     steps:
@@ -108,10 +79,10 @@ jobs:
         run: cargo publish --locked --dry-run
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
 
       - name: Install JavaScript lint dependencies
         run: npm ci
@@ -122,21 +93,32 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          enable-cache: true
+          enable-cache: false
 
-      - name: Install browser test dependencies
+      - name: Install Python dependencies and browsers
         run: |
           uv sync --locked
-          uv run playwright install --with-deps chromium
+          uv run --locked playwright install --with-deps chromium firefox
+
+      - name: Check Python formatting
+        run: uv run --locked ruff format --check .
+
+      - name: Lint Python
+        run: uv run --locked ruff check .
+
+      - name: Type check Python
+        run: uv run --locked basedpyright
 
       - name: Run browser tests
         run: uv run --locked pytest
 
+      - name: Build release binary
+        run: cargo build --locked --release
+
   build:
     name: Build ${{ matrix.name }}
-    if: needs.metadata.outputs.publish == 'true'
     needs:
-      - metadata
+      - version
       - test
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -205,14 +187,14 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    if: needs.metadata.outputs.publish == 'true'
     needs:
-      - metadata
+      - version
+      - test
       - build
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
-      id-token: write
+      contents: read # check out the crate sources
+      id-token: write # crates.io trusted publishing (OIDC)
     env:
       CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -236,14 +218,13 @@ jobs:
 
   release:
     name: Publish GitHub release
-    if: needs.metadata.outputs.publish == 'true'
     needs:
-      - metadata
+      - version
       - build
       - publish
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: write # create the GitHub release and upload assets
 
     steps:
       - name: Download release artifacts
@@ -256,25 +237,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_SHA: ${{ github.sha }}
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
-          if ! gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            tagged_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            tag_object="$(gh api --method POST "repos/$GH_REPO/git/tags" \
-              -f tag="$RELEASE_TAG" \
-              -f message="Release $RELEASE_TAG" \
-              -f object="$RELEASE_SHA" \
-              -f type=commit \
-              -f 'tagger[name]=github-actions[bot]' \
-              -f 'tagger[email]=41898282+github-actions[bot]@users.noreply.github.com' \
-              -f "tagger[date]=$tagged_at" \
-              --jq .sha)"
-            gh api --method POST "repos/$GH_REPO/git/refs" \
-              -f ref="refs/tags/$RELEASE_TAG" \
-              -f sha="$tag_object" >/dev/null
-          fi
-
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" dist/* \
               --verify-tag \

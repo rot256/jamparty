@@ -49,3 +49,18 @@ or Firefox; Safari does not resolve `*.localhost`). Then:
 
 The joiner keeps its key in `~/.config/nabe/key`; the share shows its
 name next to a fingerprint of that key.
+
+## Releasing
+
+Set `version` in `Cargo.toml`, commit, and push a tag `vX.Y.Z` matching it:
+
+```sh
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+The release workflow (`.github/workflows/release.yml`) refuses a tag that
+differs from the `Cargo.toml` version, runs the checks, builds the binaries,
+publishes the crate and creates the GitHub release. Publishing to crates.io
+needs either a `CARGO_REGISTRY_TOKEN` repository secret or crates.io trusted
+publishing configured for `rot256/nabe` and workflow `release.yml`.
