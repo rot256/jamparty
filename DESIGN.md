@@ -1,6 +1,6 @@
 # nabe design
 
-*Let's JamJam?*
+*Join the potluck.*
 
 nabe lets an agent share a site it is working on with a few people.
 They join from their own machine, point at the page and comment. Their
@@ -517,12 +517,11 @@ Kept out of the first version on purpose; the protocol leaves room:
 
 ## Logo
 
-To be replaced for nabe; the logo and slogan below are from jamjam.
+Slogan: "Join the potluck." Used in the comment UI and the joiner's start
+page, next to the logo.
 
-`assets/logo/jamjam.svg`: two soft cookies with a raspberry jam layer,
-after the Canadian Jam Jams. An original drawing, no product branding.
-Used in the comment UI and the joiner's start page. Slogan: "Let's
-JamJam?".
+The logo is still jamjam's (`assets/logo/jamjam.svg`, two soft cookies
+with a raspberry jam layer) and is to be replaced with one for nabe.
 
 ## Code structure
 
