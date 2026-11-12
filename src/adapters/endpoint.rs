@@ -7,9 +7,10 @@ use iroh::{
     Endpoint, EndpointAddr, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey,
     endpoint::{Connection, QuicTransportConfig, VarInt, presets},
 };
+use rootcause::prelude::report;
 
 use crate::{
-    BoxError,
+    Report,
     core::{
         ids::EndpointKey,
         rng::{Rng, random_array},
@@ -78,7 +79,7 @@ pub(crate) async fn bind(
     config: &NetConfig,
     key: SecretKey,
     accept: Accept,
-) -> Result<Endpoint, BoxError> {
+) -> Result<Endpoint, Report> {
     let transport = QuicTransportConfig::builder()
         .keep_alive_interval(config.keep_alive)
         .max_idle_timeout(Some(config.idle_timeout.try_into()?))
@@ -131,7 +132,7 @@ pub(crate) async fn connect(
     endpoint: &Endpoint,
     key: EndpointKey,
     direct: &[SocketAddr],
-) -> Result<Connection, BoxError> {
+) -> Result<Connection, Report> {
     let id = PublicKey::try_from(key)?;
     let addr = direct
         .iter()
@@ -152,9 +153,9 @@ impl From<PublicKey> for EndpointKey {
 }
 
 impl TryFrom<EndpointKey> for PublicKey {
-    type Error = BoxError;
+    type Error = Report;
 
     fn try_from(key: EndpointKey) -> Result<Self, Self::Error> {
-        Ok(Self::from_bytes(&key.0).map_err(|_| "the token's key is not a valid public key")?)
+        Self::from_bytes(&key.0).map_err(|_| report!("the token's key is not a valid public key"))
     }
 }

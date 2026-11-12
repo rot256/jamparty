@@ -7,15 +7,22 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use hyper::{
     Request, Response, StatusCode,
     body::Incoming,
+    client::conn::http1 as client_http1,
     header::{self, HeaderMap, HeaderValue},
     server::conn::http1,
     service::service_fn,
+    upgrade,
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
-use tokio::{io::copy_bidirectional, net::TcpListener};
+use rootcause::prelude::report;
+use tokio::{
+    io::{self, copy_bidirectional},
+    net::TcpListener,
+    time,
+};
 
 use crate::{
-    BoxError,
+    Report,
     core::request::{FRAME_ANCESTORS, Method, Refusal, RequestFacts, Route, Upgrade},
     join::{api, session::Session},
     share::{
@@ -35,7 +42,7 @@ pub(crate) async fn serve(listener: TcpListener, session: Arc<Session>) {
             Err(error) => {
                 tracing::warn!(%error, "local accept failed");
                 // Out of descriptors, say: let it pass rather than spin.
-                tokio::time::sleep(ACCEPT_BACKOFF).await;
+                time::sleep(ACCEPT_BACKOFF).await;
                 continue;
             }
         };
@@ -115,24 +122,24 @@ async fn forward(
     mut request: Request<Incoming>,
     session: &Session,
 ) -> Result<Response<AppBody>, RequestError> {
-    let unreachable = |error: BoxError| {
+    let unreachable = |error: Report| {
         tracing::debug!(%error, "could not forward to the share");
         RequestError::new(StatusCode::BAD_GATEWAY, "the share is not reachable")
     };
     let control = session
         .control()
-        .ok_or_else(|| unreachable("not connected".into()))?;
+        .ok_or_else(|| unreachable(report!("not connected")))?;
     let local_upgrade = request
         .headers()
         .contains_key(header::UPGRADE)
-        .then(|| hyper::upgrade::on(&mut request));
+        .then(|| upgrade::on(&mut request));
     let (send, recv) = control
         .connection
         .open_bi()
         .await
         .map_err(|error| unreachable(error.into()))?;
-    let io = TokioIo::new(tokio::io::join(recv, send));
-    let (mut sender, connection) = hyper::client::conn::http1::handshake(io)
+    let io = TokioIo::new(io::join(recv, send));
+    let (mut sender, connection) = client_http1::handshake(io)
         .await
         .map_err(|error| unreachable(error.into()))?;
     tokio::spawn(async move {
@@ -147,7 +154,7 @@ async fn forward(
     if response.status() == StatusCode::SWITCHING_PROTOCOLS
         && let Some(local_upgrade) = local_upgrade
     {
-        let share_upgrade = hyper::upgrade::on(&mut response);
+        let share_upgrade = upgrade::on(&mut response);
         tokio::spawn(async move {
             match tokio::try_join!(local_upgrade, share_upgrade) {
                 Ok((local, share)) => {

@@ -1,15 +1,18 @@
 //! In-process shares and joiners over iroh with direct addresses, a
 //! fixture site and a small HTTP client.
 
-use std::{future::Future, net::SocketAddr, ops::Deref, path::PathBuf, time::Duration};
+use std::{fs, future::Future, net::SocketAddr, ops::Deref, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::{HeaderMap, Request, Response, StatusCode, body::Incoming, header};
+use hyper::{
+    HeaderMap, Request, Response, StatusCode, body::Incoming, client::conn::http1, header,
+    http::request::Builder as RequestBuilder,
+};
 use hyper_util::rt::TokioIo;
 use iroh::{Endpoint, SecretKey, endpoint::Connection};
 use tempfile::TempDir;
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, time};
 
 use crate::{
     adapters::endpoint::{Accept, Discovery, NetConfig, bind, connect, generate_key},
@@ -35,7 +38,7 @@ pub(crate) fn net() -> NetConfig {
 }
 
 pub(crate) async fn within<T>(what: &str, future: impl Future<Output = T>) -> T {
-    tokio::time::timeout(PATIENCE, future)
+    time::timeout(PATIENCE, future)
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
 }
@@ -44,7 +47,7 @@ pub(crate) async fn within<T>(what: &str, future: impl Future<Output = T>) -> T 
 pub(crate) async fn until(what: &str, mut check: impl FnMut() -> bool) {
     within(what, async {
         while !check() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await;
@@ -53,9 +56,9 @@ pub(crate) async fn until(what: &str, mut check: impl FnMut() -> bool) {
 /// A directory with an `index.html`, a stylesheet and a dotfile.
 pub(crate) fn fixture_dir() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("index.html"), FIXTURE_HTML).unwrap();
-    std::fs::write(dir.path().join("style.css"), "h1 { color: red }").unwrap();
-    std::fs::write(dir.path().join(".secret"), "hidden").unwrap();
+    fs::write(dir.path().join("index.html"), FIXTURE_HTML).unwrap();
+    fs::write(dir.path().join("style.css"), "h1 { color: red }").unwrap();
+    fs::write(dir.path().join(".secret"), "hidden").unwrap();
     dir
 }
 
@@ -102,7 +105,7 @@ pub(crate) async fn share(source: Source) -> TestShare {
 }
 
 pub(crate) async fn share_files(dir: &TempDir) -> TestShare {
-    let root: PathBuf = std::fs::canonicalize(dir.path()).unwrap();
+    let root: PathBuf = fs::canonicalize(dir.path()).unwrap();
     share(Source::Files(root)).await
 }
 
@@ -166,7 +169,7 @@ pub(crate) struct Reply {
 }
 
 /// A request to the joiner's local server, `Host` set to its origin.
-pub(crate) fn local(joiner: &Joiner, method: &str, path: &str) -> hyper::http::request::Builder {
+pub(crate) fn local(joiner: &Joiner, method: &str, path: &str) -> RequestBuilder {
     Request::builder()
         .method(method)
         .uri(path)
@@ -176,9 +179,7 @@ pub(crate) fn local(joiner: &Joiner, method: &str, path: &str) -> hyper::http::r
 /// Sends `request` to `addr` and returns the response head, body unread.
 pub(crate) async fn send(addr: SocketAddr, request: Request<Full<Bytes>>) -> Response<Incoming> {
     let stream = TcpStream::connect(addr).await.unwrap();
-    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .unwrap();
+    let (mut sender, connection) = http1::handshake(TokioIo::new(stream)).await.unwrap();
     tokio::spawn(connection.with_upgrades());
     within("a response", sender.send_request(request))
         .await

@@ -2,11 +2,12 @@
 //! the agent and count as delivered once printed; answers reach every
 //! joiner.
 
-use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
+    time,
 };
 
 use crate::{
@@ -42,7 +43,7 @@ async fn the_socket_is_private_and_goes_away_with_the_share() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let path = share.socket_path().to_owned();
-    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(&path), 0o600);
     assert_eq!(mode(path.parent().unwrap()), 0o700);
     assert_eq!(
@@ -65,7 +66,7 @@ async fn recv_waits_for_comments_and_delivery_reaches_every_joiner() {
     let mut waiting = tokio::spawn(async move { recv(&path).await });
     // Nothing pending: recv keeps waiting.
     assert!(
-        tokio::time::timeout(Duration::from_millis(300), &mut waiting)
+        time::timeout(Duration::from_millis(300), &mut waiting)
             .await
             .is_err()
     );

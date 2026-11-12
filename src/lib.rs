@@ -8,19 +8,32 @@ mod share;
 mod tests;
 
 use std::{
-    error::Error,
+    env,
     ffi::OsString,
+    fs,
     io::{self, BufRead, Read},
     net::{IpAddr, SocketAddr},
     path::PathBuf,
-    process::Stdio,
+    process::{Command as Process, Stdio},
+    str::FromStr,
     time::Duration,
 };
 
 use clap::{Args, Parser, Subcommand};
 use hyper::Uri;
 use iroh::RelayUrl;
-use tokio::signal::unix::{SignalKind, signal};
+use nix::unistd;
+use rootcause::{
+    option_ext::OptionExt,
+    prelude::{ResultExt, bail},
+};
+use tokio::{
+    signal::{
+        ctrl_c,
+        unix::{SignalKind, signal},
+    },
+    time,
+};
 
 use crate::{
     adapters::{
@@ -43,7 +56,19 @@ use crate::{
     },
 };
 
-pub(crate) type BoxError = Box<dyn Error + Send + Sync>;
+/// Errors are rootcause reports; `main` prints them with [`describe`].
+pub use rootcause::Report;
+
+/// An error for people: its chain of contexts on one line, outermost
+/// first (`could not read <file>: permission denied`).
+#[must_use]
+pub fn describe(error: &Report) -> String {
+    error
+        .iter_reports()
+        .map(|report| report.format_current_context().to_string())
+        .collect::<Vec<_>>()
+        .join(": ")
+}
 
 /// How long a public share waits to reach a relay before printing its token.
 const ONLINE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -86,7 +111,6 @@ enum Command {
     Join {
         /// The party token printed by `jampot serve` or `jampot proxy`, or
         /// `-` to read it from stdin (out of `ps` and shell history).
-        #[arg(value_parser = parse_token)]
         token: TokenArg,
         /// Display name shown next to your comments (default: user@host).
         #[arg(long)]
@@ -158,26 +182,26 @@ enum TokenArg {
     Stdin,
 }
 
-fn parse_token(raw: &str) -> Result<TokenArg, String> {
-    if raw == "-" {
-        Ok(TokenArg::Stdin)
-    } else {
-        raw.parse()
-            .map(TokenArg::Given)
-            .map_err(|error: TokenError| error.to_string())
+impl FromStr for TokenArg {
+    type Err = TokenError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        if raw == "-" {
+            Ok(Self::Stdin)
+        } else {
+            raw.parse().map(Self::Given)
+        }
     }
 }
 
 impl TokenArg {
-    fn resolve(self, stdin: impl BufRead) -> Result<PartyToken, BoxError> {
+    fn resolve(self, stdin: impl BufRead) -> Result<PartyToken, Report> {
         match self {
             Self::Given(token) => Ok(token),
             Self::Stdin => {
                 let mut line = String::new();
                 stdin.take(1024).read_line(&mut line)?;
-                Ok(line
-                    .parse()
-                    .map_err(|error| format!("the token on stdin: {error}"))?)
+                Ok(line.parse::<PartyToken>().context("the token on stdin")?)
             }
         }
     }
@@ -192,7 +216,7 @@ struct Which {
     share: Option<Sid>,
 }
 
-pub async fn run(cli: Cli) -> Result<(), BoxError> {
+pub async fn run(cli: Cli) -> Result<(), Report> {
     let Some(command) = cli.command else {
         print!("{}", guides::OVERVIEW);
         return Ok(());
@@ -203,14 +227,10 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
             net,
             delivery,
         } => {
-            let root = std::fs::canonicalize(&directory).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!("could not share {}: {error}", directory.display()),
-                )
-            })?;
+            let root = fs::canonicalize(&directory)
+                .context_with(|| format!("could not share {}", directory.display()))?;
             if !root.is_dir() {
-                return Err(format!("{} is not a directory", root.display()).into());
+                bail!("{} is not a directory", root.display());
             }
             let site = root.display().to_string();
             share(Source::Files(root), &net, delivery, &site, " (live reload)").await
@@ -271,7 +291,7 @@ fn target(
     delivery: Delivery,
     site: &str,
     env_thread: Option<OsString>,
-) -> Result<(Target, Option<String>), BoxError> {
+) -> Result<(Target, Option<String>), Report> {
     let Delivery {
         thread,
         t3_url,
@@ -281,31 +301,28 @@ fn target(
     } = delivery;
     let t3 = thread.is_some() || t3_url.is_some() || t3_token_file.is_some();
     if t3 && !command.is_empty() {
-        return Err(
-            "choose the t3 target (--thread, --t3-url) or a command after --, not both".into(),
-        );
+        bail!("choose the t3 target (--thread, --t3-url) or a command after --, not both");
     }
     if t3 {
-        let url = t3_url.ok_or("the t3 target needs T3's MCP URL: pass --t3-url")?;
+        let url = t3_url.context("the t3 target needs T3's MCP URL: pass --t3-url")?;
         let url = url
             .parse::<Uri>()
             .ok()
             .filter(|url| matches!(url.scheme_str(), Some("http" | "https")))
-            .ok_or_else(|| format!("--t3-url {url} is not an http:// or https:// URL"))?;
+            .context_with(|| format!("--t3-url {url} is not an http:// or https:// URL"))?;
         if url.scheme_str() == Some("http") && !url.host().is_some_and(is_loopback) {
-            return Err(format!(
+            bail!(
                 "--t3-url {url}: plain http:// only to this machine (localhost, 127.0.0.1, [::1]); use https://"
-            )
-            .into());
+            );
         }
         let token_file = t3_token_file
-            .ok_or("the t3 target needs a file holding the T3 token: pass --t3-token-file")?;
+            .context("the t3 target needs a file holding the T3 token: pass --t3-token-file")?;
         let thread = match thread {
             Some(thread) => thread,
             None => env_thread
                 .and_then(|thread| thread.into_string().ok())
                 .filter(|thread| !thread.is_empty())
-                .ok_or("the t3 target needs a thread: pass --thread (or set T3CODE_THREAD_ID)")?,
+                .context("the t3 target needs a thread: pass --thread (or set T3CODE_THREAD_ID)")?,
         };
         let target = T3Target {
             url,
@@ -335,15 +352,11 @@ fn is_loopback(host: &str) -> bool {
         || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
-fn net_config(discovery: Discovery) -> Result<NetConfig, BoxError> {
+fn net_config(discovery: Discovery) -> Result<NetConfig, Report> {
     let mut net = NetConfig::new(discovery);
-    if let Some(relay) = std::env::var_os("JAMPOT_RELAY").filter(|relay| !relay.is_empty()) {
-        let relay = relay.to_str().ok_or("JAMPOT_RELAY is not valid UTF-8")?;
-        net.relay = Some(
-            relay
-                .parse::<RelayUrl>()
-                .map_err(|error| format!("JAMPOT_RELAY: {error}"))?,
-        );
+    if let Some(relay) = env::var_os("JAMPOT_RELAY").filter(|relay| !relay.is_empty()) {
+        let relay = relay.to_str().context("JAMPOT_RELAY is not valid UTF-8")?;
+        net.relay = Some(relay.parse::<RelayUrl>().context("JAMPOT_RELAY")?);
     }
     Ok(net)
 }
@@ -354,13 +367,13 @@ async fn share(
     delivery: Delivery,
     site: &str,
     detail: &str,
-) -> Result<(), BoxError> {
+) -> Result<(), Report> {
     let discovery = if net.local {
         Discovery::Direct
     } else {
         Discovery::Public
     };
-    let (mut target, note) = target(delivery, site, std::env::var_os("T3CODE_THREAD_ID"))?;
+    let (mut target, note) = target(delivery, site, env::var_os("T3CODE_THREAD_ID"))?;
     let goes_to = match &mut target {
         Target::Recv => "jampot recv".to_owned(),
         Target::Command(command) => format!(
@@ -391,7 +404,7 @@ async fn share(
     );
     let share = Share::start(config).await?;
     if discovery == Discovery::Public
-        && tokio::time::timeout(ONLINE_TIMEOUT, share.endpoint().online())
+        && time::timeout(ONLINE_TIMEOUT, share.endpoint().online())
             .await
             .is_err()
     {
@@ -423,7 +436,7 @@ async fn join(
     name: Option<JoinerName>,
     no_open: bool,
     share_addrs: Vec<SocketAddr>,
-) -> Result<(), BoxError> {
+) -> Result<(), Report> {
     let discovery = if share_addrs.is_empty() {
         Discovery::Public
     } else {
@@ -456,17 +469,16 @@ async fn join(
     };
     joiner.stop().await;
     match refused {
-        Some(reason) => Err(format!(
+        Some(reason) => bail!(
             "the share refused this joiner ({reason:?}): the token is wrong or from an earlier run"
-        )
-        .into()),
+        ),
         None => Ok(()),
     }
 }
 
 fn default_name() -> JoinerName {
-    let user = std::env::var("USER").unwrap_or_default();
-    let host = nix::unistd::gethostname()
+    let user = env::var("USER").unwrap_or_default();
+    let host = unistd::gethostname()
         .map(|host| host.to_string_lossy().into_owned())
         .unwrap_or_default();
     JoinerName::default_for(&user, &host)
@@ -478,7 +490,7 @@ fn open_browser(url: &str) {
     } else {
         "xdg-open"
     };
-    let spawned = std::process::Command::new(opener)
+    let spawned = Process::new(opener)
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -493,7 +505,7 @@ async fn shutdown_signal() -> io::Result<()> {
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
     tokio::select! {
-        result = tokio::signal::ctrl_c() => result,
+        result = ctrl_c() => result,
         _ = terminate.recv() => Ok(()),
         _ = hangup.recv() => Ok(()),
     }

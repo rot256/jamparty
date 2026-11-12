@@ -141,15 +141,15 @@ mod tests {
     use http_body_util::{BodyExt, Full};
     use hyper::{Method, Response, header};
 
-    use crate::{
-        BoxError,
-        share::inject::{ClientMode, MAX_HTML_RESPONSE_BYTES, inject_client, maybe_inject_client},
+    use crate::share::{
+        body::BodyError,
+        inject::{ClientMode, MAX_HTML_RESPONSE_BYTES, inject_client, maybe_inject_client},
     };
 
     #[tokio::test]
     async fn a_body_longer_than_its_length_is_not_buffered() {
         let body = Full::new(Bytes::from(vec![b'x'; MAX_HTML_RESPONSE_BYTES + 1]))
-            .map_err(|never| -> BoxError { match never {} })
+            .map_err(|never| -> BodyError { match never {} })
             .boxed_unsync();
         let mut response = Response::new(body);
         response

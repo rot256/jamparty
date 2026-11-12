@@ -2,7 +2,8 @@
 //! party secret.
 
 use crate::{
-    core::{name::JoinerName, token::PartySecret},
+    Report,
+    core::{invalid::Invalid, name::JoinerName, token::PartySecret},
     protocol::control::{Envelope, JoinerMessage, RefusedReason},
 };
 
@@ -10,8 +11,9 @@ use crate::{
 /// [`RefusedReason`] in snake case.
 pub(crate) const REFUSED_CODE: u32 = 1;
 
-/// What the first line said: a message, a clean end, or garbage.
-pub(crate) type FirstLine = Result<Option<Envelope<JoinerMessage>>, ()>;
+/// What the first line said: a message, a clean end, or why there was none
+/// (garbage, or nothing before the deadline).
+pub(crate) type FirstLine = Result<Option<Envelope<JoinerMessage>>, Report>;
 
 /// Admits the joiner (its display name) or says why not. The secret is
 /// compared in constant time.
@@ -38,7 +40,7 @@ pub(crate) fn admit(first: FirstLine, secret: &PartySecret) -> Result<JoinerName
             })
             | None,
         )
-        | Err(()) => Err(RefusedReason::BadHello),
+        | Err(_) => Err(RefusedReason::BadHello),
     }
 }
 
@@ -53,20 +55,25 @@ pub(crate) fn reason_text(reason: RefusedReason) -> &'static str {
 }
 
 impl TryFrom<&[u8]> for RefusedReason {
-    type Error = ();
+    type Error = Invalid;
 
     fn try_from(text: &[u8]) -> Result<Self, Self::Error> {
         match text {
             b"wrong_secret" => Ok(Self::WrongSecret),
             b"bad_hello" => Ok(Self::BadHello),
             b"full" => Ok(Self::Full),
-            _ => Err(()),
+            other => Err(Invalid::new(format!(
+                "unknown refusal reason {:?}",
+                String::from_utf8_lossy(other)
+            ))),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rootcause::prelude::report;
+
     use crate::{
         core::{rng::SeededRng, token::PartySecret},
         protocol::{
@@ -112,7 +119,10 @@ mod tests {
             Err(RefusedReason::BadHello)
         );
         assert_eq!(admit(Ok(None), &secret), Err(RefusedReason::BadHello));
-        assert_eq!(admit(Err(()), &secret), Err(RefusedReason::BadHello));
+        assert_eq!(
+            admit(Err(report!("garbage")), &secret),
+            Err(RefusedReason::BadHello)
+        );
     }
 
     #[test]

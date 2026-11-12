@@ -102,7 +102,7 @@ async fn submit(
         selected_text,
         comment,
     })
-    .map_err(bad)?;
+    .map_err(|error| bad(error.to_string()))?;
     let not_sent = || {
         RequestError::new(
             StatusCode::SERVICE_UNAVAILABLE,

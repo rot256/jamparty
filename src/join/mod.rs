@@ -16,10 +16,12 @@ use std::{
 #[cfg(test)]
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, SecretKey};
+use nix::libc;
+use rootcause::{option_ext::OptionExt, prelude::bail};
 use tokio::{net::TcpListener, sync::watch, task::JoinSet};
 
 use crate::{
-    BoxError,
+    Report,
     adapters::endpoint::{Accept, NetConfig, bind},
     core::{name::JoinerName, request::LocalOrigin, token::PartyToken},
     join::{
@@ -44,7 +46,7 @@ const BIND_ATTEMPTS: usize = 16;
 /// Listeners on one port of 127.0.0.1 and [::1] both (`localhost` may
 /// resolve to either), so no other local user can take the IPv6 side.
 /// Without IPv6 loopback, nobody can, and 127.0.0.1 alone will do.
-async fn bind_local() -> Result<Vec<TcpListener>, BoxError> {
+async fn bind_local() -> Result<Vec<TcpListener>, Report> {
     for _ in 0..BIND_ATTEMPTS {
         let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let port = v4.local_addr()?.port();
@@ -53,7 +55,7 @@ async fn bind_local() -> Result<Vec<TcpListener>, BoxError> {
             Err(error) if error.kind() == ErrorKind::AddrInUse => {}
             Err(error)
                 if error.kind() == ErrorKind::AddrNotAvailable
-                    || error.raw_os_error() == Some(nix::libc::EAFNOSUPPORT) =>
+                    || error.raw_os_error() == Some(libc::EAFNOSUPPORT) =>
             {
                 tracing::debug!(%error, "no IPv6 loopback; listening on 127.0.0.1 only");
                 return Ok(vec![v4]);
@@ -61,7 +63,7 @@ async fn bind_local() -> Result<Vec<TcpListener>, BoxError> {
             Err(error) => return Err(error.into()),
         }
     }
-    Err("could not find a port free on both 127.0.0.1 and [::1]".into())
+    bail!("could not find a port free on both 127.0.0.1 and [::1]")
 }
 
 /// A running joiner; dropping it stops it.
@@ -74,7 +76,7 @@ pub(crate) struct Joiner {
 }
 
 impl Joiner {
-    pub(crate) async fn start(config: JoinConfig) -> Result<Self, BoxError> {
+    pub(crate) async fn start(config: JoinConfig) -> Result<Self, Report> {
         let JoinConfig {
             token,
             name,
@@ -85,7 +87,7 @@ impl Joiner {
         let listeners = bind_local().await?;
         let port = listeners
             .first()
-            .ok_or("no local listener")?
+            .context("no local listener")?
             .local_addr()?
             .port();
         let session = Arc::new(Session::new(LocalOrigin::new(&token.share.sid(), port)));

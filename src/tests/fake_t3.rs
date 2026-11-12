@@ -9,7 +9,9 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::{Request, Response, StatusCode, body::Incoming, service::service_fn};
+use hyper::{
+    Request, Response, StatusCode, body::Incoming, server::conn::http1, service::service_fn,
+};
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -103,7 +105,7 @@ impl FakeT3 {
                         let state = Arc::clone(&state);
                         async move { Ok::<_, hyper::Error>(handle(&state, request).await) }
                     });
-                    let _ = hyper::server::conn::http1::Builder::new()
+                    let _ = http1::Builder::new()
                         .serve_connection(TokioIo::new(stream), service)
                         .await;
                 });

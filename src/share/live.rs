@@ -11,7 +11,7 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
-use crate::BoxError;
+use crate::Report;
 
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
 const RELOAD_MAX_DELAY: Duration = Duration::from_secs(2);
@@ -51,7 +51,7 @@ impl Drop for LiveWatcher {
 }
 
 /// Watches `root` and bumps the revision when visible files change.
-pub(crate) fn start(root: &Path) -> Result<(LiveWatcher, ReloadState), BoxError> {
+pub(crate) fn start(root: &Path) -> Result<(LiveWatcher, ReloadState), Report> {
     let root = root.to_owned();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let mut watcher = notify::recommended_watcher(move |event| {
@@ -163,6 +163,8 @@ fn absolute_event_path(path: &Path, root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use notify::{
         Event, EventKind,
         event::{AccessKind, ModifyKind},
@@ -172,7 +174,7 @@ mod tests {
 
     #[test]
     fn filters_hidden_and_read_events() {
-        let root = std::path::Path::new("/site");
+        let root = Path::new("/site");
         let modify = |path| Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path));
         assert!(!should_reload(modify(root.join(".git/index")), root));
         assert!(should_reload(modify(root.join("index.html")), root));

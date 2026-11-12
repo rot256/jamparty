@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     core::{
         ids::CommentId,
+        invalid::Invalid,
         name::JoinerName,
         text::{check_line, check_text},
         token::PartySecret,
@@ -143,7 +144,7 @@ pub(crate) const MAX_COMMENT_REF: usize = 64;
 pub(crate) struct CommentRef(String);
 
 impl TryFrom<String> for CommentRef {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
         let valid = (1..=MAX_COMMENT_REF).contains(&raw.len())
@@ -151,9 +152,9 @@ impl TryFrom<String> for CommentRef {
         if valid {
             Ok(Self(raw))
         } else {
-            Err(format!(
+            Err(Invalid::new(format!(
                 "a comment ref is 1 to {MAX_COMMENT_REF} characters of A-Z, a-z, 0-9 and -"
-            ))
+            )))
         }
     }
 }
@@ -170,7 +171,7 @@ impl From<CommentRef> for String {
 pub(crate) struct StatusLine(String);
 
 impl TryFrom<String> for StatusLine {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
         check_line(&raw, "status", MAX_STATUS_LINE)?;
@@ -190,7 +191,7 @@ impl From<StatusLine> for String {
 pub(crate) struct AnswerText(String);
 
 impl TryFrom<String> for AnswerText {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
         check_text(&raw, "message", MAX_ANSWER)?;

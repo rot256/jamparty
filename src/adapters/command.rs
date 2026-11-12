@@ -9,7 +9,7 @@ use nix::{
     sys::signal::{Signal, killpg},
     unistd::Pid,
 };
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::{io::AsyncWriteExt, process::Command, time};
 
 use crate::{core::queue::DeliveryResult, protocol::comment::Comment};
 
@@ -66,7 +66,7 @@ pub(crate) async fn deliver(
         }
         child.wait().await
     };
-    let status = tokio::time::timeout(timeout, run).await;
+    let status = time::timeout(timeout, run).await;
     match status {
         Ok(Ok(status)) if status.success() => (DeliveryResult::Ok, String::new()),
         Ok(Ok(status)) => (
@@ -98,6 +98,7 @@ mod tests {
     };
 
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
+    use tokio::time;
 
     use crate::{adapters::command::deliver, core::queue::DeliveryResult};
 
@@ -133,7 +134,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         while running(pid) {
             assert!(Instant::now() < deadline, "the background sleep survived");
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
         }
     }
 }

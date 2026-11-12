@@ -1,9 +1,12 @@
 //! Requests through the joiner's local server to the share: static files,
 //! a proxied dev server, streaming and upgrades, live reload.
 
+use std::{fs, os::unix::fs::symlink};
+
 use bytes::Bytes;
+use futures_util::future;
 use http_body_util::{BodyExt, Full};
-use hyper::header;
+use hyper::{header, upgrade};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -48,13 +51,13 @@ async fn static_files_with_the_client_injected() {
 async fn symlinks_to_dotfiles_or_out_of_the_root_are_not_served() {
     let dir = fixture_dir();
     let outside = tempfile::tempdir().unwrap();
-    std::fs::write(outside.path().join("other.txt"), "outside").unwrap();
-    std::os::unix::fs::symlink(".secret", dir.path().join("public.txt")).unwrap();
-    std::fs::create_dir(dir.path().join(".git")).unwrap();
-    std::fs::write(dir.path().join(".git/index.html"), "hidden").unwrap();
-    std::os::unix::fs::symlink(".git", dir.path().join("docs")).unwrap();
-    std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
-    std::os::unix::fs::symlink("style.css", dir.path().join("link.css")).unwrap();
+    fs::write(outside.path().join("other.txt"), "outside").unwrap();
+    symlink(".secret", dir.path().join("public.txt")).unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join(".git/index.html"), "hidden").unwrap();
+    symlink(".git", dir.path().join("docs")).unwrap();
+    symlink(outside.path(), dir.path().join("out")).unwrap();
+    symlink("style.css", dir.path().join("link.css")).unwrap();
     let share = share_files(&dir).await;
     let joiner = join(&share, "alice").await;
     for refused in [
@@ -81,7 +84,7 @@ async fn live_reload_reaches_the_joiner() {
     )
     .await
     .unwrap();
-    std::fs::write(dir.path().join("style.css"), "h1 { color: blue }").unwrap();
+    fs::write(dir.path().join("style.css"), "h1 { color: blue }").unwrap();
     within(
         "a new revision",
         view.wait_for(|view| view.revision.is_some_and(|revision| revision > 0)),
@@ -135,9 +138,7 @@ async fn upgrades_echo_through_join_and_share() {
         .unwrap();
     let response = send(joiner.local_addr(), request).await;
     assert_eq!(response.status(), 101);
-    let upgraded = within("the upgrade", hyper::upgrade::on(response))
-        .await
-        .unwrap();
+    let upgraded = within("the upgrade", upgrade::on(response)).await.unwrap();
     let mut io = TokioIo::new(upgraded);
     for message in [b"ping".as_slice(), b"pong again"] {
         io.write_all(message).await.unwrap();
@@ -162,7 +163,7 @@ async fn concurrent_requests_each_get_a_stream() {
                 .unwrap(),
         )
     });
-    for reply in futures_util::future::join_all(requests).await {
+    for reply in future::join_all(requests).await {
         assert_eq!(reply.status, 200);
     }
 }

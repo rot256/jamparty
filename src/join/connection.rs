@@ -7,10 +7,11 @@ use iroh::{
     Endpoint,
     endpoint::{ConnectionError, RecvStream, VarInt},
 };
-use tokio::io::BufReader;
+use rootcause::prelude::report;
+use tokio::{io::BufReader, time};
 
 use crate::{
-    BoxError,
+    Report,
     adapters::{endpoint, lines},
     core::{name::JoinerName, queue::backoff, token::PartyToken},
     join::session::{Control, Session},
@@ -37,7 +38,7 @@ enum Ended {
     /// Admitted, then lost.
     Lost,
     /// Never admitted.
-    Failed(BoxError),
+    Failed(Report),
 }
 
 /// Keeps the session connected until the share refuses us.
@@ -61,7 +62,7 @@ pub(crate) async fn run(dial: Dial, session: Arc<Session>) {
         }
         session.disconnected(None);
         let wait = Duration::try_from(backoff(failures)).unwrap_or(Duration::from_secs(1));
-        tokio::time::sleep(wait).await;
+        time::sleep(wait).await;
     }
 }
 
@@ -96,10 +97,10 @@ async fn attempt(dial: &Dial, session: &Session) -> Ended {
             return refused(reason);
         }
         Ok(_) | Err(_) => {
-            let closed = tokio::time::timeout(CLOSE_WAIT, connection.closed()).await;
+            let closed = time::timeout(CLOSE_WAIT, connection.closed()).await;
             return match refusal(closed.ok()) {
                 Some(reason) => refused(reason),
-                None => Ended::Failed("the share closed the connection during admission".into()),
+                None => Ended::Failed(report!("the share closed the connection during admission")),
             };
         }
     };
@@ -113,7 +114,7 @@ async fn attempt(dial: &Dial, session: &Session) -> Ended {
 /// A refusal: final, except a full share, which is retried.
 fn refused(reason: RefusedReason) -> Ended {
     match reason {
-        RefusedReason::Full => Ended::Failed("the share is full".into()),
+        RefusedReason::Full => Ended::Failed(report!("the share is full")),
         RefusedReason::WrongSecret | RefusedReason::BadHello => Ended::Refused(reason),
     }
 }

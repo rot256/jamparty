@@ -9,7 +9,10 @@
 
 use std::{ffi::OsString, sync::Arc, time::Duration};
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinSet,
+};
 
 use crate::{
     adapters::{
@@ -52,7 +55,7 @@ pub(crate) struct RecvRequest {
 pub(crate) fn start(
     target: Target,
     hub: Arc<Hub>,
-    tasks: &mut tokio::task::JoinSet<()>,
+    tasks: &mut JoinSet<()>,
 ) -> Option<mpsc::Sender<RecvRequest>> {
     match target {
         Target::Recv => {

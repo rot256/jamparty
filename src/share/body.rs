@@ -1,7 +1,7 @@
 //! Response bodies and small response builders shared by the share's and
 //! the joiner's HTTP code.
 
-use std::convert::Infallible;
+use std::{convert::Infallible, error::Error};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
@@ -12,9 +12,10 @@ use hyper::{
 };
 use serde::Serialize;
 
-use crate::BoxError;
+/// What hyper takes as a body's error.
+pub(crate) type BodyError = Box<dyn Error + Send + Sync>;
 
-pub(crate) type AppBody = UnsyncBoxBody<Bytes, BoxError>;
+pub(crate) type AppBody = UnsyncBoxBody<Bytes, BodyError>;
 
 /// A refused request: status, message and, for 405, the allowed methods.
 #[derive(Debug)]
@@ -105,7 +106,7 @@ pub(crate) fn full_body(bytes: Bytes) -> AppBody {
 }
 
 pub(crate) fn incoming_body(body: Incoming) -> AppBody {
-    body.map_err(|error| -> BoxError { Box::new(error) })
+    body.map_err(|error| -> BodyError { Box::new(error) })
         .boxed_unsync()
 }
 

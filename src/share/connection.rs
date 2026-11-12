@@ -4,6 +4,7 @@
 use std::{sync::Arc, time::Duration};
 
 use iroh::endpoint::{Connection, Incoming, RecvStream, SendStream, VarInt};
+use rootcause::prelude::report;
 use tokio::{
     io::BufReader,
     sync::{
@@ -16,7 +17,7 @@ use tokio::{
 };
 
 use crate::{
-    BoxError,
+    Report,
     adapters::{endpoint, lines},
     core::{ids::EndpointKey, name::JoinerName},
     protocol::{
@@ -103,13 +104,15 @@ async fn admission(
     connection: &Connection,
     deadline: Instant,
     shared: &Shared,
-) -> Result<Admission, BoxError> {
+) -> Result<Admission, Report> {
     let (send, recv) = timeout_at(deadline, connection.accept_bi()).await??;
     let mut recv = BufReader::new(recv);
     let first = timeout_at(deadline, lines::read(&mut recv))
         .await
-        .map_err(|_| ())
-        .and_then(|line| line.map_err(|_| ()));
+        .unwrap_or_else(|_| Err(report!("no hello before the admission deadline")));
+    if let Err(error) = &first {
+        tracing::debug!(%error, "no usable hello");
+    }
     Ok(match admit(first, &shared.token.secret) {
         Ok(name) => Admission::Admitted { send, recv, name },
         Err(reason) => Admission::Refused { send, reason },

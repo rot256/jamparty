@@ -3,7 +3,11 @@
 //! renewal and both response forms. Plus the opt-in contract test against a
 //! real T3.
 
-use std::{path::Path, sync::Arc};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use jiff::{SignedDuration, Timestamp};
 use tempfile::TempDir;
@@ -55,9 +59,9 @@ fn threads() -> State {
 }
 
 /// A token file in `dir` holding `token`.
-fn token_file(dir: &TempDir, token: &str) -> std::path::PathBuf {
+fn token_file(dir: &TempDir, token: &str) -> PathBuf {
     let path = dir.path().join("token");
-    std::fs::write(&path, format!("{token}\n")).unwrap();
+    fs::write(&path, format!("{token}\n")).unwrap();
     path
 }
 
@@ -71,7 +75,7 @@ fn target(fake: &FakeT3, token: &Path, thread: &str) -> T3Target {
 }
 
 async fn share_to(dir: &TempDir, target: T3Target, clock: Arc<ManualClock>) -> TestShare {
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
     let mut config = config(Source::Files(root), Target::T3(target));
     config.clock = clock;
     start(config).await
@@ -301,7 +305,7 @@ async fn the_token_is_read_at_each_delivery_and_sessions_are_renewed() {
         .count();
     assert_eq!(initializes, 2);
 
-    std::fs::remove_file(&token).unwrap();
+    fs::remove_file(&token).unwrap();
     let (result, detail) = t3.deliver(&[comment("three")]).await;
     assert_eq!(result, DeliveryResult::Error);
     assert!(detail.contains("token file"), "{detail}");
@@ -317,7 +321,7 @@ async fn the_token_is_read_at_each_delivery_and_sessions_are_renewed() {
 /// ```
 #[tokio::test]
 async fn t3_contract() {
-    let vars = ["JAMPOT_T3_URL", "JAMPOT_T3_TOKEN_FILE", "JAMPOT_T3_THREAD"].map(std::env::var);
+    let vars = ["JAMPOT_T3_URL", "JAMPOT_T3_TOKEN_FILE", "JAMPOT_T3_THREAD"].map(env::var);
     let [Ok(url), Ok(token_file), Ok(thread)] = vars else {
         eprintln!("t3_contract skipped: set JAMPOT_T3_URL, JAMPOT_T3_TOKEN_FILE, JAMPOT_T3_THREAD");
         return;

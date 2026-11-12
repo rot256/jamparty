@@ -6,57 +6,64 @@
 //! (the id is the share's `<sid>`), mode 0600, removed when the share stops.
 
 use std::{
+    env,
     fs::{self, DirBuilder, Permissions},
     io::ErrorKind,
-    os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
+    os::unix::{
+        fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
+        net,
+    },
     path::{Path, PathBuf},
 };
 
+use nix::unistd;
+use rootcause::{
+    option_ext::OptionExt,
+    prelude::{ResultExt, bail},
+};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::{BoxError, core::ids::Sid};
+use crate::{Report, core::ids::Sid};
 
 /// The runtime directory, from the environment.
-pub(crate) fn default_dir() -> Result<PathBuf, BoxError> {
-    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()) {
+pub(crate) fn default_dir() -> Result<PathBuf, Report> {
+    if let Some(dir) = env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()) {
         return Ok(PathBuf::from(dir).join("jampot"));
     }
-    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+    let home = env::var_os("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home).join(".cache/jampot/run"))
 }
 
 /// Creates `dir` (mode 0700) if needed and checks it.
-fn prepare(dir: &Path) -> Result<(), BoxError> {
+fn prepare(dir: &Path) -> Result<(), Report> {
     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     check_dir(dir)
 }
 
 /// Checks that only the user can use `dir`: owned by them, mode 0700.
-fn check_dir(dir: &Path) -> Result<(), BoxError> {
+fn check_dir(dir: &Path) -> Result<(), Report> {
     let meta = fs::metadata(dir)?;
-    if meta.uid() != nix::unistd::geteuid().as_raw() || meta.mode() & 0o077 != 0 {
-        return Err(format!(
+    if meta.uid() != unistd::geteuid().as_raw() || meta.mode() & 0o077 != 0 {
+        bail!(
             "{} must be owned by you with mode 0700 (chmod 700 it)",
             dir.display()
-        )
-        .into());
+        );
     }
     Ok(())
 }
 
 /// Checks that the other end of `stream` runs as the user.
-pub(crate) fn check_peer(stream: &UnixStream) -> Result<(), BoxError> {
+pub(crate) fn check_peer(stream: &UnixStream) -> Result<(), Report> {
     let peer = stream.peer_cred()?.uid();
-    if peer == nix::unistd::geteuid().as_raw() {
-        Ok(())
-    } else {
-        Err(format!("the runtime socket's other end runs as user {peer}, not you").into())
+    if peer != unistd::geteuid().as_raw() {
+        bail!("the runtime socket's other end runs as user {peer}, not you");
     }
+    Ok(())
 }
 
 /// Removes sockets of the user's shares that died without cleaning up.
-fn sweep(dir: &Path) -> Result<(), BoxError> {
-    let me = nix::unistd::geteuid().as_raw();
+fn sweep(dir: &Path) -> Result<(), Report> {
+    let me = unistd::geteuid().as_raw();
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         let Ok(meta) = fs::symlink_metadata(&path) else {
@@ -66,7 +73,7 @@ fn sweep(dir: &Path) -> Result<(), BoxError> {
         let stale = ours
             && path.extension().is_some_and(|ext| ext == "sock")
             && matches!(
-                std::os::unix::net::UnixStream::connect(&path),
+                net::UnixStream::connect(&path),
                 Err(error) if error.kind() == ErrorKind::ConnectionRefused
             );
         if stale {
@@ -90,12 +97,12 @@ impl Drop for SocketFile {
 }
 
 /// Listens on the socket for share `id` in `dir`.
-pub(crate) fn listen(dir: &Path, id: &Sid) -> Result<(UnixListener, SocketFile), BoxError> {
+pub(crate) fn listen(dir: &Path, id: &Sid) -> Result<(UnixListener, SocketFile), Report> {
     prepare(dir)?;
     sweep(dir)?;
     let path = socket_path(dir, id);
     let listener = UnixListener::bind(&path)
-        .map_err(|error| format!("could not listen on {}: {error}", path.display()))?;
+        .context_with(|| format!("could not listen on {}", path.display()))?;
     let file = SocketFile(path);
     fs::set_permissions(&file.0, Permissions::from_mode(0o600))?;
     Ok((listener, file))
@@ -105,28 +112,20 @@ pub(crate) fn listen(dir: &Path, id: &Sid) -> Result<(UnixListener, SocketFile),
 /// `None`. The directory and the share at the other end must be the
 /// user's; sockets of shares that died are skipped (the next share to
 /// start removes them).
-pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, BoxError> {
-    match check_dir(dir) {
-        Ok(()) => {}
-        Err(error)
-            if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == ErrorKind::NotFound) =>
-        {
-            return Err(NO_SHARE.into());
-        }
-        Err(error) => return Err(error),
+pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, Report> {
+    if fs::metadata(dir).is_err_and(|error| error.kind() == ErrorKind::NotFound) {
+        bail!("{NO_SHARE}");
     }
+    check_dir(dir)?;
     if let Some(id) = id {
         let stream = UnixStream::connect(socket_path(dir, id))
             .await
-            .map_err(|_| format!("no running share with id {id}"))?;
+            .context_with(|| format!("no running share with id {id}"))?;
         check_peer(&stream)?;
         return Ok(stream);
     }
     let mut running = Vec::new();
-    let entries =
-        fs::read_dir(dir).map_err(|error| format!("could not read {}: {error}", dir.display()))?;
+    let entries = fs::read_dir(dir).context_with(|| format!("could not read {}", dir.display()))?;
     for entry in entries {
         let path = entry?.path();
         let Some(id) = path
@@ -142,17 +141,21 @@ pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, 
             running.push((id, stream));
         }
     }
-    match running.len() {
-        0 => Err(NO_SHARE.into()),
-        1 => Ok(running.pop().map(|(_, stream)| stream).ok_or(NO_SHARE)?),
-        _ => {
-            let mut ids: Vec<String> = running.iter().map(|(id, _)| id.to_string()).collect();
+    let mut running = running.into_iter();
+    match (running.next(), running.next()) {
+        (None, _) => bail!("{NO_SHARE}"),
+        (Some((_, stream)), None) => Ok(stream),
+        (Some(first), Some(second)) => {
+            let mut ids: Vec<String> = [first, second]
+                .into_iter()
+                .chain(running)
+                .map(|(id, _)| id.to_string())
+                .collect();
             ids.sort();
-            Err(format!(
+            bail!(
                 "several shares are running ({}); pass --share <id>",
                 ids.join(", ")
             )
-            .into())
         }
     }
 }
@@ -161,7 +164,11 @@ const NO_SHARE: &str = "no share is running (start one with jampot serve or jamp
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
+    use std::{
+        fs::{self, Permissions},
+        os::unix::{fs::PermissionsExt, net},
+        path::Path,
+    };
 
     use crate::{
         adapters::runtime::{connect, listen},
@@ -176,8 +183,7 @@ mod tests {
 
         let first = EndpointKey([1; 32]).sid();
         let (_listener, socket) = listen(&dir, &first).unwrap();
-        let mode =
-            |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&dir), 0o700);
         assert_eq!(mode(&socket.0), 0o600);
         assert!(connect(&dir, None).await.is_ok());
@@ -200,7 +206,7 @@ mod tests {
         // One that died without cleaning up is skipped, and left for the
         // next share to remove.
         let stale = dir.join(format!("{}.sock", EndpointKey([4; 32]).sid()));
-        drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+        drop(net::UnixListener::bind(&stale).unwrap());
         assert!(stale.exists());
         assert!(connect(&dir, None).await.is_ok());
         assert!(stale.exists(), "connect removed a socket");
@@ -209,7 +215,7 @@ mod tests {
         assert!(connect(&dir, Some(&first)).await.is_ok());
 
         // A directory others can read is refused, by both ends.
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&dir, Permissions::from_mode(0o755)).unwrap();
         assert!(listen(&dir, &EndpointKey([3; 32]).sid()).is_err());
         let error = connect(&dir, Some(&first)).await.unwrap_err().to_string();
         assert!(error.contains("0700"), "{error}");

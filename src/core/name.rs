@@ -5,6 +5,8 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::invalid::Invalid;
+
 pub(crate) const MAX_NAME: usize = 40;
 
 /// Used when the user and host names leave nothing usable.
@@ -43,22 +45,22 @@ impl JoinerName {
 }
 
 impl TryFrom<String> for JoinerName {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
         let valid = !raw.is_empty() && raw.len() <= MAX_NAME && raw.chars().all(is_name_char);
         if valid {
             Ok(Self(raw))
         } else {
-            Err(format!(
+            Err(Invalid::new(format!(
                 "a name is 1 to {MAX_NAME} characters of letters, digits and ._@+-"
-            ))
+            )))
         }
     }
 }
 
 impl FromStr for JoinerName {
-    type Err = String;
+    type Err = Invalid;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         Self::try_from(raw.to_owned())
@@ -81,9 +83,12 @@ impl fmt::Display for JoinerName {
 mod tests {
     use proptest::prelude::*;
 
-    use crate::core::name::{JoinerName, MAX_NAME};
+    use crate::core::{
+        invalid::Invalid,
+        name::{JoinerName, MAX_NAME},
+    };
 
-    fn name(raw: &str) -> Result<JoinerName, String> {
+    fn name(raw: &str) -> Result<JoinerName, Invalid> {
         JoinerName::try_from(raw.to_owned())
     }
 

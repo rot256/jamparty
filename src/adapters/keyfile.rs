@@ -2,6 +2,7 @@
 //! `$XDG_CONFIG_HOME`), 64 hex characters, mode 0600, created on first use.
 
 use std::{
+    env,
     fs::{self, DirBuilder, OpenOptions},
     io::{ErrorKind, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
@@ -10,15 +11,19 @@ use std::{
 
 use data_encoding::HEXLOWER;
 use iroh::SecretKey;
+use rootcause::{
+    option_ext::OptionExt,
+    prelude::{ResultExt, bail, report},
+};
 
-use crate::{BoxError, adapters::endpoint::generate_key, core::rng::SystemRng};
+use crate::{Report, adapters::endpoint::generate_key, core::rng::SystemRng};
 
 /// Where the joiner key lives, from the environment.
-pub(crate) fn default_path() -> Result<PathBuf, BoxError> {
-    let config = match std::env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
+pub(crate) fn default_path() -> Result<PathBuf, Report> {
+    let config = match env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
         Some(dir) => PathBuf::from(dir),
         None => {
-            let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+            let home = env::var_os("HOME").context("HOME is not set")?;
             PathBuf::from(home).join(".config")
         }
     };
@@ -27,36 +32,37 @@ pub(crate) fn default_path() -> Result<PathBuf, BoxError> {
 
 /// Reads the key at `path`, creating it first if it does not exist. A key
 /// others may read or write is refused.
-pub(crate) fn load_or_create(path: &Path) -> Result<SecretKey, BoxError> {
+pub(crate) fn load_or_create(path: &Path) -> Result<SecretKey, Report> {
     match fs::read_to_string(path) {
         Ok(text) => {
             let mode = fs::metadata(path)?.mode();
             if mode & 0o077 != 0 {
-                return Err(format!(
+                bail!(
                     "{} is open to other users (mode {:o}); chmod 600 it, or delete it for a new key",
                     path.display(),
                     mode & 0o777
-                )
-                .into());
+                );
             }
-            parse(&text).map_err(|error| format!("{}: {error}", path.display()).into())
+            Ok(parse(&text).context(path.display().to_string())?)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => create(path),
-        Err(error) => Err(format!("could not read {}: {error}", path.display()).into()),
+        Err(error) => Err(report!(error)
+            .context(format!("could not read {}", path.display()))
+            .into()),
     }
 }
 
-fn parse(text: &str) -> Result<SecretKey, BoxError> {
+fn parse(text: &str) -> Result<SecretKey, Report> {
     let bytes = HEXLOWER
         .decode(text.trim().as_bytes())
-        .map_err(|_| "a key file holds 64 lowercase hex characters")?;
+        .map_err(|_| report!("a key file holds 64 lowercase hex characters"))?;
     let bytes: [u8; 32] = bytes
         .try_into()
-        .map_err(|_| "a key file holds 64 lowercase hex characters")?;
+        .map_err(|_| report!("a key file holds 64 lowercase hex characters"))?;
     Ok(SecretKey::from_bytes(&bytes))
 }
 
-fn create(path: &Path) -> Result<SecretKey, BoxError> {
+fn create(path: &Path) -> Result<SecretKey, Report> {
     if let Some(dir) = path.parent() {
         DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
@@ -66,14 +72,17 @@ fn create(path: &Path) -> Result<SecretKey, BoxError> {
         .create_new(true)
         .mode(0o600)
         .open(path)
-        .map_err(|error| format!("could not create {}: {error}", path.display()))?;
+        .context_with(|| format!("could not create {}", path.display()))?;
     writeln!(file, "{}", HEXLOWER.encode(&key.to_bytes()))?;
     Ok(key)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
+    use std::{
+        fs::{self, Permissions},
+        os::unix::fs::PermissionsExt,
+    };
 
     use crate::adapters::keyfile::load_or_create;
 
@@ -84,14 +93,14 @@ mod tests {
         let first = load_or_create(&path).unwrap();
         let again = load_or_create(&path).unwrap();
         assert_eq!(first.public(), again.public());
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&path, Permissions::from_mode(0o644)).unwrap();
         let error = load_or_create(&path).unwrap_err().to_string();
         assert!(error.contains("chmod 600"), "{error}");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
         assert!(load_or_create(&path).is_ok());
-        std::fs::write(&path, "nonsense").unwrap();
+        fs::write(&path, "nonsense").unwrap();
         assert!(load_or_create(&path).is_err());
     }
 }

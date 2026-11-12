@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{
     ids::{CommentId, EndpointKey, Fingerprint},
+    invalid::Invalid,
     name::JoinerName,
     text::{check_len, check_text},
 };
@@ -55,7 +56,7 @@ pub(crate) struct DraftFields {
 pub(crate) struct Draft(DraftFields);
 
 impl TryFrom<DraftFields> for Draft {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(fields: DraftFields) -> Result<Self, Self::Error> {
         check_len(&fields.page, "page", MAX_PAGE)?;

@@ -11,6 +11,7 @@ use tokio::{
     },
     sync::{mpsc, oneshot},
     task::JoinSet,
+    time,
 };
 
 use crate::{
@@ -46,7 +47,7 @@ pub(crate) async fn serve(
             Err(error) => {
                 tracing::warn!(%error, "runtime socket accept failed");
                 // Out of descriptors, say: let it pass rather than spin.
-                tokio::time::sleep(ACCEPT_BACKOFF).await;
+                time::sleep(ACCEPT_BACKOFF).await;
             }
         }
         while clients.try_join_next().is_some() {}
@@ -82,7 +83,9 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: Option<mpsc::Sender<Rec
         },
         AgentRequest::Send { message, anchor } => match hub.answer(message, anchor) {
             Ok(()) => AgentReply::Sent,
-            Err(error) => AgentReply::Error { error },
+            Err(error) => AgentReply::Error {
+                error: error.to_string(),
+            },
         },
         AgentRequest::Printed => AgentReply::Error {
             error: "printed without recv".to_owned(),
@@ -135,7 +138,7 @@ async fn serve_recv(
     {
         return;
     }
-    let printed = tokio::time::timeout(
+    let printed = time::timeout(
         PRINTED_TIMEOUT,
         lines::read::<Envelope<AgentRequest>, _>(&mut read),
     )

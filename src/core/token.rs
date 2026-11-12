@@ -2,7 +2,7 @@
 //! joiners find and authenticate it) and the party secret (what admits
 //! them).
 
-use std::{fmt, str::FromStr};
+use std::{error::Error, fmt, str::FromStr};
 
 use data_encoding::BASE32_NOPAD;
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ impl fmt::Display for SecretError {
     }
 }
 
-impl std::error::Error for SecretError {}
+impl Error for SecretError {}
 
 impl FromStr for PartySecret {
     type Err = SecretError;
@@ -110,7 +110,7 @@ impl fmt::Display for TokenError {
     }
 }
 
-impl std::error::Error for TokenError {}
+impl Error for TokenError {}
 
 impl FromStr for PartyToken {
     type Err = TokenError;

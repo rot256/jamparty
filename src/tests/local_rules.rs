@@ -1,7 +1,10 @@
 //! The joiner's local server end to end: exact `Host`, cross-site rules,
 //! `Origin` on writes and upgrades, frame-ancestors on every response.
 
-use std::net::{Ipv6Addr, SocketAddr};
+use std::{
+    io::ErrorKind,
+    net::{Ipv6Addr, SocketAddr, TcpListener},
+};
 
 use bytes::Bytes;
 use http_body_util::Full;
@@ -149,15 +152,15 @@ async fn host_and_cross_site_rules() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_ipv6_side_of_the_port_is_taken_too() {
-    if std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).is_err() {
+    if TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).is_err() {
         return; // No IPv6 loopback here: nobody can take that side.
     }
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let joiner = join(&share, "alice").await;
     let port = joiner.local_addr().port();
-    let taken = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap_err();
-    assert_eq!(taken.kind(), std::io::ErrorKind::AddrInUse);
+    let taken = TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap_err();
+    assert_eq!(taken.kind(), ErrorKind::AddrInUse);
     // And it is the joiner's: it answers there.
     let request = local(&joiner, "GET", "/").body(Full::default()).unwrap();
     let response = send(SocketAddr::from((Ipv6Addr::LOCALHOST, port)), request).await;

@@ -1,10 +1,10 @@
 //! Admission: nothing is served before the right hello; the joiner only
 //! accepts the share in its token.
 
-use std::time::Duration;
+use std::{fs, future::Future, time::Duration};
 
 use iroh::endpoint::{Connection, ConnectionError, VarInt};
-use tokio::io::BufReader;
+use tokio::{io::BufReader, time};
 
 use crate::{
     adapters::{
@@ -191,8 +191,8 @@ async fn a_second_hello_ends_the_session() {
 }
 
 /// Whether `future` is still pending after a while.
-async fn stays_pending<T>(future: impl std::future::Future<Output = T>) -> bool {
-    tokio::time::timeout(Duration::from_millis(500), future)
+async fn stays_pending<T>(future: impl Future<Output = T>) -> bool {
+    time::timeout(Duration::from_millis(500), future)
         .await
         .is_err()
 }
@@ -238,12 +238,12 @@ async fn one_deadline_covers_the_whole_admission() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let (_endpoint, connection) = raw_connection(&share).await;
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    time::sleep(Duration::from_millis(1200)).await;
     let (mut send, recv) = connection.open_bi().await.unwrap();
     let line = hello(&share.token().secret.to_string());
     let (start, rest) = line.split_at(1);
     send.write_all(start).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    time::sleep(Duration::from_millis(1200)).await;
     let _ = send.write_all(rest).await;
     let reply = lines::read::<Envelope<ShareMessage>, _>(&mut BufReader::new(recv))
         .await
@@ -257,7 +257,7 @@ async fn one_deadline_covers_the_whole_admission() {
 #[tokio::test(flavor = "multi_thread")]
 async fn connections_waiting_for_admission_are_capped() {
     let dir = fixture_dir();
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
     let mut config = config(Source::Files(root), Target::Recv);
     config.max_unadmitted = 1;
     let share = start(config).await;

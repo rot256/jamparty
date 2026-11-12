@@ -5,7 +5,7 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use http_body_util::{BodyExt, Full};
 use iroh::endpoint::VarInt;
-use tokio::net::UnixStream;
+use tokio::{net::UnixStream, time};
 
 use crate::{
     adapters::endpoint::generate_key,
@@ -238,7 +238,7 @@ async fn a_full_share_is_retried_not_final() {
         joiners.push(joiner);
     }
     let extra = joiner_with_key(share.token().clone(), share.direct_addrs(), "alice", key).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    time::sleep(Duration::from_millis(500)).await;
     assert!(!extra.watch().borrow().connected);
     assert_eq!(extra.watch().borrow().refused, None);
     assert_eq!(share.presence().len(), 1);

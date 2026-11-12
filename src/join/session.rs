@@ -8,11 +8,15 @@ use std::{
 };
 
 use iroh::endpoint::{Connection, SendStream};
+use rootcause::prelude::report;
 use serde::Serialize;
-use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::{
+    sync::{broadcast, mpsc, oneshot, watch},
+    time,
+};
 
 use crate::{
-    BoxError,
+    Report,
     adapters::lines,
     core::{ids::CommentId, request::LocalOrigin},
     join::markdown,
@@ -125,7 +129,7 @@ impl Control {
         &self,
         reference: CommentRef,
         draft: Draft,
-    ) -> Result<AckOutcome, BoxError> {
+    ) -> Result<AckOutcome, Report> {
         let (ack, acked) = oneshot::channel();
         self.acks().insert(reference.clone(), ack);
         let _waiting = Waiting {
@@ -136,11 +140,11 @@ impl Control {
         self.lines
             .send(line)
             .await
-            .map_err(|_| "the connection to the share was lost")?;
-        Ok(tokio::time::timeout(ACK_TIMEOUT, acked)
+            .map_err(|_| report!("the connection to the share was lost"))?;
+        time::timeout(ACK_TIMEOUT, acked)
             .await
-            .map_err(|_| "the share did not acknowledge the comment")?
-            .map_err(|_| "the connection to the share was lost")?)
+            .map_err(|_| report!("the share did not acknowledge the comment"))?
+            .map_err(|_| report!("the connection to the share was lost"))
     }
 
     fn acknowledge(&self, reference: &CommentRef, outcome: AckOutcome) {

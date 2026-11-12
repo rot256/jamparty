@@ -7,15 +7,16 @@
 //! `{"_tag":"OrchestratorMcpFailure","code","message"}` as the text of an
 //! `isError` result.
 
-use std::path::PathBuf;
+use std::{mem, path::PathBuf};
 
 use data_encoding::HEXLOWER;
 use hyper::Uri;
+use rootcause::prelude::{ResultExt, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BoxError,
+    Report,
     adapters::mcp::{McpClient, McpError, ToolFailure},
     core::queue::DeliveryResult,
     protocol::comment::Comment,
@@ -99,7 +100,7 @@ pub(crate) struct Thread {
 
 /// Reads the target's thread: an unknown or archived thread is an error; a
 /// subagent's thread is resolved to its top-level thread.
-pub(crate) async fn open(target: &T3Target) -> Result<Thread, BoxError> {
+pub(crate) async fn open(target: &T3Target) -> Result<Thread, Report> {
     let client = McpClient::new(target.url.clone(), target.token_file.clone());
     let mut id = target.thread.clone();
     for _ in 0..MAX_DEPTH {
@@ -111,22 +112,21 @@ pub(crate) async fn open(target: &T3Target) -> Result<Thread, BoxError> {
         let read: Result<ReadResult, ToolFailure> = client
             .call_tool("t3_thread_read", input)
             .await
-            .map_err(|e| format!("could not read the T3 thread {id}: {e}"))?;
+            .context_with(|| format!("could not read the T3 thread {id}"))?;
         let thread = match read.map_err(Failure::from) {
             Ok(read) => read.thread,
             Err(failure) if failure.code == "thread_not_found" => {
-                return Err(format!(
+                bail!(
                     "T3 has no thread {id} (check --thread or T3CODE_THREAD_ID): {}",
                     failure.message
-                )
-                .into());
+                );
             }
             Err(failure) => {
-                return Err(format!("T3 refused to read thread {id}: {}", failure.message).into());
+                bail!("T3 refused to read thread {id}: {}", failure.message);
             }
         };
         if thread.archived {
-            return Err(format!("the T3 thread {id} ({}) is archived", thread.title).into());
+            bail!("the T3 thread {id} ({}) is archived", thread.title);
         }
         match (
             thread.relationship_to_parent.as_deref(),
@@ -144,7 +144,7 @@ pub(crate) async fn open(target: &T3Target) -> Result<Thread, BoxError> {
             }
         }
     }
-    Err(format!("the T3 thread {} is nested too deeply", target.thread).into())
+    bail!("the T3 thread {} is nested too deeply", target.thread)
 }
 
 /// Delivers batches to one thread.
@@ -220,7 +220,7 @@ fn messages(header: &str, batch: &[Comment]) -> Vec<String> {
         };
         let length = |text: &str| text.encode_utf16().count();
         if count > 0 && length(&current) + 1 + length(&line) > MAX_MESSAGE {
-            messages.push(std::mem::replace(&mut current, header.to_owned()));
+            messages.push(mem::replace(&mut current, header.to_owned()));
             count = 0;
         }
         current.push('\n');
@@ -248,6 +248,8 @@ fn request_key(batch: &[Comment], index: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use crate::{
         adapters::t3::{MAX_MESSAGE, header, messages, request_key},
         core::{ids::CommentId, rng::SystemRng},
@@ -297,7 +299,7 @@ mod tests {
         let [first, _] = &batch;
         assert_ne!(
             request_key(&batch, 0),
-            request_key(std::slice::from_ref(first), 0)
+            request_key(slice::from_ref(first), 0)
         );
         assert!(request_key(&batch, 0).starts_with("jampot-"));
     }

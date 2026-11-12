@@ -9,6 +9,7 @@ use hyper::{
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
 use iroh::endpoint::{RecvStream, SendStream};
+use tokio::io;
 
 use crate::share::{
     body::{AppBody, RequestError, javascript_response},
@@ -44,7 +45,7 @@ impl Site {
 
 /// Serves HTTP/1.1 on one request stream until it ends.
 pub(crate) async fn serve_stream(send: SendStream, recv: RecvStream, site: Site) {
-    let io = TokioIo::new(tokio::io::join(recv, send));
+    let io = TokioIo::new(io::join(recv, send));
     let service = service_fn(move |request| {
         let site = site.clone();
         async move { Ok::<_, Infallible>(handle(request, site).await) }

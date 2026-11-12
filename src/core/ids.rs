@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::core::rng::{Rng, random_array};
+use crate::core::{
+    invalid::Invalid,
+    rng::{Rng, random_array},
+};
 
 /// A comment id: a random (version 4) UUID in canonical lowercase,
 /// hyphenated form, as komtar's ids.
@@ -23,10 +26,10 @@ impl CommentId {
 }
 
 impl FromStr for CommentId {
-    type Err = String;
+    type Err = Invalid;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let error = || "a comment id is a lowercase hyphenated UUID".to_owned();
+        let error = || Invalid::new("a comment id is a lowercase hyphenated UUID");
         let uuid = Uuid::try_parse(raw).map_err(|_| error())?;
         if uuid.hyphenated().to_string() == raw {
             Ok(Self(uuid))
@@ -37,7 +40,7 @@ impl FromStr for CommentId {
 }
 
 impl TryFrom<String> for CommentId {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
         raw.parse()
@@ -90,10 +93,10 @@ impl EndpointKey {
 }
 
 impl FromStr for EndpointKey {
-    type Err = String;
+    type Err = Invalid;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let error = || "a key is 64 lowercase hex characters".to_owned();
+        let error = || Invalid::new("a key is 64 lowercase hex characters");
         let bytes = HEXLOWER.decode(raw.as_bytes()).map_err(|_| error())?;
         let key: [u8; 32] = bytes.try_into().map_err(|_| error())?;
         Ok(Self(key))
@@ -101,7 +104,7 @@ impl FromStr for EndpointKey {
 }
 
 impl TryFrom<String> for EndpointKey {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
         raw.parse()
@@ -134,10 +137,10 @@ const FINGERPRINT_BYTES: usize = 5;
 pub(crate) struct Fingerprint([u8; FINGERPRINT_BYTES]);
 
 impl TryFrom<String> for Fingerprint {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
-        let error = || "a fingerprint is 10 lowercase hex characters".to_owned();
+        let error = || Invalid::new("a fingerprint is 10 lowercase hex characters");
         let bytes = HEXLOWER.decode(raw.as_bytes()).map_err(|_| error())?;
         Ok(Self(bytes.try_into().map_err(|_| error())?))
     }
@@ -177,13 +180,13 @@ impl Sid {
 }
 
 impl FromStr for Sid {
-    type Err = String;
+    type Err = Invalid;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         if raw.len() == SID_LEN && raw.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7')) {
             Ok(Self(raw.to_owned()))
         } else {
-            Err("a share id is 16 characters of a-z and 2-7".to_owned())
+            Err(Invalid::new("a share id is 16 characters of a-z and 2-7"))
         }
     }
 }

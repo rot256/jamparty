@@ -9,12 +9,16 @@ use std::{
 
 #[cfg(test)]
 use jiff::Timestamp;
-use tokio::sync::{Notify, broadcast};
+use tokio::{
+    sync::{Notify, broadcast},
+    time,
+};
 
 use crate::{
     core::{
         clock::Clock,
         ids::{CommentId, EndpointKey},
+        invalid::Invalid,
         queue::{DeliveryQueue, DeliveryResult, DeliveryState, QueueError},
         ratelimit::{RateLimit, RateLimiter},
         rng::Rng,
@@ -258,7 +262,7 @@ impl Hub {
                 Some(wait) => {
                     tokio::select! {
                         () = notified => {}
-                        () = tokio::time::sleep(wait.unsigned_abs()) => {}
+                        () = time::sleep(wait.unsigned_abs()) => {}
                     }
                 }
                 None => notified.await,
@@ -309,7 +313,7 @@ impl Hub {
         &self,
         message: AnswerText,
         anchor: Option<CommentId>,
-    ) -> Result<(), String> {
+    ) -> Result<(), Invalid> {
         let message = {
             let mut inner = self.lock();
             let anchor = match anchor {
@@ -320,7 +324,9 @@ impl Hub {
                         .iter()
                         .find(|anchor| anchor.comment == id)
                         .cloned()
-                        .ok_or_else(|| format!("no comment with id {id} on this share"))?,
+                        .ok_or_else(|| {
+                            Invalid::new(format!("no comment with id {id} on this share"))
+                        })?,
                 ),
             };
             let message = ShareMessage::Answer {

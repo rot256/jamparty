@@ -1,16 +1,17 @@
 //! Control-stream framing on async streams: one bounded JSON line at a
 //! time.
 
+use rootcause::prelude::bail;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{
-    BoxError,
+    Report,
     protocol::{MAX_LINE_BYTES, decode_line, encode_line},
 };
 
 /// Reads and parses one line; `None` at a clean end of stream.
-pub(crate) async fn read<T, R>(reader: &mut R) -> Result<Option<T>, BoxError>
+pub(crate) async fn read<T, R>(reader: &mut R) -> Result<Option<T>, Report>
 where
     T: DeserializeOwned,
     R: AsyncBufRead + Unpin,
@@ -25,13 +26,13 @@ where
         return Ok(None);
     }
     if !line.ends_with(b"\n") {
-        return Err("control line too long or cut off".into());
+        bail!("control line too long or cut off");
     }
     Ok(Some(decode_line(&line)?))
 }
 
 /// Encodes and writes one line.
-pub(crate) async fn write<T, W>(writer: &mut W, message: &T) -> Result<(), BoxError>
+pub(crate) async fn write<T, W>(writer: &mut W, message: &T) -> Result<(), Report>
 where
     T: Serialize,
     W: AsyncWrite + Unpin,

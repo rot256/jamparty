@@ -14,7 +14,7 @@
 //! [`start`]: DeliveryQueue::start
 //! [`finish`]: DeliveryQueue::finish
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, mem};
 
 use jiff::{SignedDuration, Timestamp};
 
@@ -174,7 +174,7 @@ impl<T: Clone> DeliveryQueue<T> {
             DeliveryResult::Ok => {
                 self.failures = 0;
                 self.state = DeliveryState::Ready;
-                return Ok(std::mem::take(&mut self.batch));
+                return Ok(mem::take(&mut self.batch));
             }
             DeliveryResult::Error => {
                 self.failures = self.failures.saturating_add(1);

@@ -1,30 +1,38 @@
 //! Shared checks for short free-text fields.
 
+use crate::core::invalid::Invalid;
+
 /// Checks that `value` is not blank, has at most `max_chars` characters and
 /// contains no control characters (newlines included).
-pub(crate) fn check_line(value: &str, field: &str, max_chars: usize) -> Result<(), String> {
+pub(crate) fn check_line(value: &str, field: &str, max_chars: usize) -> Result<(), Invalid> {
     check_text(value, field, max_chars)?;
     if value.chars().any(char::is_control) {
-        return Err(format!("{field} must not contain control characters"));
+        return Err(Invalid::new(format!(
+            "{field} must not contain control characters"
+        )));
     }
     Ok(())
 }
 
 /// Checks that `value` is not blank and has at most `max_chars` characters.
-pub(crate) fn check_text(value: &str, field: &str, max_chars: usize) -> Result<(), String> {
+pub(crate) fn check_text(value: &str, field: &str, max_chars: usize) -> Result<(), Invalid> {
     if value.trim().is_empty() {
-        return Err(format!("{field} must not be blank"));
+        return Err(Invalid::new(format!("{field} must not be blank")));
     }
     if value.chars().count() > max_chars {
-        return Err(format!("{field} must be at most {max_chars} characters"));
+        return Err(Invalid::new(format!(
+            "{field} must be at most {max_chars} characters"
+        )));
     }
     Ok(())
 }
 
 /// Checks only the length of `value`; empty is allowed.
-pub(crate) fn check_len(value: &str, field: &str, max_chars: usize) -> Result<(), String> {
+pub(crate) fn check_len(value: &str, field: &str, max_chars: usize) -> Result<(), Invalid> {
     if value.chars().count() > max_chars {
-        return Err(format!("{field} must be at most {max_chars} characters"));
+        return Err(Invalid::new(format!(
+            "{field} must be at most {max_chars} characters"
+        )));
     }
     Ok(())
 }

@@ -8,7 +8,7 @@ use futures_util::stream;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::{
     Request, Response, StatusCode, body::Frame, body::Incoming, header, server::conn::http1,
-    service::service_fn,
+    service::service_fn, upgrade,
 };
 use hyper_util::rt::TokioIo;
 use tokio::{
@@ -94,7 +94,7 @@ fn respond(request: Request<Incoming>, gate: Arc<Notify>) -> Response<AppBody> {
         }
         "/echo" => {
             tokio::spawn(async move {
-                let Ok(upgraded) = hyper::upgrade::on(request).await else {
+                let Ok(upgraded) = upgrade::on(request).await else {
                     return;
                 };
                 let mut io = TokioIo::new(upgraded);

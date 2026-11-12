@@ -5,10 +5,11 @@ pub(crate) mod guides;
 
 use std::io::Write;
 
+use rootcause::{option_ext::OptionExt, prelude::bail};
 use tokio::{io::BufReader, net::UnixStream};
 
 use crate::{
-    BoxError,
+    Report,
     adapters::lines,
     core::ids::CommentId,
     protocol::{
@@ -19,7 +20,7 @@ use crate::{
 
 /// Waits for pending comments, prints them to `out` as NDJSON and tells the
 /// share they were printed; returns how many.
-pub(crate) async fn recv(stream: UnixStream, out: &mut impl Write) -> Result<usize, BoxError> {
+pub(crate) async fn recv(stream: UnixStream, out: &mut impl Write) -> Result<usize, Report> {
     let (read, mut write) = stream.into_split();
     let mut read = BufReader::new(read);
     lines::write(&mut write, &Envelope::from(AgentRequest::Recv)).await?;
@@ -27,12 +28,12 @@ pub(crate) async fn recv(stream: UnixStream, out: &mut impl Write) -> Result<usi
     loop {
         let reply = lines::read::<Envelope<AgentReply>, _>(&mut read)
             .await?
-            .ok_or("the share stopped")?;
+            .context("the share stopped")?;
         match reply.message {
             AgentReply::Comment { comment } => comments.push(comment),
             AgentReply::End => break,
-            AgentReply::Error { error } => return Err(error.into()),
-            AgentReply::Sent => return Err("unexpected reply from the share".into()),
+            AgentReply::Error { error } => bail!("{error}"),
+            AgentReply::Sent => bail!("unexpected reply from the share"),
         }
     }
     for comment in &comments {
@@ -49,7 +50,7 @@ pub(crate) async fn send(
     stream: UnixStream,
     message: AnswerText,
     anchor: Option<CommentId>,
-) -> Result<(), BoxError> {
+) -> Result<(), Report> {
     let (read, mut write) = stream.into_split();
     let mut read = BufReader::new(read);
     lines::write(
@@ -59,12 +60,10 @@ pub(crate) async fn send(
     .await?;
     let reply = lines::read::<Envelope<AgentReply>, _>(&mut read)
         .await?
-        .ok_or("the share stopped")?;
+        .context("the share stopped")?;
     match reply.message {
         AgentReply::Sent => Ok(()),
-        AgentReply::Error { error } => Err(error.into()),
-        AgentReply::Comment { .. } | AgentReply::End => {
-            Err("unexpected reply from the share".into())
-        }
+        AgentReply::Error { error } => bail!("{error}"),
+        AgentReply::Comment { .. } | AgentReply::End => bail!("unexpected reply from the share"),
     }
 }

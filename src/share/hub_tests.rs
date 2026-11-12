@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{slice, sync::Arc};
 
 use jiff::{SignedDuration, Timestamp};
 
@@ -44,7 +44,7 @@ fn joiners_are_capped_in_all_and_per_key_and_shown_once() {
         .map(|_| hub.join(alice.clone()).unwrap())
         .collect();
     assert!(hub.join(alice.clone()).is_none(), "one key, too often");
-    assert_eq!(hub.presence(), std::slice::from_ref(&alice));
+    assert_eq!(hub.presence(), slice::from_ref(&alice));
 
     let others: Vec<_> = (2..)
         .take(MAX_JOINERS - MAX_JOINERS_PER_KEY)

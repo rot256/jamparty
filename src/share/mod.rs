@@ -14,13 +14,15 @@ mod live;
 pub(crate) mod proxy;
 mod socket;
 
+#[cfg(test)]
+use std::path::Path;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use iroh::Endpoint;
 use tokio::{sync::Semaphore, task::JoinSet};
 
 use crate::{
-    BoxError,
+    Report,
     adapters::{
         endpoint::{Accept, NetConfig, bind, direct_addrs, generate_key},
         runtime::{self, SocketFile},
@@ -110,7 +112,7 @@ pub(crate) struct Share {
 
 impl Share {
     /// Binds a fresh key, makes a fresh party secret and starts accepting.
-    pub(crate) async fn start(config: ShareConfig) -> Result<Self, BoxError> {
+    pub(crate) async fn start(config: ShareConfig) -> Result<Self, Report> {
         let ShareConfig {
             source,
             net,
@@ -173,7 +175,7 @@ impl Share {
     /// The runtime socket.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn socket_path(&self) -> &std::path::Path {
+    pub(crate) fn socket_path(&self) -> &Path {
         &self.socket.0
     }
 

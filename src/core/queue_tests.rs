@@ -1,5 +1,5 @@
 use jiff::{SignedDuration, Timestamp};
-use proptest::prelude::*;
+use proptest::{collection, prelude::*};
 
 use crate::core::queue::{
     DeliveryQueue, DeliveryResult, DeliveryState, MAX_BACKOFF, MAX_QUEUED, QueueError, backoff,
@@ -133,7 +133,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
     #[test]
-    fn delivery_model(ops in proptest::collection::vec(op(), 1..300), burst in 0usize..2) {
+    fn delivery_model(ops in collection::vec(op(), 1..300), burst in 0usize..2) {
         let mut queue = DeliveryQueue::new();
         let mut now = t0();
         // Model: items accepted in order, how many are delivered, the batch

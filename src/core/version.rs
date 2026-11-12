@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::invalid::Invalid;
+
 /// Version 1, the only one understood. Serialises as the number `1` and
 /// rejects anything else when parsed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -9,12 +11,14 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct Version1;
 
 impl TryFrom<u32> for Version1 {
-    type Error = String;
+    type Error = Invalid;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self),
-            other => Err(format!("unsupported version {other}, expected 1")),
+            other => Err(Invalid::new(format!(
+                "unsupported version {other}, expected 1"
+            ))),
         }
     }
 }

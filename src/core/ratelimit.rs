@@ -5,9 +5,9 @@
 //! With capacity `n` per `period`, a request costs `period / n`; a joiner may
 //! run up to `n` requests ahead of the steady rate.
 
-#[cfg(test)]
-use std::fmt;
 use std::{collections::HashMap, hash::Hash};
+#[cfg(test)]
+use std::{error::Error, fmt};
 
 use jiff::{SignedDuration, Timestamp};
 
@@ -35,7 +35,7 @@ impl fmt::Display for InvalidRateLimit {
 }
 
 #[cfg(test)]
-impl std::error::Error for InvalidRateLimit {}
+impl Error for InvalidRateLimit {}
 
 #[cfg(test)]
 impl RateLimit {
@@ -125,7 +125,7 @@ impl<K: Hash + Eq> RateLimiter<K> {
 #[cfg(test)]
 mod tests {
     use jiff::{SignedDuration, Timestamp};
-    use proptest::prelude::*;
+    use proptest::{collection, prelude::*};
 
     use crate::core::{
         clock::{Clock, ManualClock},
@@ -203,7 +203,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn never_more_than_capacity_plus_elapsed(steps in proptest::collection::vec(0i64..20_000, 1..300)) {
+        fn never_more_than_capacity_plus_elapsed(steps in collection::vec(0i64..20_000, 1..300)) {
             let clock = clock();
             let start = clock.now();
             let mut limiter = RateLimiter::new(RateLimit::PER_JOINER);

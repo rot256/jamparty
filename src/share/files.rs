@@ -1,7 +1,10 @@
 //! Serves the shared directory: files and directory `index.html`s, never
 //! dotfiles or anything outside the root.
 
-use std::path::{Component, Path, PathBuf};
+use std::{
+    io::{self, ErrorKind},
+    path::{Component, Path, PathBuf},
+};
 
 use http_body_util::BodyExt;
 use hyper::{
@@ -10,13 +13,12 @@ use hyper::{
     header::{self, CACHE_CONTROL, CONTENT_TYPE},
 };
 use hyper_staticfile::{ResolveResult, Resolver, ResponseBuilder};
+use nix::libc;
+use tokio::fs;
 
-use crate::{
-    BoxError,
-    share::{
-        body::{AppBody, RequestError, empty_response},
-        inject::{ClientMode, maybe_inject_client},
-    },
+use crate::share::{
+    body::{AppBody, BodyError, RequestError, empty_response},
+    inject::{ClientMode, maybe_inject_client},
 };
 
 #[derive(Clone)]
@@ -52,23 +54,21 @@ impl Files {
             read_error()
         })?;
         let resolved = match resolved {
-            ResolveResult::Found(file) => {
-                match tokio::fs::canonicalize(root.join(&file.path)).await {
-                    Ok(path) if served(&path, root) => ResolveResult::Found(file),
-                    Ok(path) => {
-                        tracing::warn!(path = %path.display(), "refused a symlink outside the root or to a dotfile");
-                        ResolveResult::NotFound
-                    }
-                    Err(error) if is_missing_path_error(&error) => ResolveResult::NotFound,
-                    Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                        ResolveResult::PermissionDenied
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "could not verify resolved static file");
-                        return Err(read_error());
-                    }
+            ResolveResult::Found(file) => match fs::canonicalize(root.join(&file.path)).await {
+                Ok(path) if served(&path, root) => ResolveResult::Found(file),
+                Ok(path) => {
+                    tracing::warn!(path = %path.display(), "refused a symlink outside the root or to a dotfile");
+                    ResolveResult::NotFound
                 }
-            }
+                Err(error) if is_missing_path_error(&error) => ResolveResult::NotFound,
+                Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+                    ResolveResult::PermissionDenied
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "could not verify resolved static file");
+                    return Err(read_error());
+                }
+            },
             other @ (ResolveResult::MethodNotMatched
             | ResolveResult::NotFound
             | ResolveResult::PermissionDenied
@@ -93,7 +93,7 @@ impl Files {
         let (parts, body) = response.into_parts();
         let mut response = Response::from_parts(
             parts,
-            body.map_err(|error| -> BoxError { Box::new(error) })
+            body.map_err(|error| -> BodyError { Box::new(error) })
                 .boxed_unsync(),
         );
         if let Some(content_type) = content_type
@@ -147,14 +147,14 @@ async fn path_access(request_path: &str, root: &Path) -> Result<Option<StatusCod
     if has_hidden_component(&requested.path) {
         return Ok(Some(StatusCode::NOT_FOUND));
     }
-    let path = match tokio::fs::canonicalize(root.join(&requested.path)).await {
+    let path = match fs::canonicalize(root.join(&requested.path)).await {
         Ok(path) => path,
         Err(error) => return access_error(error),
     };
     if !served(&path, root) {
         return Ok(Some(StatusCode::NOT_FOUND));
     }
-    let metadata = match tokio::fs::metadata(&path).await {
+    let metadata = match fs::metadata(&path).await {
         Ok(metadata) => metadata,
         Err(error) => return access_error(error),
     };
@@ -167,14 +167,14 @@ async fn path_access(request_path: &str, root: &Path) -> Result<Option<StatusCod
     if !requested.is_directory {
         return Ok(None);
     }
-    let index = match tokio::fs::canonicalize(path.join("index.html")).await {
+    let index = match fs::canonicalize(path.join("index.html")).await {
         Ok(index) => index,
         Err(error) => return access_error(error),
     };
     if !served(&index, root) {
         return Ok(Some(StatusCode::NOT_FOUND));
     }
-    match tokio::fs::metadata(index).await {
+    match fs::metadata(index).await {
         Ok(metadata) if metadata.is_file() => Ok(None),
         Ok(_) => Ok(Some(StatusCode::NOT_FOUND)),
         Err(error) => access_error(error),
@@ -193,8 +193,8 @@ fn has_hidden_component(path: &Path) -> bool {
         .any(|component| component.as_os_str().to_string_lossy().starts_with('.'))
 }
 
-fn access_error(error: std::io::Error) -> Result<Option<StatusCode>, RequestError> {
-    if error.kind() == std::io::ErrorKind::PermissionDenied {
+fn access_error(error: io::Error) -> Result<Option<StatusCode>, RequestError> {
+    if error.kind() == ErrorKind::PermissionDenied {
         return Ok(Some(StatusCode::FORBIDDEN));
     }
     if is_missing_path_error(&error) {
@@ -204,16 +204,11 @@ fn access_error(error: std::io::Error) -> Result<Option<StatusCode>, RequestErro
     Err(read_error())
 }
 
-fn is_missing_path_error(error: &std::io::Error) -> bool {
+fn is_missing_path_error(error: &io::Error) -> bool {
     matches!(
         error.kind(),
-        std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::NotADirectory
-            | std::io::ErrorKind::InvalidInput
-    ) || matches!(
-        error.raw_os_error(),
-        Some(nix::libc::ELOOP | nix::libc::ENAMETOOLONG)
-    )
+        ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::InvalidInput
+    ) || matches!(error.raw_os_error(), Some(libc::ELOOP | libc::ENAMETOOLONG))
 }
 
 #[cfg(test)]

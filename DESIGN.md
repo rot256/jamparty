@@ -621,9 +621,10 @@ Must-have cases:
 
 ## Crates
 
-iroh 1.4.1 (transport), hyper and hyper-util (share serving, from komtar,
-and the joiner's local server), tokio, hyper's client with rustls (also the T3 MCP client), serde/serde_json,
-sha2, data-encoding, getrandom, subtle; proptest for tests; komtar's
+iroh 1.4.1 (transport), hyper and hyper-util (share serving, from
+komtar, and the joiner's local server), tokio, hyper's client with
+rustls (also the T3 MCP client), serde/serde_json, sha2, data-encoding,
+getrandom, subtle, rootcause (errors); proptest for tests; komtar's
 existing dependencies for static serving, file watching and Markdown.
 
 ## Open questions

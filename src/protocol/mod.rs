@@ -13,7 +13,7 @@ pub(crate) mod agent;
 pub(crate) mod comment;
 pub(crate) mod control;
 
-use std::fmt;
+use std::{error::Error, fmt};
 
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -41,7 +41,7 @@ impl fmt::Display for FrameError {
     }
 }
 
-impl std::error::Error for FrameError {}
+impl Error for FrameError {}
 
 /// `message` as one line: compact JSON and a newline.
 pub(crate) fn encode_line<T: Serialize>(message: &T) -> Result<Vec<u8>, FrameError> {

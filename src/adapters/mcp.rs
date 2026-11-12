@@ -5,10 +5,11 @@
 //! (HTTP 404) starts a new one.
 
 use std::{
-    fmt,
+    error::Error,
+    fmt, fs,
     path::PathBuf,
     sync::{
-        Mutex, PoisonError,
+        Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -26,7 +27,7 @@ use hyper_util::{
     rt::TokioExecutor,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::json;
+use tokio::time;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const SESSION_HEADER: &str = "mcp-session-id";
@@ -46,7 +47,7 @@ impl fmt::Display for McpError {
     }
 }
 
-impl std::error::Error for McpError {}
+impl Error for McpError {}
 
 fn error(text: impl Into<String>) -> McpError {
     McpError(text.into())
@@ -76,9 +77,41 @@ struct RpcRequest<'a, P> {
     params: P,
 }
 
+/// `initialize`'s parameters.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeParams {
+    protocol_version: &'static str,
+    capabilities: Empty,
+    client_info: ClientInfo,
+}
+
+#[derive(Serialize)]
+struct ClientInfo {
+    name: &'static str,
+    version: &'static str,
+}
+
+/// `{}`: parameters with nothing in them.
+#[derive(Serialize)]
+struct Empty {}
+
+/// `tools/call`'s parameters.
+#[derive(Serialize)]
+struct CallToolParams<'a, A> {
+    name: &'a str,
+    arguments: &'a A,
+}
+
+/// Just the id of a message from the server, to find the response to a
+/// request among notifications and requests of other shapes.
+#[derive(Deserialize)]
+struct RpcId {
+    id: Option<u64>,
+}
+
 #[derive(Deserialize)]
 struct RpcMessage<T> {
-    id: Option<u64>,
     result: Option<T>,
     error: Option<RpcError>,
 }
@@ -151,7 +184,10 @@ impl McpClient {
         name: &str,
         arguments: A,
     ) -> Result<Result<T, ToolFailure>, McpError> {
-        let params = json!({ "name": name, "arguments": arguments });
+        let params = CallToolParams {
+            name,
+            arguments: &arguments,
+        };
         let session = self.session().await?;
         let result: CallToolResult<T> = match self.rpc(session, "tools/call", &params).await {
             Ok(result) => result,
@@ -181,7 +217,7 @@ impl McpClient {
             .ok_or_else(|| error(format!("{name} returned no structured content")))
     }
 
-    fn lock_session(&self) -> std::sync::MutexGuard<'_, Option<Option<HeaderValue>>> {
+    fn lock_session(&self) -> MutexGuard<'_, Option<Option<HeaderValue>>> {
         self.session.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -195,11 +231,14 @@ impl McpClient {
             jsonrpc: "2.0",
             id: Some(id),
             method: "initialize",
-            params: json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "jampot", "version": env!("CARGO_PKG_VERSION") },
-            }),
+            params: InitializeParams {
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: Empty {},
+                client_info: ClientInfo {
+                    name: "jampot",
+                    version: env!("CARGO_PKG_VERSION"),
+                },
+            },
         };
         let reply = self.post(None, &initialize).await?;
         check_status(reply.status)?;
@@ -209,7 +248,7 @@ impl McpClient {
             jsonrpc: "2.0",
             id: None,
             method: "notifications/initialized",
-            params: json!({}),
+            params: Empty {},
         };
         let reply = self.post(Some(session.as_ref()), &initialized).await?;
         check_status(reply.status)?;
@@ -217,11 +256,11 @@ impl McpClient {
         Ok(session)
     }
 
-    async fn rpc<T: DeserializeOwned>(
+    async fn rpc<P: Serialize, T: DeserializeOwned>(
         &self,
         session: Option<HeaderValue>,
         method: &str,
-        params: &serde_json::Value,
+        params: &P,
     ) -> Result<T, RpcFailure> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let request = RpcRequest {
@@ -245,7 +284,7 @@ impl McpClient {
         session: Option<Option<&HeaderValue>>,
         message: &RpcRequest<'_, P>,
     ) -> Result<Reply, McpError> {
-        let token = std::fs::read_to_string(&self.token_file).map_err(|e| {
+        let token = fs::read_to_string(&self.token_file).map_err(|e| {
             error(format!(
                 "could not read the token file {}: {e}",
                 self.token_file.display()
@@ -294,7 +333,7 @@ impl McpClient {
                 body,
             })
         };
-        tokio::time::timeout(REQUEST_TIMEOUT, exchange)
+        time::timeout(REQUEST_TIMEOUT, exchange)
             .await
             .map_err(|_| error(format!("no answer within {}s", REQUEST_TIMEOUT.as_secs())))?
     }
@@ -317,21 +356,20 @@ fn parse<T: DeserializeOwned>(id: u64, sse: bool, body: &[u8]) -> Result<T, McpE
         vec![body.to_vec()]
     };
     for data in messages {
-        let Ok(message) = serde_json::from_slice::<RpcMessage<serde_json::Value>>(&data) else {
-            // Notifications and requests from the server have other shapes.
-            continue;
-        };
-        if message.id != Some(id) {
+        // Notifications and requests from the server have other shapes.
+        let ours =
+            serde_json::from_slice::<RpcId>(&data).is_ok_and(|message| message.id == Some(id));
+        if !ours {
             continue;
         }
+        let message = serde_json::from_slice::<RpcMessage<T>>(&data)
+            .map_err(|e| error(format!("an unexpected MCP result: {e}")))?;
         if let Some(RpcError { code, message }) = message.error {
             return Err(error(format!("MCP error {code}: {message}")));
         }
-        let result = message
+        return message
             .result
-            .ok_or_else(|| error("an MCP response without a result"))?;
-        return serde_json::from_value(result)
-            .map_err(|e| error(format!("an unexpected MCP result: {e}")));
+            .ok_or_else(|| error("an MCP response without a result"));
     }
     Err(error("no response to the request"))
 }

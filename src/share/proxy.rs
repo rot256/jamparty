@@ -1,6 +1,6 @@
 //! Forwards requests to the one dev server the share was given.
 
-use std::{fmt, str::FromStr};
+use std::{error::Error, fmt, str::FromStr};
 
 use hyper::{
     Request, Response, StatusCode, Uri,
@@ -9,6 +9,7 @@ use hyper::{
         self, CONNECTION, HOST, HeaderMap, HeaderName, HeaderValue, LOCATION, TE, TRAILER,
         TRANSFER_ENCODING, UPGRADE,
     },
+    upgrade,
 };
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{
@@ -18,12 +19,9 @@ use hyper_util::{
 use tokio::io::copy_bidirectional;
 use url::Url;
 
-use crate::{
-    BoxError,
-    share::{
-        body::{AppBody, RequestError, incoming_body, map_incoming_response},
-        inject::{ClientMode, maybe_inject_client},
-    },
+use crate::share::{
+    body::{AppBody, RequestError, incoming_body, map_incoming_response},
+    inject::{ClientMode, maybe_inject_client},
 };
 
 /// An `http://` or `https://` base URL without credentials, query or
@@ -31,22 +29,46 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) struct UpstreamUrl(Url);
 
+/// Why a string is not an [`UpstreamUrl`].
+#[derive(Debug)]
+pub(crate) enum UpstreamUrlError {
+    Parse(url::ParseError),
+    Scheme,
+    NoHost,
+    Credentials,
+    QueryOrFragment,
+}
+
+impl fmt::Display for UpstreamUrlError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(error) => error.fmt(f),
+            Self::Scheme => f.write_str("upstream must use http:// or https://"),
+            Self::NoHost => f.write_str("upstream must include a host"),
+            Self::Credentials => f.write_str("upstream credentials are not supported"),
+            Self::QueryOrFragment => f.write_str("upstream must not include a query or fragment"),
+        }
+    }
+}
+
+impl Error for UpstreamUrlError {}
+
 impl FromStr for UpstreamUrl {
-    type Err = BoxError;
+    type Err = UpstreamUrlError;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let mut upstream = Url::parse(raw)?;
+        let mut upstream = Url::parse(raw).map_err(UpstreamUrlError::Parse)?;
         if !matches!(upstream.scheme(), "http" | "https") {
-            return Err("upstream must use http:// or https://".into());
+            return Err(UpstreamUrlError::Scheme);
         }
         if upstream.host_str().is_none() {
-            return Err("upstream must include a host".into());
+            return Err(UpstreamUrlError::NoHost);
         }
         if !upstream.username().is_empty() || upstream.password().is_some() {
-            return Err("upstream credentials are not supported".into());
+            return Err(UpstreamUrlError::Credentials);
         }
         if upstream.query().is_some() || upstream.fragment().is_some() {
-            return Err("upstream must not include a query or fragment".into());
+            return Err(UpstreamUrlError::QueryOrFragment);
         }
         if !upstream.path().ends_with('/') {
             let path = format!("{}/", upstream.path());
@@ -89,7 +111,7 @@ impl Proxy {
         let downstream_upgrade = request
             .headers()
             .contains_key(header::UPGRADE)
-            .then(|| hyper::upgrade::on(&mut request));
+            .then(|| upgrade::on(&mut request));
         let original_host = request.headers().get(HOST).cloned();
         let (mut parts, body) = request.into_parts();
         strip_hop_by_hop(&mut parts.headers, downstream_upgrade.is_some());
@@ -126,7 +148,7 @@ impl Proxy {
 
         if response.status() == StatusCode::SWITCHING_PROTOCOLS {
             if let Some(downstream_upgrade) = downstream_upgrade {
-                let upstream_upgrade = hyper::upgrade::on(&mut response);
+                let upstream_upgrade = upgrade::on(&mut response);
                 tokio::spawn(async move {
                     match tokio::try_join!(downstream_upgrade, upstream_upgrade) {
                         Ok((downstream, upstream)) => {
