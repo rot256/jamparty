@@ -122,13 +122,18 @@ async fn presence_follows_two_joiners() {
     within("bob gone", view.wait_for(|view| view.joiners.len() == 1))
         .await
         .unwrap();
-    let next = within("the presence event", body.frame())
-        .await
-        .unwrap()
-        .unwrap();
-    let next = String::from_utf8(next.into_data().unwrap().to_vec()).unwrap();
-    assert!(next.contains("\"type\":\"presence\""), "{next}");
-    assert!(!next.contains("bob"), "{next}");
+    // Presence that still lists bob may be on its way when he leaves (it is
+    // coalesced); the stream must come to one without him.
+    within("a presence event without bob", async {
+        loop {
+            let frame = body.frame().await.unwrap().unwrap();
+            let event = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+            if event.contains("\"type\":\"presence\"") && !event.contains("bob") {
+                break;
+            }
+        }
+    })
+    .await;
     until("the share to drop bob", || share.presence().len() == 1).await;
 }
 
