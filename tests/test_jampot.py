@@ -115,6 +115,30 @@ class EchoHandler(FixtureHandler):
         _ = self.wfile.write(body)
 
 
+class StreamedHandler(BaseHTTPRequestHandler):
+    """A dev server that streams its page in chunks, without a length."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format: str, *_args: object) -> None:
+        del format
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        for chunk in [
+            b"<!doctype html><html><body><h1>Streamed",
+            b" page</h1><p id='intro'>In chunks.</p>",
+            b"</body></html>",
+        ]:
+            _ = self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+            self.wfile.flush()
+            time.sleep(0.05)
+        _ = self.wfile.write(b"0\r\n\r\n")
+
+
 @contextmanager
 def upstream_server(
     host: str = "127.0.0.1", handler: type[BaseHTTPRequestHandler] = FixtureHandler
@@ -499,6 +523,23 @@ def test_the_dev_server_sees_its_own_origin(tmp_path: Path, page: Page) -> None:
             "referer": f"{upstream}/?from=page",
             "forwarded": None,
         }
+
+
+def test_streamed_html_gets_the_overlay(tmp_path: Path, page: Page) -> None:
+    with (
+        upstream_server(handler=StreamedHandler) as upstream,
+        share(tmp_path, "proxy", upstream) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        status, body = request(joined, "/")
+        assert status == 200
+        assert body.startswith(b"<!doctype html><html><body><h1>Streamed page</h1>")
+        assert b"/_jampot/client.js?version=" in body
+        _ = page.goto(joined.url)
+        expect(page.locator("h1")).to_have_text("Streamed page")
+        expect(page.locator("#jampot #connection")).to_have_attribute(
+            "data-state", "green"
+        )
 
 
 def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:

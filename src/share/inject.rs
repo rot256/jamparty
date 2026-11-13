@@ -1,11 +1,16 @@
-//! Injects the browser client into HTML responses.
+//! Injects the browser client into HTML responses: before `</body>` in
+//! HTML of a known length (up to 2 MB, read whole), at the end of HTML
+//! streamed without one (passed on as it comes). Encoded (compressed) HTML
+//! passes untouched; the proxy asks dev servers for none.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, future};
 
 use bytes::Bytes;
-use http_body_util::BodyExt;
+use futures_util::{StreamExt, TryStreamExt, stream};
+use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::{
     Method, Response, StatusCode,
+    body::Frame,
     header::{self, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, ETAG},
 };
 
@@ -53,15 +58,17 @@ pub(crate) async fn maybe_inject_client(
         }
         return Ok(response);
     }
-    let content_length = response
-        .headers()
-        .get(CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<usize>().ok());
-    // Streamed HTML (no length) passes through untouched, as does large HTML.
+    let content_length = match response.headers().get(CONTENT_LENGTH) {
+        None => return Ok(append_client(response, request_method, mode)),
+        Some(value) => value
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok()),
+    };
+    // Large HTML (or a length that is not one) passes through untouched.
     let Some(content_length) = content_length.filter(|length| *length <= MAX_HTML_RESPONSE_BYTES)
     else {
-        tracing::debug!("streamed or large HTML was not annotated");
+        tracing::debug!("large HTML was not annotated");
         return Ok(response);
     };
 
@@ -98,6 +105,25 @@ pub(crate) async fn maybe_inject_client(
     let bytes = inject_client(&bytes, mode);
     annotate_headers(&mut parts.headers, Some(bytes.len()));
     Ok(Response::from_parts(parts, full_body(bytes)))
+}
+
+/// Streamed HTML (no length): passed on as it arrives, the client after
+/// its last chunk. Trailers are dropped (the client comes after the data).
+fn append_client(
+    response: Response<AppBody>,
+    request_method: &Method,
+    mode: ClientMode,
+) -> Response<AppBody> {
+    let (mut parts, body) = response.into_parts();
+    annotate_headers(&mut parts.headers, None);
+    if request_method == Method::HEAD {
+        return Response::from_parts(parts, body);
+    }
+    let script = Bytes::from(client_script(mode).into_owned());
+    let frames = BodyStream::new(body)
+        .try_filter(|frame| future::ready(frame.is_data()))
+        .chain(stream::once(future::ready(Ok(Frame::data(script)))));
+    Response::from_parts(parts, StreamBody::new(frames).boxed_unsync())
 }
 
 fn annotate_headers(headers: &mut header::HeaderMap, content_length: Option<usize>) {
@@ -145,13 +171,19 @@ fn inject_client(html: &[u8], mode: ClientMode) -> Bytes {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use bytes::Bytes;
-    use http_body_util::{BodyExt, Full};
-    use hyper::{Method, Response, header};
+    use futures_util::stream;
+    use http_body_util::{BodyExt, Full, StreamBody};
+    use hyper::{Method, Response, body::Frame, header};
+    use tokio::sync::mpsc;
 
     use crate::share::{
-        body::BodyError,
-        inject::{ClientMode, MAX_HTML_RESPONSE_BYTES, inject_client, maybe_inject_client},
+        body::{AppBody, BodyError},
+        inject::{
+            ClientMode, EDIT_SCRIPT, MAX_HTML_RESPONSE_BYTES, inject_client, maybe_inject_client,
+        },
     };
 
     #[tokio::test]
@@ -170,6 +202,65 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(refused.status, 502);
+    }
+
+    /// A streamed HTML response whose chunks come from `chunks`.
+    fn streamed(chunks: mpsc::Receiver<&'static str>) -> Response<AppBody> {
+        let frames = stream::unfold(chunks, |mut chunks| async move {
+            let chunk = chunks.recv().await?;
+            Some((
+                Ok(Frame::data(Bytes::from_static(chunk.as_bytes()))),
+                chunks,
+            ))
+        });
+        let mut response = Response::new(
+            StreamBody::new(frames)
+                .map_err(|never: Infallible| match never {})
+                .boxed_unsync(),
+        );
+        let headers = response.headers_mut();
+        headers.insert(header::CONTENT_TYPE, "text/html".parse().unwrap());
+        headers.insert(header::ETAG, "\"1\"".parse().unwrap());
+        response
+    }
+
+    #[tokio::test]
+    async fn streamed_html_gets_the_client_at_its_end_unbuffered() {
+        let (send, chunks) = mpsc::channel(4);
+        let response = maybe_inject_client(streamed(chunks), &Method::GET, ClientMode::Edit)
+            .await
+            .unwrap();
+        let headers = response.headers();
+        assert!(headers.get(header::CONTENT_LENGTH).is_none());
+        assert!(headers.get(header::ETAG).is_none());
+        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+        let mut body = response.into_body();
+        // The first chunk passes while the rest is still to come.
+        send.send("<html><body><h1>Hi</h1>").await.unwrap();
+        let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert_eq!(first, Bytes::from_static(b"<html><body><h1>Hi</h1>"));
+        send.send("</body></html>").await.unwrap();
+        drop(send);
+        let rest = body.collect().await.unwrap().to_bytes();
+        let rest = String::from_utf8(rest.to_vec()).unwrap();
+        let script = String::from_utf8(EDIT_SCRIPT.to_vec()).unwrap();
+        assert_eq!(rest, format!("</body></html>{script}"));
+    }
+
+    #[tokio::test]
+    async fn a_head_for_streamed_html_is_annotated_alone() {
+        let (send, chunks) = mpsc::channel(1);
+        drop(send);
+        let response = maybe_inject_client(streamed(chunks), &Method::HEAD, ClientMode::Edit)
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert!(response.headers().get(header::CONTENT_LENGTH).is_none());
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(body.is_empty());
     }
 
     #[test]
