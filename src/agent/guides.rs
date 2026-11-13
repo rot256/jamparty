@@ -31,8 +31,8 @@ pub(crate) enum Kind {
     Other,
 }
 
-const SOURCES: &str = "\
-     jampot serve <dir>      a static directory (pages reload when files change)
+const SOURCES: &str =
+    "     jampot serve <dir>      a static directory (pages reload when files change)
      jampot proxy <url>      a running dev server, e.g. http://127.0.0.1:5173
 ";
 
@@ -200,5 +200,7 @@ mod tests {
         assert!(guide(Kind::T3).contains("--t3-token-file"));
         assert!(guide(Kind::Claude).contains("run_in_background"));
         assert!(guide(Kind::Other).contains("jampot recv"));
+        // The example commands stay indented under their step.
+        assert!(guide(Kind::Other).contains("\n     jampot serve <dir>  "));
     }
 }
