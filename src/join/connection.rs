@@ -21,12 +21,12 @@ use crate::{
     join::{control::Control, session::Session},
     protocol::{
         control::{
-            Envelope, Greeting, Hello, JoinerMessage, RefusedReason, ShareMessage, SiteInfo,
+            Envelope, Greeting, Hello, JoinerMessage, REFUSED_CODE, RefusedReason, ShareMessage,
+            SiteInfo,
         },
         decode_line,
         presence::Support,
     },
-    share::REFUSED_CODE,
 };
 
 /// How long to wait for the share's close reason after admission failed.

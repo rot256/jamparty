@@ -25,14 +25,14 @@ use tokio::{
 
 use crate::{
     Report,
+    adapters::http::{
+        AppBody, HEADER_READ_TIMEOUT, RequestError, full_body, javascript_response,
+        map_incoming_response,
+    },
     core::request::{
         FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade, is_navigation,
     },
     join::{control::Control, session::Session, socket},
-    share::{
-        HEADER_READ_TIMEOUT,
-        body::{AppBody, RequestError, full_body, javascript_response, map_incoming_response},
-    },
 };
 
 /// The browser client the share's pages load: this joiner's own, so it

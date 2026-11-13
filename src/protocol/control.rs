@@ -210,6 +210,10 @@ pub(crate) struct Anchor {
     pub(crate) selector: CommentSelector,
 }
 
+/// The QUIC close code for a refused joiner; the reason is the
+/// [`RefusedReason`]'s text.
+pub(crate) const REFUSED_CODE: u32 = 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -224,6 +228,49 @@ pub(crate) enum RefusedReason {
     Full,
     /// The joiner speaks another protocol version than the share.
     Incompatible,
+}
+
+impl RefusedReason {
+    /// How the reason is written, in a refusal and its close.
+    #[must_use]
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::WrongSecret => "wrong_secret",
+            Self::BadHello => "bad_hello",
+            Self::Full => "full",
+            Self::Incompatible => "incompatible",
+        }
+    }
+
+    const ALL: [Self; 4] = [
+        Self::WrongSecret,
+        Self::BadHello,
+        Self::Full,
+        Self::Incompatible,
+    ];
+}
+
+impl fmt::Display for RefusedReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A close's reason, as [`RefusedReason::as_str`] writes it.
+impl TryFrom<&[u8]> for RefusedReason {
+    type Error = Invalid;
+
+    fn try_from(text: &[u8]) -> Result<Self, Self::Error> {
+        Self::ALL
+            .into_iter()
+            .find(|reason| reason.as_str().as_bytes() == text)
+            .ok_or_else(|| {
+                Invalid::new(format!(
+                    "unknown refusal reason {:?}",
+                    String::from_utf8_lossy(text)
+                ))
+            })
+    }
 }
 
 /// The first line on a control stream, from either side, read leniently

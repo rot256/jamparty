@@ -2,7 +2,7 @@
 //! answered from the directory or the dev server, with the client
 //! injected (the joiner serves the client itself).
 
-use std::{convert::Infallible, time::Duration};
+use std::convert::Infallible;
 
 use hyper::{
     Request, Response, StatusCode, body::Incoming, server::conn::http1, service::service_fn,
@@ -12,18 +12,11 @@ use iroh::endpoint::{RecvStream, SendStream};
 use tokio::io;
 
 use crate::{
+    adapters::http::{AppBody, HEADER_READ_TIMEOUT, RequestError},
     protocol::control::SiteInfo,
-    share::{
-        body::{AppBody, RequestError},
-        files::Files,
-        live::ReloadState,
-        proxy::Proxy,
-    },
+    share::{files::Files, live::ReloadState, proxy::Proxy},
 };
 
-/// How long a request's head may take to arrive, here and on the joiner's
-/// local server.
-pub(crate) const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const RESERVED_PREFIX: &str = "/_jampot/";
 
 /// What the share serves.

@@ -32,13 +32,13 @@ use crate::{
     },
     protocol::{
         comment::Author,
-        control::{Envelope, Greeting, JoinerMessage, RefusedReason, ShareMessage},
+        control::{Envelope, Greeting, JoinerMessage, REFUSED_CODE, RefusedReason, ShareMessage},
         decode_line,
         presence::{Support, Whereabouts},
     },
     share::{
         Shared,
-        admission::{REFUSED_CODE, admit, reason_text},
+        admission::admit,
         http::serve_stream,
         hub::{Inbox, Outgoing, Presence},
     },
@@ -100,7 +100,7 @@ pub(crate) async fn handle(
             connection.close(VarInt::from_u32(DROPPED_CODE), ended.as_bytes());
         }
         Ok(Admission::Refused { send, reason }) => {
-            tracing::info!(fingerprint = %key.fingerprint(), reason = reason_text(reason), "joiner refused");
+            tracing::info!(fingerprint = %key.fingerprint(), reason = reason.as_str(), "joiner refused");
             refuse(&connection, send, reason).await;
         }
         Err(error) => tracing::debug!(%error, "joiner left before admission"),
@@ -184,10 +184,7 @@ async fn refuse(connection: &Connection, mut send: SendStream, reason: RefusedRe
         // reason too in case it does not.
         let _ = timeout(REFUSAL_GRACE, connection.closed()).await;
     }
-    connection.close(
-        VarInt::from_u32(REFUSED_CODE),
-        reason_text(reason).as_bytes(),
-    );
+    connection.close(VarInt::from_u32(REFUSED_CODE), reason.as_str().as_bytes());
 }
 
 /// Runs an admitted joiner until it leaves; returns why it ended.

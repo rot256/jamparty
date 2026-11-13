@@ -24,13 +24,13 @@ use tokio::{
 use tokio_websockets::{CloseCode, Limits, Message, ServerBuilder, WebSocketStream};
 
 use crate::{
+    adapters::http::{AppBody, RequestError, empty_response},
     join::{
         api::{FromPage, Outcome, RequestNumber, ToPage},
         pages::{Attached, PageId, frame},
         session::Session,
     },
     protocol::MAX_LINE_BYTES,
-    share::body::{AppBody, RequestError, empty_response},
 };
 
 /// How often the joiner pings a page; a page that hears nothing for more

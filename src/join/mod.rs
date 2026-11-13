@@ -97,7 +97,7 @@ impl fmt::Display for Refused {
             RefusedReason::Full => "it has as many joiners as it takes",
             RefusedReason::Incompatible => "it speaks another protocol version",
         };
-        write!(f, "the share refused this joiner ({:?}): {why}", self.0)
+        write!(f, "the share refused this joiner ({}): {why}", self.0)
     }
 }
 

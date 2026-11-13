@@ -15,8 +15,8 @@ use hyper::{
 };
 
 use crate::{
+    adapters::http::{AppBody, RequestError, full_body},
     protocol::control::Revision,
-    share::body::{AppBody, RequestError, full_body},
 };
 
 const MAX_HTML_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -175,13 +175,10 @@ mod tests {
     use tokio::sync::mpsc;
 
     use crate::{
+        adapters::http::{AppBody, BodyError},
         protocol::control::Revision,
-        share::{
-            body::{AppBody, BodyError},
-            inject::{
-                ClientMode, EDIT_SCRIPT, MAX_HTML_RESPONSE_BYTES, inject_client,
-                maybe_inject_client,
-            },
+        share::inject::{
+            ClientMode, EDIT_SCRIPT, MAX_HTML_RESPONSE_BYTES, inject_client, maybe_inject_client,
         },
     };
 

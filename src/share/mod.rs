@@ -3,7 +3,6 @@
 //! streams and takes their comments.
 
 mod admission;
-pub(crate) mod body;
 mod connection;
 pub(crate) mod delivery;
 mod files;
@@ -45,8 +44,6 @@ use crate::{
         proxy::{Proxy, UpstreamUrl},
     },
 };
-
-pub(crate) use crate::share::{admission::REFUSED_CODE, http::HEADER_READ_TIMEOUT};
 
 /// Connections waiting for admission at once, by default.
 const MAX_UNADMITTED: usize = 32;

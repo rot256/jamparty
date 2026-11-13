@@ -26,11 +26,9 @@ use tokio::io::copy_bidirectional;
 use url::Url;
 
 use crate::{
+    adapters::http::{AppBody, RequestError, incoming_body, map_incoming_response},
     core::{ids::Sid, port::Port},
-    share::{
-        body::{AppBody, RequestError, incoming_body, map_incoming_response},
-        inject::{ClientMode, maybe_inject_client},
-    },
+    share::inject::{ClientMode, maybe_inject_client},
 };
 
 /// An `http://` or `https://` base URL without credentials, query or

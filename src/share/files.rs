@@ -17,11 +17,9 @@ use nix::libc;
 use tokio::fs;
 
 use crate::{
+    adapters::http::{AppBody, BodyError, RequestError, empty_response},
     protocol::control::Revision,
-    share::{
-        body::{AppBody, BodyError, RequestError, empty_response},
-        inject::{ClientMode, maybe_inject_client},
-    },
+    share::inject::{ClientMode, maybe_inject_client},
 };
 
 #[derive(Clone)]

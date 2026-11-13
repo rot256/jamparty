@@ -1,7 +1,8 @@
-//! Response bodies and small response builders shared by the share's and
-//! the joiner's HTTP code.
+//! HTTP shared by the share's request streams and the joiner's local
+//! server: response bodies, small response builders and the header read
+//! timeout.
 
-use std::{convert::Infallible, error::Error};
+use std::{convert::Infallible, error::Error, time::Duration};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
@@ -11,6 +12,10 @@ use hyper::{
     header::{self, ALLOW, CACHE_CONTROL, CONTENT_TYPE},
 };
 use serde::Serialize;
+
+/// How long a request's head may take to arrive, on the share's request
+/// streams and the joiner's local server.
+pub(crate) const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What hyper takes as a body's error.
 pub(crate) type BodyError = Box<dyn Error + Send + Sync>;

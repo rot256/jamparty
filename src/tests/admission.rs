@@ -19,10 +19,10 @@ use crate::{
     },
     join::Refused,
     protocol::{
-        control::{Envelope, RefusedReason, ShareMessage, SiteInfo},
+        control::{Envelope, REFUSED_CODE, RefusedReason, ShareMessage, SiteInfo},
         presence::Support,
     },
-    share::{REFUSED_CODE, Source, delivery::Target},
+    share::{Source, delivery::Target},
     tests::harness::{
         config, connected, fixture_dir, joiner, net, raw_connection, share_files, share_proxy,
         start, try_joiner, within,

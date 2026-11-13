@@ -3,13 +3,9 @@
 
 use crate::{
     Report,
-    core::{invalid::Invalid, name::JoinerName, token::PartySecret},
+    core::{name::JoinerName, token::PartySecret},
     protocol::control::{Envelope, Hello, JoinerMessage, RefusedReason},
 };
-
-/// The QUIC close code for a refused joiner; the reason is the
-/// [`RefusedReason`] in snake case.
-pub(crate) const REFUSED_CODE: u32 = 1;
 
 /// What the first line said: a message, a clean end, or why there was none
 /// (garbage, or nothing before the deadline).
@@ -48,34 +44,6 @@ pub(crate) fn admit(first: FirstLine, secret: &PartySecret) -> Result<JoinerName
     }
 }
 
-/// The close reason sent with [`REFUSED_CODE`].
-#[must_use]
-pub(crate) fn reason_text(reason: RefusedReason) -> &'static str {
-    match reason {
-        RefusedReason::WrongSecret => "wrong_secret",
-        RefusedReason::BadHello => "bad_hello",
-        RefusedReason::Full => "full",
-        RefusedReason::Incompatible => "incompatible",
-    }
-}
-
-impl TryFrom<&[u8]> for RefusedReason {
-    type Error = Invalid;
-
-    fn try_from(text: &[u8]) -> Result<Self, Self::Error> {
-        match text {
-            b"wrong_secret" => Ok(Self::WrongSecret),
-            b"bad_hello" => Ok(Self::BadHello),
-            b"full" => Ok(Self::Full),
-            b"incompatible" => Ok(Self::Incompatible),
-            other => Err(Invalid::new(format!(
-                "unknown refusal reason {:?}",
-                String::from_utf8_lossy(other)
-            ))),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use rootcause::prelude::report;
@@ -87,7 +55,7 @@ mod tests {
             comment::{Draft, DraftFields},
             control::{Envelope, Hello, JoinerMessage, RefusedReason},
         },
-        share::admission::{admit, reason_text},
+        share::admission::admit,
     };
 
     fn hello(secret: &PartySecret) -> Envelope<JoinerMessage> {
@@ -142,8 +110,13 @@ mod tests {
             RefusedReason::Incompatible,
         ] {
             assert_eq!(
-                RefusedReason::try_from(reason_text(reason).as_bytes()),
+                RefusedReason::try_from(reason.as_str().as_bytes()),
                 Ok(reason)
+            );
+            // The text form is the wire form.
+            assert_eq!(
+                serde_json::to_value(reason).unwrap(),
+                serde_json::json!(reason.as_str())
             );
         }
         assert!(RefusedReason::try_from(b"other".as_slice()).is_err());

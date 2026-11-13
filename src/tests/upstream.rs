@@ -18,7 +18,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{share::body::AppBody, tests::harness::FIXTURE_HTML};
+use crate::{adapters::http::AppBody, tests::harness::FIXTURE_HTML};
 
 pub(crate) struct Upstream {
     pub(crate) addr: SocketAddr,
