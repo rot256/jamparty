@@ -154,9 +154,10 @@ impl Session {
     }
 
     /// The pointer on the page moved: sent on to the share only while the
-    /// cursor switch is on, and only once the page said where it is. The
-    /// page comes in front first, so the share forwards it to the people
-    /// on its page.
+    /// cursor switch is on, and only once the page said where it is. A
+    /// page the pointer moves on comes in front first, so the share
+    /// forwards it to the people on its page; a pointer leaving a page
+    /// that is not in front is no news.
     pub(crate) fn cursor(&self, page: PageId, position: Option<Position>) {
         let url = {
             let mut inner = self.lock();
@@ -167,8 +168,11 @@ impl Session {
             let Some(url) = inner.pages.url(page).cloned() else {
                 return;
             };
-            if inner.pages.current().as_ref() != Some(&url) {
-                inner.pages.activate(page);
+            if !inner.pages.is_current(page) {
+                match position {
+                    Some(_) => inner.pages.activate(page),
+                    None => return,
+                }
             }
             url
         };
@@ -330,5 +334,61 @@ impl Session {
                 self.commit(|inner| inner.state.apply(other), None);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::{
+        core::settings::{Settings, Switch},
+        join::{preferences::Preferences, session::Session},
+        protocol::presence::{CursorSelector, Fraction, PagePath, Position},
+    };
+
+    fn session() -> Session {
+        let Settings {
+            name,
+            keys,
+            comment_mode,
+            show_cursor: _,
+            corner,
+        } = Settings::default();
+        Session::new(Preferences {
+            path: PathBuf::from("/nonexistent/settings.json"),
+            saved: Settings {
+                name,
+                keys,
+                comment_mode,
+                show_cursor: Switch::On,
+                corner,
+            },
+            given: None,
+            default: "alice".parse().unwrap(),
+        })
+    }
+
+    fn url(path: &str) -> Option<PagePath> {
+        Some(path.to_owned().try_into().unwrap())
+    }
+
+    #[test]
+    fn a_pointer_leaving_a_background_tab_does_not_bring_it_in_front() {
+        let session = session();
+        let back = session.attach().unwrap();
+        let front = session.attach().unwrap();
+        session.visit(back.id, url("/back"));
+        session.visit(front.id, url("/front"));
+        session.cursor(back.id, None);
+        assert_eq!(session.whereabouts().url, url("/front"));
+        // A pointer that moves there does.
+        let position = Position {
+            selector: CursorSelector::try_from("h1".to_owned()).unwrap(),
+            x: Fraction::try_from(0).unwrap(),
+            y: Fraction::try_from(0).unwrap(),
+        };
+        session.cursor(back.id, Some(position));
+        assert_eq!(session.whereabouts().url, url("/back"));
     }
 }

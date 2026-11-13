@@ -97,14 +97,24 @@ impl Pages {
         self.pages.get(&id).and_then(|page| page.url.as_ref())
     }
 
+    /// The most recently active page, if any page said where it is.
+    fn front(&self) -> Option<(&PageId, &Page)> {
+        self.pages
+            .iter()
+            .filter(|(_, page)| page.active > 0)
+            .max_by_key(|(_, page)| page.active)
+    }
+
     /// Where the joiner is: the page of its most recently active page.
     #[must_use]
     pub(crate) fn current(&self) -> Option<PagePath> {
-        self.pages
-            .values()
-            .filter(|page| page.active > 0)
-            .max_by_key(|page| page.active)
-            .and_then(|page| page.url.clone())
+        self.front().and_then(|(_, page)| page.url.clone())
+    }
+
+    /// Whether `id` is the most recently active page.
+    #[must_use]
+    pub(crate) fn is_current(&self, id: PageId) -> bool {
+        self.front().is_some_and(|(front, _)| *front == id)
     }
 
     /// Sends `message` to every page it is for: a cursor only to pages on
