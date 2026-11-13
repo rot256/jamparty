@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::watch;
 
 use crate::{
-    core::{settings::Switch, version::Incompatible},
+    core::{ids::CommentId, name::JoinerName, settings::Switch, version::Incompatible},
     describe,
     join::{
         api::{Change, Hello, Outcome, RequestNumber, Submission, ToPage},
@@ -107,7 +107,7 @@ impl Session {
     }
 
     /// The name this joiner goes by now (in its hello, and its comments).
-    pub(crate) fn name(&self) -> crate::core::name::JoinerName {
+    pub(crate) fn name(&self) -> JoinerName {
         self.lock().preferences.name()
     }
 
@@ -261,12 +261,7 @@ impl Session {
 
     /// The share admitted us on `control`; of our comments it still holds
     /// `undelivered`.
-    pub(crate) fn connected(
-        &self,
-        control: Arc<Control>,
-        you: Author,
-        undelivered: &[crate::core::ids::CommentId],
-    ) {
+    pub(crate) fn connected(&self, control: Arc<Control>, you: Author, undelivered: &[CommentId]) {
         *self.control.lock().unwrap_or_else(PoisonError::into_inner) = Some(control);
         self.commit(|inner| inner.state.admitted(you, undelivered), None);
         self.uplink.changed();

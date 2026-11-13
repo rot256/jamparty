@@ -21,6 +21,8 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use iroh::Endpoint;
 use tokio::{sync::Semaphore, task::JoinSet};
 
+#[cfg(test)]
+use crate::protocol::comment::{Author, Comment};
 use crate::{
     Report,
     adapters::{
@@ -207,14 +209,14 @@ impl Share {
     /// Comments waiting for delivery.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn queued(&self) -> Vec<crate::protocol::comment::Comment> {
+    pub(crate) fn queued(&self) -> Vec<Comment> {
         self.shared.hub.queued()
     }
 
     /// Who is connected.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn presence(&self) -> Vec<crate::protocol::comment::Author> {
+    pub(crate) fn presence(&self) -> Vec<Author> {
         self.shared.hub.presence()
     }
 

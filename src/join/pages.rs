@@ -175,6 +175,7 @@ pub(crate) fn frame(message: &ToPage) -> Bytes {
 #[cfg(test)]
 mod tests {
     use crate::{
+        core::ids::EndpointKey,
         join::{
             api::ToPage,
             pages::{MAX_PAGES, PAGE_QUEUE, Pages},
@@ -226,7 +227,7 @@ mod tests {
         pages.visit(slow.id, url("/"));
         pages.visit(quick.id, url("/"));
         let cursor = ToPage::Cursor {
-            key: crate::core::ids::EndpointKey([1; 32]),
+            key: EndpointKey([1; 32]),
             url: "/".to_owned().try_into().unwrap(),
             position: None,
         };
