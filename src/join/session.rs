@@ -24,7 +24,7 @@ use crate::{
         name::JoinerName,
         request::LocalOrigin,
         rng::{Rng, random_array},
-        settings::{Keys, Settings, SettingsChange, Switch},
+        settings::{Corner, Keys, Settings, SettingsChange, Switch},
     },
     join::{
         markdown,
@@ -129,6 +129,7 @@ pub(crate) struct PageSettings {
     pub(crate) keys: Keys,
     pub(crate) comment_mode: Switch,
     pub(crate) show_cursor: Switch,
+    pub(crate) corner: Corner,
 }
 
 /// The joiner's settings: the saved ones, and the name for this run.
@@ -157,6 +158,7 @@ impl Preferences {
             keys,
             comment_mode,
             show_cursor,
+            corner,
         } = &self.saved;
         PageSettings {
             name: self.name(),
@@ -164,6 +166,7 @@ impl Preferences {
             keys: keys.clone(),
             comment_mode: *comment_mode,
             show_cursor: *show_cursor,
+            corner: *corner,
         }
     }
 }

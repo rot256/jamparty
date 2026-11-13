@@ -46,6 +46,15 @@ const MARKUP = `
       <button class="chip" id="show-cursor-key" type="button" aria-label="Key for show my cursor">X</button>
       <button class="switch" id="show-cursor" type="button" role="switch" aria-checked="false" aria-labelledby="show-cursor-label"></button>
     </div>
+    <div class="control" id="corner-row">
+      <span class="label" id="corner-label">Corner</span>
+      <span id="corners" role="group" aria-labelledby="corner-label">
+        <button class="corner" type="button" data-corner="top-left" aria-label="Top left" aria-pressed="false">↖</button>
+        <button class="corner" type="button" data-corner="top-right" aria-label="Top right" aria-pressed="false">↗</button>
+        <button class="corner" type="button" data-corner="bottom-left" aria-label="Bottom left" aria-pressed="false">↙</button>
+        <button class="corner" type="button" data-corner="bottom-right" aria-label="Bottom right" aria-pressed="true">↘</button>
+      </span>
+    </div>
     <div id="name-row">
       <label for="name-field">Name</label>
       <input id="name-field" type="text" maxlength="40" autocomplete="nickname" spellcheck="false">
@@ -104,6 +113,8 @@ export class Ui {
   readonly highlight: HTMLDivElement;
   readonly editHighlight: HTMLDivElement;
   readonly edit: HTMLButtonElement;
+  /** The four corner buttons in the control panel. */
+  readonly corners: HTMLButtonElement[];
   readonly messageHighlight: HTMLDivElement;
   readonly bar: HTMLDivElement;
   readonly pill: HTMLButtonElement;
@@ -170,6 +181,9 @@ export class Ui {
     this.highlight = find("#highlight", HTMLDivElement);
     this.editHighlight = find("#edit-highlight", HTMLDivElement);
     this.edit = find("#edit", HTMLButtonElement);
+    this.corners = Array.from(shadow.querySelectorAll(".corner")).filter(
+      (button) => button instanceof HTMLButtonElement,
+    );
     this.messageHighlight = find("#message-highlight", HTMLDivElement);
     this.bar = find("#bar", HTMLDivElement);
     this.pill = find("#pill", HTMLButtonElement);

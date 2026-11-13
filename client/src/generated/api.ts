@@ -19,6 +19,8 @@ export type RefusedReason = "wrong_secret" | "bad_hello" | "full";
 
 export type Switch = "on" | "off";
 
+export type Corner = "bottom-right" | "bottom-left" | "top-right" | "top-left";
+
 export type KeyBinding = string;
 
 export type KeysFields = { commentMode: KeyBinding, showCursor: KeyBinding, };
@@ -75,9 +77,9 @@ name: JoinerName,
 /**
  * No name was chosen yet (none saved, no `--name`): the page asks.
  */
-askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, };
+askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: Corner, };
 
-export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Switch, showCursor?: Switch, };
+export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Switch, showCursor?: Switch, corner?: Corner, };
 
 export type Answer = { id: CommentId, html: string, 
 /**
@@ -206,7 +208,7 @@ name: JoinerName,
 /**
  * No name was chosen yet (none saved, no `--name`): the page asks.
  */
-askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, };
+askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: Corner, };
 
 export type Submission = { ref: CommentRef, page: string, selector: string, selectedText: string | null, comment: string, };
 

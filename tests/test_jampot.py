@@ -927,6 +927,83 @@ def test_edit_mode_follows_comment_mode(tmp_path: Path, page: Page) -> None:
         assert page.evaluate("() => window.pressed") == 2
 
 
+def test_the_overlay_moves_to_any_corner(tmp_path: Path, page: Page) -> None:
+    def place(selector: str) -> tuple[bool, bool]:
+        """Whether `selector` sits in the left half and the top half."""
+        size = page.viewport_size
+        box = overlay(page, selector).bounding_box()
+        assert size is not None and box is not None
+        return (
+            box["x"] + box["width"] / 2 < size["width"] / 2,
+            box["y"] + box["height"] / 2 < size["height"] / 2,
+        )
+
+    def corner(name: str) -> Locator:
+        return overlay(page, f'.corner[data-corner="{name}"]')
+
+    with share(tmp_path, "serve", str(SITE)) as shared:
+        with join(tmp_path, shared) as joined:
+            _ = page.goto(joined.url)
+            expect(overlay(page, "#connection")).to_have_attribute(
+                "data-state", "green"
+            )
+            assert place("#bar") == (False, False)
+            overlay(page, "#gear").click()
+            expect(corner("bottom-right")).to_have_attribute("aria-pressed", "true")
+
+            for name, left, top in [
+                ("top-left", True, True),
+                ("bottom-left", True, False),
+                ("top-right", False, True),
+            ]:
+                if not overlay(page, "#panel").is_visible():
+                    overlay(page, "#gear").click()
+                corner(name).click()
+                expect(corner(name)).to_have_attribute("aria-pressed", "true")
+                expect(page.locator("#jampot")).to_have_attribute("data-corner", name)
+                assert place("#bar") == (left, top)
+                assert place("#panel") == (left, top)
+                # The panel opens towards the middle: below a top bar, above
+                # a bottom one.
+                bar = overlay(page, "#bar").bounding_box()
+                panel = overlay(page, "#panel").bounding_box()
+                assert bar is not None and panel is not None
+                if top:
+                    assert panel["y"] >= bar["y"] + bar["height"]
+                else:
+                    assert panel["y"] + panel["height"] <= bar["y"]
+                # The comment list goes to the same corner.
+                overlay(page, "#gear").click()
+                overlay(page, "#pill").click()
+                expect(overlay(page, "#list")).to_be_visible()
+                assert place("#list") == (left, top)
+                overlay(page, "#collapse").click()
+
+            # Top right now: the toast and unanchored answers go there too.
+            _ = page.keyboard.press("/")
+            textarea = overlay(page, "textarea")
+            textarea.fill("A page comment.")
+            textarea.press("Enter")
+            expect(overlay(page, "#toast")).to_be_visible()
+            assert place("#toast") == (False, True)
+            _ = jampot(tmp_path, "send", "Thanks, looking at it.")
+            answer = overlay(page, "#agent-general .agent-message")
+            expect(answer).to_contain_text("Thanks, looking at it.")
+            assert place("#agent-general .agent-message") == (False, True)
+
+        # Saved on disk: a new joiner with the same home starts there.
+        assert settings_file(tmp_path)["corner"] == "top-right"
+        with join(tmp_path, shared) as joined:
+            _ = page.goto(joined.url)
+            expect(overlay(page, "#connection")).to_have_attribute(
+                "data-state", "green"
+            )
+            expect(page.locator("#jampot")).to_have_attribute(
+                "data-corner", "top-right"
+            )
+            assert place("#bar") == (False, True)
+
+
 def test_outside_clicks_close_the_panel_and_the_list(
     tmp_path: Path, page: Page
 ) -> None:

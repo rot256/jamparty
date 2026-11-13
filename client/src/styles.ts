@@ -214,6 +214,33 @@ export const styles = `
 
   .control .label { flex-grow: 1; cursor: pointer; }
 
+  #corners { display: flex; gap: 4px; }
+
+  .corner {
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid #3a3a3a;
+    border-radius: 5px;
+    background: transparent;
+    color: #cfcac2;
+    cursor: pointer;
+    font: 13px/1 system-ui, sans-serif;
+  }
+
+  .corner[aria-pressed="true"] { border-color: #2f9e44; background: #2f9e44; color: #fff; }
+
+  /* The chosen corner (Panel sets data-corner on the host): what sits at
+     the bottom right by default moves to that corner. */
+  :host([data-corner$="left"]) :is(#bar, #list, #panel, #notice, #toast, #agent-general) {
+    right: auto;
+    left: 14px;
+  }
+
+  :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
+  :host([data-corner^="top"]) #panel { bottom: auto; top: 58px; }
+  :host([data-corner^="top"]) :is(#notice, #toast, #agent-general) { bottom: auto; top: 52px; }
+
   .chip {
     padding: 1px 5px;
     border: 1px solid #3a3a3a;

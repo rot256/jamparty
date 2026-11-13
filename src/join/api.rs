@@ -516,7 +516,7 @@ mod bindings {
         core::{
             ids::{CommentId, EndpointKey, Fingerprint},
             name::JoinerName,
-            settings::{KeyBinding, Keys, KeysFields, SettingsChange, Switch},
+            settings::{Corner, KeyBinding, Keys, KeysFields, SettingsChange, Switch},
         },
         join::{
             api::{API_VERSION, Limited429, Pointer, Queued, Saved, Status, Submission, Visit},
@@ -543,6 +543,7 @@ mod bindings {
             StatusLine::decl(&cfg),
             RefusedReason::decl(&cfg),
             Switch::decl(&cfg),
+            Corner::decl(&cfg),
             KeyBinding::decl(&cfg),
             KeysFields::decl(&cfg),
             Keys::decl(&cfg),

@@ -3,10 +3,16 @@
 
 import { changeSettings } from "./api";
 import { PALETTE, RESERVED_KEYS } from "./config";
-import type { Keys, PageSettings, Person, Saved } from "./generated/api";
+import type { Corner, Keys, PageSettings, Person, Saved } from "./generated/api";
 import type { Ui } from "./ui";
 
 type Action = keyof Keys;
+
+const CORNERS: readonly Corner[] = ["bottom-right", "bottom-left", "top-right", "top-left"];
+
+function isCorner(value: string | undefined): value is Corner {
+  return CORNERS.some((corner) => corner === value);
+}
 
 const ACTION_NAMES: Record<Action, string> = {
   commentMode: "comment mode",
@@ -57,6 +63,14 @@ export class Panel {
     ui.gear.addEventListener("click", () => { this.toggle(); });
     ui.commentMode.addEventListener("click", () => { this.flip("commentMode"); });
     ui.showCursor.addEventListener("click", () => { this.flip("showCursor"); });
+    for (const button of ui.corners) {
+      button.addEventListener("click", () => {
+        const corner = button.dataset.corner;
+        if (!isCorner(corner) || this.settings?.corner === corner) return;
+        this.message("");
+        void this.change({ corner });
+      });
+    }
     for (const [action, chip] of this.chips()) {
       chip.addEventListener("click", () => { this.listen(action); });
     }
@@ -121,6 +135,11 @@ export class Panel {
       if (this.listening !== action) chip.textContent = keyLabel(settings.keys[action]);
     }
     if (ui.shadow.activeElement !== ui.nameField) ui.nameField.value = settings.name;
+    for (const button of ui.corners) {
+      button.setAttribute("aria-pressed", String(button.dataset.corner === settings.corner));
+    }
+    // The styles place the pill, gear and panels by the host's corner.
+    ui.host.dataset.corner = settings.corner;
     this.onSettings(settings);
   }
 

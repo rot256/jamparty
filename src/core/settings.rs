@@ -1,5 +1,5 @@
 //! The joiner's settings (docs/ui.md): its saved name, the overlay's key
-//! bindings and its two switches. Kept by the joiner process on disk (see
+//! bindings, its two switches and the corner it sits in. Kept by the joiner process on disk (see
 //! `adapters::settings`), changed from the page.
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,18 @@ use crate::core::{invalid::Invalid, name::JoinerName, text::check_line};
 pub(crate) enum Switch {
     On,
     Off,
+}
+
+/// The screen corner the overlay's pill, gear and panels sit in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) enum Corner {
+    #[default]
+    BottomRight,
+    BottomLeft,
+    TopRight,
+    TopLeft,
 }
 
 pub(crate) const MAX_KEY: usize = 20;
@@ -108,6 +120,8 @@ pub(crate) struct Settings {
     pub(crate) comment_mode: Switch,
     #[serde(default = "show_cursor_default")]
     pub(crate) show_cursor: Switch,
+    #[serde(default)]
+    pub(crate) corner: Corner,
 }
 
 /// Comment mode starts on (docs/ui.md, open question: kept on).
@@ -127,6 +141,7 @@ impl Default for Settings {
             keys: Keys::default(),
             comment_mode: comment_mode_default(),
             show_cursor: show_cursor_default(),
+            corner: Corner::default(),
         }
     }
 }
@@ -148,6 +163,9 @@ pub(crate) struct SettingsChange {
     #[serde(default)]
     #[cfg_attr(test, ts(optional))]
     pub(crate) show_cursor: Option<Switch>,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) corner: Option<Corner>,
 }
 
 impl Settings {
@@ -159,19 +177,21 @@ impl Settings {
             keys,
             comment_mode,
             show_cursor,
+            corner,
         } = change;
         Self {
             name: name.or_else(|| self.name.clone()),
             keys: keys.unwrap_or_else(|| self.keys.clone()),
             comment_mode: comment_mode.unwrap_or(self.comment_mode),
             show_cursor: show_cursor.unwrap_or(self.show_cursor),
+            corner: corner.unwrap_or(self.corner),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::core::settings::{Keys, Settings, SettingsChange, Switch};
+    use crate::core::settings::{Corner, Keys, Settings, SettingsChange, Switch};
 
     #[test]
     fn defaults_and_parsing() {
@@ -179,10 +199,23 @@ mod tests {
         assert_eq!(defaults, Settings::default());
         assert_eq!(defaults.comment_mode, Switch::On);
         assert_eq!(defaults.show_cursor, Switch::Off);
+        assert_eq!(defaults.corner, Corner::BottomRight);
         assert_eq!(
             serde_json::to_string(&defaults).unwrap(),
-            r#"{"keys":{"commentMode":"c","showCursor":"x"},"commentMode":"on","showCursor":"off"}"#
+            r#"{"keys":{"commentMode":"c","showCursor":"x"},"commentMode":"on","showCursor":"off","corner":"bottom-right"}"#
         );
+        // Each corner, and only those.
+        for (text, corner) in [
+            ("bottom-right", Corner::BottomRight),
+            ("bottom-left", Corner::BottomLeft),
+            ("top-right", Corner::TopRight),
+            ("top-left", Corner::TopLeft),
+        ] {
+            let change: SettingsChange =
+                serde_json::from_str(&format!(r#"{{"corner":"{text}"}}"#)).unwrap();
+            assert_eq!(Settings::default().with(change).corner, corner);
+        }
+        assert!(serde_json::from_str::<SettingsChange>(r#"{"corner":"middle"}"#).is_err());
         // A newer jampot's fields are ignored.
         let newer: Settings = serde_json::from_str(r#"{"name":"alice","theme":"dark"}"#).unwrap();
         assert_eq!(newer.name.unwrap().as_str(), "alice");

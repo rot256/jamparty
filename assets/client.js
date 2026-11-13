@@ -719,6 +719,10 @@ var Registration = class {
 };
 
 // client/src/panel.ts
+var CORNERS = ["bottom-right", "bottom-left", "top-right", "top-left"];
+function isCorner(value) {
+  return CORNERS.some((corner) => corner === value);
+}
 var ACTION_NAMES = {
   commentMode: "comment mode",
   showCursor: "show my cursor"
@@ -754,6 +758,14 @@ var Panel = class {
     ui.showCursor.addEventListener("click", () => {
       this.flip("showCursor");
     });
+    for (const button of ui.corners) {
+      button.addEventListener("click", () => {
+        const corner = button.dataset.corner;
+        if (!isCorner(corner) || this.settings?.corner === corner) return;
+        this.message("");
+        void this.change({ corner });
+      });
+    }
     for (const [action, chip] of this.chips()) {
       chip.addEventListener("click", () => {
         this.listen(action);
@@ -823,6 +835,10 @@ var Panel = class {
       if (this.listening !== action) chip.textContent = keyLabel(settings.keys[action]);
     }
     if (ui.shadow.activeElement !== ui.nameField) ui.nameField.value = settings.name;
+    for (const button of ui.corners) {
+      button.setAttribute("aria-pressed", String(button.dataset.corner === settings.corner));
+    }
+    ui.host.dataset.corner = settings.corner;
     this.onSettings(settings);
   }
   async change(change) {
@@ -1979,6 +1995,33 @@ var styles = `
 
   .control .label { flex-grow: 1; cursor: pointer; }
 
+  #corners { display: flex; gap: 4px; }
+
+  .corner {
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid #3a3a3a;
+    border-radius: 5px;
+    background: transparent;
+    color: #cfcac2;
+    cursor: pointer;
+    font: 13px/1 system-ui, sans-serif;
+  }
+
+  .corner[aria-pressed="true"] { border-color: #2f9e44; background: #2f9e44; color: #fff; }
+
+  /* The chosen corner (Panel sets data-corner on the host): what sits at
+     the bottom right by default moves to that corner. */
+  :host([data-corner$="left"]) :is(#bar, #list, #panel, #notice, #toast, #agent-general) {
+    right: auto;
+    left: 14px;
+  }
+
+  :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
+  :host([data-corner^="top"]) #panel { bottom: auto; top: 58px; }
+  :host([data-corner^="top"]) :is(#notice, #toast, #agent-general) { bottom: auto; top: 52px; }
+
   .chip {
     padding: 1px 5px;
     border: 1px solid #3a3a3a;
@@ -2418,6 +2461,15 @@ var MARKUP = `
       <button class="chip" id="show-cursor-key" type="button" aria-label="Key for show my cursor">X</button>
       <button class="switch" id="show-cursor" type="button" role="switch" aria-checked="false" aria-labelledby="show-cursor-label"></button>
     </div>
+    <div class="control" id="corner-row">
+      <span class="label" id="corner-label">Corner</span>
+      <span id="corners" role="group" aria-labelledby="corner-label">
+        <button class="corner" type="button" data-corner="top-left" aria-label="Top left" aria-pressed="false">↖</button>
+        <button class="corner" type="button" data-corner="top-right" aria-label="Top right" aria-pressed="false">↗</button>
+        <button class="corner" type="button" data-corner="bottom-left" aria-label="Bottom left" aria-pressed="false">↙</button>
+        <button class="corner" type="button" data-corner="bottom-right" aria-label="Bottom right" aria-pressed="true">↘</button>
+      </span>
+    </div>
     <div id="name-row">
       <label for="name-field">Name</label>
       <input id="name-field" type="text" maxlength="40" autocomplete="nickname" spellcheck="false">
@@ -2475,6 +2527,8 @@ var Ui = class _Ui {
   highlight;
   editHighlight;
   edit;
+  /** The four corner buttons in the control panel. */
+  corners;
   messageHighlight;
   bar;
   pill;
@@ -2539,6 +2593,9 @@ var Ui = class _Ui {
     this.highlight = find("#highlight", HTMLDivElement);
     this.editHighlight = find("#edit-highlight", HTMLDivElement);
     this.edit = find("#edit", HTMLButtonElement);
+    this.corners = Array.from(shadow.querySelectorAll(".corner")).filter(
+      (button) => button instanceof HTMLButtonElement
+    );
     this.messageHighlight = find("#message-highlight", HTMLDivElement);
     this.bar = find("#bar", HTMLDivElement);
     this.pill = find("#pill", HTMLButtonElement);

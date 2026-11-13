@@ -65,9 +65,13 @@ text. Rows:
 |---|---|---|---|
 | Comment mode | switch | on (open question, see end) | `C` |
 | Show my cursor | switch | **off** | `X` |
+| Corner | four buttons ↖ ↗ ↙ ↘ | bottom right | |
 
 - Comment mode off: the page behaves normally: right-click shows the
   browser menu, `/` types normally, nothing is intercepted. The pill stays.
+- Corner: the pill, the gear, both panels, notices and answers not
+  anchored to an element move to that corner of the window; panels open
+  towards the middle. Saved with the other settings.
 - Show my cursor off: the page sends **no pointer data at all** (not
   "sent and hidden by others"). On: see Cursors.
 - Keys work only when no text field, textarea or contenteditable has
