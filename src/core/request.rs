@@ -11,15 +11,19 @@
 //!   `http://<sid>.localhost:<port>`; other requests with an `Origin` need
 //!   that one too.
 //!
-//! Paths are matched exactly as received (no decoding or normalisation):
-//! only the exact reserved paths are the joiner's own, everything else
-//! goes to the share.
+//! Paths are matched exactly as received (no decoding or normalisation).
+//! Everything under `/_jampot/api/` is the joiner's own: its two paths
+//! (the page API's version, and the page's socket, the one path that
+//! takes an upgrade), and a 404 for any other, which never reaches the
+//! share. Everything else goes to the share.
 
 use crate::core::{ids::Sid, port::Port};
 
 /// Every response carries `Content-Security-Policy` with this value.
 pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
 
+/// The joiner's own paths start with this.
+pub(crate) const API_PREFIX: &str = "/_jampot/api/";
 pub(crate) const STATUS_PATH: &str = "/_jampot/api/status";
 pub(crate) const SOCKET_PATH: &str = "/_jampot/api/socket";
 
@@ -72,6 +76,8 @@ pub(crate) enum Route {
     Status,
     /// GET with an upgrade: the page's WebSocket.
     Socket,
+    /// Another path under [`API_PREFIX`]: not found, and not the share's.
+    Unknown,
     /// Forward to the share.
     Proxy,
 }
@@ -175,6 +181,7 @@ fn route(facts: &RequestFacts<'_>) -> Result<Route, Refusal> {
     let (route, method, upgrade) = match facts.path {
         STATUS_PATH => (Route::Status, Method::Get, Upgrade::No),
         SOCKET_PATH => (Route::Socket, Method::Get, Upgrade::Yes),
+        path if path.starts_with(API_PREFIX) => return Ok(Route::Unknown),
         _ => return Ok(Route::Proxy),
     };
     if facts.method == method && facts.upgrade == upgrade {

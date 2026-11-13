@@ -197,8 +197,12 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         finally:
             page.close()
         assert hello(joined)["mine"] == [outcome["commented"]["id"]]
-        # The rest of the API is reserved: nothing there reaches the site.
         assert request(joined, "/_jampot/api/status")[0] == 200
+        # The rest of the API is reserved: nothing there reaches the site.
+        for path in ["/_jampot/api/events", "/_jampot/api/missing"]:
+            status, body = request(joined, path)
+            assert status == 404, path
+            assert b"no such jampot path" in body, body
 
 
 BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

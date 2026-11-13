@@ -176,9 +176,38 @@ fn table() {
             fetch(Method::Head, STATUS_PATH),
             Err(Refusal::MethodNotAllowed),
         ),
+        // The rest of the joiner's paths: its own, and not found.
         (
             "trailing slash",
             fetch(Method::Get, "/_jampot/api/status/"),
+            Ok(Route::Unknown),
+        ),
+        (
+            "an old endpoint",
+            fetch(Method::Get, "/_jampot/api/events"),
+            Ok(Route::Unknown),
+        ),
+        (
+            "an old write",
+            fetch(Method::Post, "/_jampot/api/comments"),
+            Ok(Route::Unknown),
+        ),
+        (
+            "an upgrade elsewhere",
+            RequestFacts {
+                path: "/_jampot/api/other",
+                ..upgrade(Some("same-origin"))
+            },
+            Ok(Route::Unknown),
+        ),
+        (
+            "the prefix itself",
+            fetch(Method::Get, "/_jampot/api/"),
+            Ok(Route::Unknown),
+        ),
+        (
+            "not under it",
+            fetch(Method::Get, "/_jampot/api"),
             Ok(Route::Proxy),
         ),
         (
@@ -190,6 +219,15 @@ fn table() {
             "double slash",
             fetch(Method::Get, "//_jampot/api/status"),
             Ok(Route::Proxy),
+        ),
+        // Cross-site rules still come first.
+        (
+            "cross-site unknown",
+            RequestFacts {
+                sec_fetch_site: Some("cross-site"),
+                ..fetch(Method::Get, "/_jampot/api/events")
+            },
+            Err(Refusal::CrossSite),
         ),
     ];
     let local = local();

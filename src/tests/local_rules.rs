@@ -10,8 +10,12 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, header};
 
-use crate::tests::harness::{
-    Reply, SOCKET, fetch, fixture_dir, handshake, join, local, send, share_files,
+use crate::tests::{
+    harness::{
+        Reply, SOCKET, fetch, fixture_dir, get, handshake, join, local, send, share_files,
+        share_proxy,
+    },
+    upstream,
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -159,4 +163,37 @@ async fn the_ipv6_side_of_the_port_is_taken_too() {
     let request = local(&joiner, "GET", "/").body(Full::default()).unwrap();
     let response = send(SocketAddr::from((Ipv6Addr::LOCALHOST, port)), request).await;
     assert_eq!(response.status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_joiners_paths_never_reach_the_site() {
+    let upstream = upstream::start().await;
+    let share = share_proxy(upstream.addr).await;
+    let joiner = join(&share, "alice").await;
+    // The site's own 404s come from the site.
+    let site = get(&joiner, "/elsewhere").await;
+    assert_eq!((site.status.as_u16(), site.body.as_str()), (404, "missing"));
+    // Under /_jampot/api/ the joiner answers, whatever the path.
+    for path in [
+        "/_jampot/api/events",
+        "/_jampot/api/comments",
+        "/_jampot/api/status/",
+        "/_jampot/api/",
+        "/_jampot/api/socket/x",
+    ] {
+        let reply = get(&joiner, path).await;
+        assert_eq!(reply.status, 404, "{path}");
+        assert!(
+            reply.body.contains("no such jampot path"),
+            "{path}: {}",
+            reply.body
+        );
+    }
+    // Writes too (with the origin the rules want).
+    let origin = joiner.origin().origin().to_owned();
+    let post = local(&joiner, "POST", "/_jampot/api/comments")
+        .header(header::ORIGIN, origin)
+        .body(Full::new(Bytes::from_static(b"{}")))
+        .unwrap();
+    assert_eq!(fetch(&joiner, post).await.status, 404);
 }

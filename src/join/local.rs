@@ -100,6 +100,9 @@ async fn handle(
     let mut response = match decision {
         Ok(Route::Status) => api::status(),
         Ok(Route::Socket) => socket::open(request, session),
+        Ok(Route::Unknown) => {
+            RequestError::new(StatusCode::NOT_FOUND, "no such jampot path").into()
+        }
         Ok(Route::Proxy) => match forward(request, session, connect_wait).await {
             Ok(response) => response,
             Err(error) if page_load && error.status == StatusCode::BAD_GATEWAY => {
