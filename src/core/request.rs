@@ -167,7 +167,7 @@ impl LocalOrigin {
 }
 
 /// A top-level document navigation by GET or HEAD.
-fn is_navigation(facts: &RequestFacts<'_>) -> bool {
+pub(crate) fn is_navigation(facts: &RequestFacts<'_>) -> bool {
     let safe = match facts.method {
         Method::Get | Method::Head => true,
         Method::Post | Method::Other => false,

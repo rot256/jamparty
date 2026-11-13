@@ -120,11 +120,26 @@ pub(crate) async fn joiner(token: PartyToken, addrs: Vec<SocketAddr>, name: &str
     joiner_with_key(token, addrs, name, generate_key(&SystemRng)).await
 }
 
+/// How long a test joiner's requests wait for the share: well inside
+/// [`PATIENCE`], so a test sees the answer rather than its own timeout.
+pub(crate) const CONNECT_WAIT: Duration = Duration::from_secs(5);
+
 pub(crate) async fn joiner_with_key(
     token: PartyToken,
     addrs: Vec<SocketAddr>,
     name: &str,
     key: SecretKey,
+) -> Joiner {
+    joiner_waiting(token, addrs, name, key, CONNECT_WAIT).await
+}
+
+/// A joiner whose requests wait `connect_wait` for the share.
+pub(crate) async fn joiner_waiting(
+    token: PartyToken,
+    addrs: Vec<SocketAddr>,
+    name: &str,
+    key: SecretKey,
+    connect_wait: Duration,
 ) -> Joiner {
     Joiner::start(JoinConfig {
         token,
@@ -135,6 +150,7 @@ pub(crate) async fn joiner_with_key(
         net: net(),
         share_addrs: addrs,
         port: None,
+        connect_wait,
     })
     .await
     .unwrap()

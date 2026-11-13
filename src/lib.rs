@@ -71,6 +71,11 @@ pub fn describe(error: &Report) -> String {
         .join(": ")
 }
 
+/// How long a page's request waits for the joiner to reach the share (it
+/// opens the browser before it is connected) before it is answered "not
+/// reachable".
+const CONNECT_WAIT: Duration = Duration::from_secs(15);
+
 /// How long a public share waits to reach a relay before printing its token.
 const ONLINE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -480,6 +485,7 @@ async fn join(
         net: net_config(discovery)?,
         share_addrs,
         port,
+        connect_wait: CONNECT_WAIT,
     })
     .await?;
     let url = joiner.url();

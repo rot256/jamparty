@@ -15,6 +15,7 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 
 #[cfg(test)]
@@ -52,6 +53,10 @@ pub(crate) struct JoinConfig {
     pub(crate) share_addrs: Vec<SocketAddr>,
     /// The local port; none for a free one.
     pub(crate) port: Option<u16>,
+    /// How long a page's request waits for the connection to the share
+    /// (while joining, or reconnecting) before it is answered "not
+    /// reachable".
+    pub(crate) connect_wait: Duration,
 }
 
 /// Ports tried before giving up on one free on both loopback addresses.
@@ -105,6 +110,7 @@ impl Joiner {
             net,
             share_addrs,
             port,
+            connect_wait,
         } = config;
         let preferences = Preferences {
             saved: settings::load(&path)?,
@@ -133,7 +139,7 @@ impl Joiner {
         tasks.spawn(connection::run(dial, Arc::clone(&session)));
         tasks.spawn(session::report_changes(Arc::clone(&session)));
         for listener in listeners {
-            tasks.spawn(local::serve(listener, Arc::clone(&session)));
+            tasks.spawn(local::serve(listener, Arc::clone(&session), connect_wait));
         }
         Ok(Self {
             endpoint,

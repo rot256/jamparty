@@ -1,18 +1,26 @@
 //! Requests through the joiner's local server to the share: static files,
 //! a proxied dev server, streaming and upgrades, live reload.
 
-use std::{fs, os::unix::fs::symlink};
+use std::{fs, os::unix::fs::symlink, time::Duration};
 
 use bytes::Bytes;
 use futures_util::future;
 use http_body_util::{BodyExt, Full};
-use hyper::{header, upgrade};
+use hyper::{StatusCode, header, upgrade};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::tests::{
-    harness::{fetch, fixture_dir, get, join, local, send, share_files, share_proxy, within},
-    upstream,
+use crate::{
+    adapters::endpoint::generate_key,
+    core::rng::SystemRng,
+    join::Joiner,
+    tests::{
+        harness::{
+            Reply, fetch, fixture_dir, get, join, joiner, joiner_waiting, local, send, share_files,
+            share_proxy, until, within,
+        },
+        upstream,
+    },
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -167,4 +175,70 @@ async fn concurrent_requests_each_get_a_stream() {
     for reply in future::join_all(requests).await {
         assert_eq!(reply.status, 200);
     }
+}
+
+/// A page load as a browser sends it: a top-level navigation.
+async fn load_page(joiner: &Joiner, path: &str) -> Reply {
+    let request = local(joiner, "GET", path)
+        .header("sec-fetch-site", "none")
+        .header("sec-fetch-mode", "navigate")
+        .header("sec-fetch-dest", "document")
+        .body(Full::default())
+        .unwrap();
+    fetch(joiner, request).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_loaded_while_joining_waits_for_the_share() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    // `jampot join` opens the browser before it is connected: the first
+    // load must wait for the share rather than fail.
+    let joiner = joiner(share.token().clone(), share.direct_addrs(), "alice").await;
+    let page = load_page(&joiner, "/").await;
+    assert_eq!(page.status, 200, "{}", page.body);
+    assert!(page.body.contains("Fixture"), "{}", page.body);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_the_share_a_page_load_gets_a_page_that_retries() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let joiner = joiner_waiting(
+        share.token().clone(),
+        share.direct_addrs(),
+        "alice",
+        generate_key(&SystemRng),
+        Duration::from_millis(300),
+    )
+    .await;
+    let mut view = joiner.watch();
+    within("admission", view.wait_for(|view| view.connected))
+        .await
+        .unwrap();
+    share.stop().await;
+    until("the joiner notices", || !joiner.watch().borrow().connected).await;
+
+    let page = load_page(&joiner, "/").await;
+    assert_eq!(page.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        page.headers.get(header::CONTENT_TYPE).unwrap(),
+        "text/html; charset=utf-8"
+    );
+    assert_eq!(page.headers.get(header::RETRY_AFTER).unwrap(), "2");
+    assert!(
+        page.body.contains("http-equiv=\"refresh\""),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body.contains("Connecting to the share"),
+        "{}",
+        page.body
+    );
+
+    // Anything else (the page's own fetches) keeps the JSON answer.
+    let asset = get(&joiner, "/style.css").await;
+    assert_eq!(asset.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(asset.body, r#"{"error":"the share is not reachable"}"#);
 }
