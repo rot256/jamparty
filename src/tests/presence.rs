@@ -6,15 +6,20 @@ use std::time::{Duration, Instant};
 
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
-use tokio::time;
+use tokio::{io::BufReader, time};
 
 use crate::{
+    adapters::lines,
     core::{ratelimit::RateLimit, settings::Switch},
     join::{Joiner, REPORT_GAP},
-    protocol::presence::Person,
+    protocol::{
+        control::{Envelope, ShareMessage},
+        presence::Person,
+    },
+    share::Share,
     tests::harness::{
-        DRAFT, fixture_dir, get, join, next_event, post_comment, post_json, share_files,
-        tab_events, until,
+        DRAFT, fixture_dir, get, join, next_event, post_comment, post_json, raw_connection,
+        share_files, tab_events, until, within,
     },
 };
 
@@ -254,9 +259,10 @@ async fn cursors_reach_only_tabs_on_the_same_page() {
 
     let cursor =
         r#"{"tab":"tab-b","seq":0,"url":"/a","position":{"selector":"h1","x":2500,"y":7500}}"#;
-    // Off by default: the joiner sends nothing.
+    // Off by default: the joiner sends nothing, and nobody sees it.
     let refused = post_json(&bob, "/_jampot/api/cursor", cursor).await;
     assert_eq!(refused.status, 409, "{}", refused.body);
+    no_event(&mut alice_page, "cursor", Duration::from_millis(300)).await;
 
     let on = post_json(&bob, "/_jampot/api/settings", r#"{"showCursor":"on"}"#).await;
     assert_eq!(on.status, 200);
@@ -365,4 +371,130 @@ async fn cursors_reach_only_tabs_on_the_same_page() {
         409
     );
     no_event(&mut alice_page, "cursor", Duration::from_millis(300)).await;
+}
+
+/// Whether `name` is at the share with its cursor switch `cursor`.
+fn switch_at_share(share: &Share, name: &str, cursor: Switch) -> bool {
+    share
+        .hub()
+        .here()
+        .iter()
+        .any(|person| person.name.to_string() == name && person.cursor == cursor)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_share_forwards_no_cursor_while_the_switch_is_off() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let alice = join(&share, "alice").await;
+    let mut alice_page = tab_events(&alice, "tab-a", "/a").await;
+
+    // Mallory speaks the protocol by hand, so nothing on its side holds
+    // the cursor back: only the share can.
+    let (_endpoint, connection) = raw_connection(&share).await;
+    let (mut send, recv) = connection.open_bi().await.unwrap();
+    let secret = share.token().secret.to_string();
+    let mut recv = BufReader::new(recv);
+    let line = |message: String| format!("{{\"version\":1,\"message\":{message}}}\n").into_bytes();
+    send.write_all(&line(format!(
+        r#"{{"type":"hello","secret":"{secret}","name":"mallory"}}"#
+    )))
+    .await
+    .unwrap();
+    let admitted = within(
+        "admission",
+        lines::read::<Envelope<ShareMessage>, _>(&mut recv),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .message;
+    assert!(
+        matches!(admitted, ShareMessage::Admitted { .. }),
+        "{admitted:?}"
+    );
+    let presence = |cursor: &str| {
+        format!(r#"{{"type":"presence","name":"mallory","url":"/a","cursor":"{cursor}"}}"#)
+    };
+    let cursor = r#"{"type":"cursor","position":{"selector":"h1","x":2500,"y":7500}}"#;
+
+    send.write_all(&line(presence("off"))).await.unwrap();
+    until("mallory on /a, switch off", || {
+        switch_at_share(&share, "mallory", Switch::Off)
+    })
+    .await;
+    for _ in 0..3 {
+        send.write_all(&line(cursor.to_owned())).await.unwrap();
+    }
+    no_event(&mut alice_page, "cursor", Duration::from_millis(500)).await;
+
+    // The same messages with the switch on do reach alice.
+    send.write_all(&line(presence("on"))).await.unwrap();
+    until("mallory's switch on", || {
+        switch_at_share(&share, "mallory", Switch::On)
+    })
+    .await;
+    send.write_all(&line(cursor.to_owned())).await.unwrap();
+    let seen = next_event(&mut alice_page, "cursor").await;
+    assert!(seen.contains(r#""selector":"h1""#), "{seen}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_joiner_sends_one_cursor_message_per_report_and_none_while_off() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let alice = join(&share, "alice").await;
+    let bob = join(&share, "bob").await;
+    let _alice_page = tab_events(&alice, "tab-a", "/a").await;
+    let _bob_page = tab_events(&bob, "tab-b", "/a").await;
+    until("both placed", || {
+        share.hub().here().iter().all(|person| person.url.is_some())
+    })
+    .await;
+    let report = |x: u32| {
+        format!(
+            r#"{{"tab":"tab-b","seq":0,"url":"/a","position":{{"selector":"h1","x":{x},"y":5000}}}}"#
+        )
+    };
+
+    // Off: the joiner refuses the page's reports and sends the share nothing.
+    for x in [1000, 2000, 3000] {
+        assert_eq!(
+            post_json(&bob, "/_jampot/api/cursor", &report(x))
+                .await
+                .status,
+            409
+        );
+    }
+    time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(share.hub().cursors_received(), 0);
+
+    // On: at most one message per report, and none while the pointer rests.
+    let on = post_json(&bob, "/_jampot/api/settings", r#"{"showCursor":"on"}"#).await;
+    assert_eq!(on.status, 200);
+    until("bob's switch at the share", || {
+        switch_at_share(&share, "bob", Switch::On)
+    })
+    .await;
+    for x in [1000, 2000, 3000, 4000, 5000] {
+        assert_eq!(
+            post_json(&bob, "/_jampot/api/cursor", &report(x))
+                .await
+                .status,
+            204
+        );
+    }
+    until("the reports at the share", || {
+        share.hub().cursors_received() >= 1
+    })
+    .await;
+    time::sleep(Duration::from_millis(500)).await;
+    let sent = share.hub().cursors_received();
+    assert!((1..=5).contains(&sent), "{sent} messages for 5 reports");
+    time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        share.hub().cursors_received(),
+        sent,
+        "messages while the pointer rests"
+    );
 }

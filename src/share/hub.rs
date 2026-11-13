@@ -9,6 +9,9 @@ use std::{
 };
 
 #[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(test)]
 use jiff::Timestamp;
 use tokio::{
     sync::{Notify, broadcast, mpsc},
@@ -63,6 +66,10 @@ pub(crate) struct Hub {
     presence_changed: Notify,
     clock: Arc<dyn Clock>,
     rng: Arc<dyn Rng>,
+    /// Cursor messages joiners sent, forwarded or not: what tests check a
+    /// joiner sends.
+    #[cfg(test)]
+    cursors_received: AtomicUsize,
 }
 
 struct Inner {
@@ -105,7 +112,15 @@ impl Hub {
             presence_changed: Notify::new(),
             clock,
             rng,
+            #[cfg(test)]
+            cursors_received: AtomicUsize::new(0),
         })
+    }
+
+    /// How many cursor messages joiners have sent this share.
+    #[cfg(test)]
+    pub(crate) fn cursors_received(&self) -> usize {
+        self.cursors_received.load(Ordering::Relaxed)
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -661,6 +676,8 @@ impl Presence {
     /// to its own key's other connections); returns to how many
     /// connections.
     pub(crate) fn cursor(&self, position: Option<Position>) -> Result<usize, Ignored> {
+        #[cfg(test)]
+        self.hub.cursors_received.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.hub.lock();
         let inner = &mut *guard;
         let seat = inner

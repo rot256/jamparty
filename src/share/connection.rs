@@ -234,8 +234,6 @@ async fn joined(
                     continue;
                 }
                 JoinerMessage::Cursor { position } => {
-                    // Tests read this to tell what reached the share.
-                    tracing::debug!(name = %author.name, fingerprint = %author.fingerprint, "cursor message");
                     if let Err(ignored) = presence.cursor(position) {
                         tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "cursor ignored");
                     }

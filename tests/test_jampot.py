@@ -226,12 +226,8 @@ def jampot(home: Path, *arguments: str) -> str:
 
 
 @contextmanager
-def share(home: Path, *source: str, log: bool = False) -> Iterator[Shared]:
-    """A share; with `log`, its debug log (each cursor message) is kept."""
-    env = environment(home)
-    if log:
-        env["RUST_LOG"] = "jampot=debug"
-    process = Process([*source, "--local"], env)
+def share(home: Path, *source: str) -> Iterator[Shared]:
+    process = Process([*source, "--local"], environment(home))
     try:
         token = process.wait_for("jampot: token: ")
         address = process.wait_for("jampot: direct address: ")
@@ -1265,14 +1261,6 @@ def near(page: Page, x: float, y: float) -> bool:
     return at is not None and abs(at[0] - x) < 2 and abs(at[1] - y) < 2
 
 
-def cursor_messages(shared: Shared, name: str) -> int:
-    """Cursor messages from `name` that reached the share since the last look."""
-    return sum(
-        "cursor message" in line and f"name={name}" in line
-        for line in shared.process.drain()
-    )
-
-
 def waiting(page: Page, what: str, check: Callable[[], bool]) -> None:
     """Like `eventually`, letting `page` handle its events meanwhile."""
     deadline = time.monotonic() + TIMEOUT
@@ -1297,7 +1285,7 @@ def cursor_posts(page: Page) -> list[dict[str, object]]:
 
 def test_an_unrepresentable_url_is_nowhere(tmp_path: Path, browser: Browser) -> None:
     with (
-        share(tmp_path, "serve", str(SPA), log=True) as shared,
+        share(tmp_path, "serve", str(SPA)) as shared,
         join(tmp_path / "alice", shared, "alice") as alice,
         join(tmp_path / "bob", shared, "bob") as bob,
         pages(browser, alice, bob) as (alice_page, bob_page),
@@ -1313,15 +1301,16 @@ def test_an_unrepresentable_url_is_nowhere(tmp_path: Path, browser: Browser) -> 
         bob_page.mouse.move(300, 250)
         expect(cursors(alice_page)).to_have_count(1)
 
-        # Too long to say: bob is nowhere, and his pointer goes nowhere.
+        # Too long to say: bob is nowhere, and his page sends nothing.
+        bob_posts = cursor_posts(bob_page)
         _ = bob_page.evaluate("history.pushState({}, '', '/?' + 'q'.repeat(600))")
         expect(cursors(alice_page)).to_have_count(0)
-        time.sleep(0.5)
-        _ = cursor_messages(shared, "bob")
+        bob_page.wait_for_timeout(500)
+        bob_posts.clear()
         for step in range(10):
             bob_page.mouse.move(300 + step * 5, 260)
-        time.sleep(0.5)
-        assert cursor_messages(shared, "bob") == 0
+        bob_page.wait_for_timeout(500)
+        assert bob_posts == []
         expect(cursors(alice_page)).to_have_count(0)
 
         # Back on a page it can name: there again.
@@ -1527,7 +1516,7 @@ def test_moving_pages_and_pointers_stay_connected(
     tmp_path: Path, browser: Browser
 ) -> None:
     with (
-        share(tmp_path, "serve", str(SPA), log=True) as shared,
+        share(tmp_path, "serve", str(SPA)) as shared,
         join(tmp_path / "alice", shared, "alice") as alice,
         join(tmp_path / "bob", shared, "bob") as bob,
         join(tmp_path / "carol", shared, "carol") as carol,
@@ -1562,7 +1551,7 @@ def test_cursors_follow_pointers_on_the_same_page(
     tmp_path: Path, browser: Browser
 ) -> None:
     with (
-        share(tmp_path, "serve", str(SPA), log=True) as shared,
+        share(tmp_path, "serve", str(SPA)) as shared,
         join(tmp_path / "alice", shared, "alice") as alice,
         join(tmp_path / "bob", shared, "bob") as bob,
         join(tmp_path / "carol", shared, "carol") as carol,
@@ -1576,12 +1565,12 @@ def test_cursors_follow_pointers_on_the_same_page(
         carol_page.locator("#to-other").click()
         expect(carol_page.locator("#title")).to_have_text("Other")
 
-        # Off by default: bob's pointer goes nowhere.
-        _ = cursor_messages(shared, "bob")
+        # Off by default: bob's page sends nothing.
+        bob_posts = cursor_posts(bob_page)
         for step in range(10):
             bob_page.mouse.move(200 + step * 10, 250)
-        time.sleep(0.5)
-        assert cursor_messages(shared, "bob") == 0
+        bob_page.wait_for_timeout(500)
+        assert bob_posts == []
 
         # Bob turns his on: alice sees it, named, following his pointer.
         bob_page.keyboard.press("x")
@@ -1609,24 +1598,25 @@ def test_cursors_follow_pointers_on_the_same_page(
         assert cast(dict[str, object], json.loads(line))["selector"] == "#board"
 
         # Held still, nothing is sent.
-        time.sleep(0.3)
-        _ = cursor_messages(shared, "bob")
-        time.sleep(3)
-        assert cursor_messages(shared, "bob") == 0
+        bob_page.wait_for_timeout(300)
+        bob_posts.clear()
+        bob_page.wait_for_timeout(3000)
+        assert bob_posts == []
         # Without updates it fades (on the receiver's own timer).
         expect(cursors(alice_page)).to_have_attribute("data-faded", "true")
         expect(cursors(alice_page)).to_have_css("opacity", "0")
 
         # A burst of movement: at most about 15 per second, ending on the
         # last position.
+        bob_posts.clear()
         started = time.monotonic()
         for step in range(60):
             bob_page.mouse.move(200 + step * 5, 260)
             time.sleep(1 / 60)
         elapsed = time.monotonic() - started
         eventually("the final position", lambda: near(alice_page, 495, 260))
-        time.sleep(0.3)
-        sent = cursor_messages(shared, "bob")
+        bob_page.wait_for_timeout(300)
+        sent = len(bob_posts)
         assert 3 <= sent <= 15 * elapsed + 2, (sent, elapsed)
 
         # Leaving the page takes the cursor away at once.
@@ -1659,15 +1649,15 @@ def test_cursors_follow_pointers_on_the_same_page(
         bob_page.mouse.move(320, 260)
         expect(cursors(carol_page)).to_have_count(1)
 
-        # Bob turns it off: it disappears, and the share hears no more.
+        # Bob turns it off: it disappears, and his page sends no more.
         bob_page.keyboard.press("x")
         expect(cursors(carol_page)).to_have_count(0)
-        time.sleep(0.3)
-        _ = cursor_messages(shared, "bob")
+        bob_page.wait_for_timeout(300)
+        bob_posts.clear()
         for step in range(30):
             bob_page.mouse.move(250 + step * 5, 280)
-        time.sleep(1)
-        assert cursor_messages(shared, "bob") == 0
+        bob_page.wait_for_timeout(1000)
+        assert bob_posts == []
         expect(cursors(alice_page)).to_have_count(0)
 
 
