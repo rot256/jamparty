@@ -188,11 +188,15 @@ impl State {
     }
 
     /// The share admitted this joiner as `you`, holding `undelivered` of
-    /// its comments.
+    /// its comments. A status line from before is dropped: the share
+    /// sends its own after admission, if it has one.
     pub(crate) fn admitted(&mut self, you: Author, undelivered: &[CommentId]) -> Vec<ToPage> {
-        self.link.connected = true;
-        self.link.refused = None;
-        self.link.you = Some(you);
+        self.link = Link {
+            connected: true,
+            refused: None,
+            you: Some(you),
+            status: None,
+        };
         self.mine.admitted(undelivered);
         vec![ToPage::Link(self.link.clone()), self.mine_message()]
     }

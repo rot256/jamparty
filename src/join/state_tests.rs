@@ -164,3 +164,16 @@ fn a_delivery_that_overtakes_its_acknowledgement_is_kept() {
     state.apply(ShareMessage::Delivered { ids: vec![id(2)] });
     assert_eq!(state.snapshot().mine, Some(Vec::new()));
 }
+
+#[test]
+fn a_readmitted_joiner_forgets_the_old_status_line() {
+    let mut state = State::new(settings(Switch::Off));
+    state.admitted(author(1), &[]);
+    let line = StatusLine::try_from("retrying".to_owned()).unwrap();
+    state.apply(ShareMessage::Status { line: Some(line) });
+    state.disconnected(None);
+    // The share sends its status line on admission only when it has one:
+    // the one from before is stale.
+    state.admitted(author(1), &[]);
+    assert_eq!(state.snapshot().link.status, None);
+}
