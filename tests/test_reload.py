@@ -47,6 +47,48 @@ def test_live_reload_after_a_file_change(tmp_path: Path, page: Page) -> None:
         expect(page.locator("h1")).to_have_text("Changed page")
 
 
+def test_only_a_newer_revision_reloads(tmp_path: Path, page: Page) -> None:
+    """A socket that opens again with an older revision than the page's
+    (or the same) leaves the page as it is; a newer one reloads it."""
+    site = tmp_path / "site"
+    _ = shutil.copytree(SITE, site)
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        # Live reload: the page shows revision 1 now.
+        index = site / "index.html"
+        _ = index.write_text(index.read_text().replace("Fixture page", "Changed page"))
+        expect(page.locator("h1")).to_have_text("Changed page")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = page.evaluate("() => { window.jampotStayed = true; }")
+
+        def older(message: dict[str, object]) -> dict[str, object]:
+            if message["type"] == "hello":
+                return {**message, "revision": 0}
+            return message
+
+        def reopen() -> None:
+            opened = len(tap.sockets)
+            tap.sockets[-1].close()
+            waiting(page, "the socket to open again", lambda: len(tap.sockets) > opened)
+            expect(overlay(page, "#connection")).to_have_attribute(
+                "data-state", "green"
+            )
+
+        tap.edit = older
+        reopen()
+        tap.edit = None
+        reopen()
+        assert page.evaluate("() => window.jampotStayed === true")
+
+        _ = index.write_text(index.read_text().replace("Changed page", "Newer page"))
+        expect(page.locator("h1")).to_have_text("Newer page")
+
+
 def free_port() -> int:
     """A port free on 127.0.0.1 and [::1] (as far as can be told)."""
     with socket.socket(socket.AF_INET6) as v6:

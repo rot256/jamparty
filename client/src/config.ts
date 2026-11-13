@@ -11,7 +11,12 @@ export const SOCKET_URL = ((): URL => {
 })();
 
 /** The live-reload revision this page was served at (shared directories only). */
-export const LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
+export const LIVE_REVISION = ((): number | null => {
+  const live = SCRIPT_URL.searchParams.get("live");
+  if (live === null || !/^\d+$/.test(live)) return null;
+  const revision = Number(live);
+  return Number.isSafeInteger(revision) ? revision : null;
+})();
 
 export const HOST_ID = "jampot";
 export const DISMISSED_KEY = "jampot-dismissed-v1";

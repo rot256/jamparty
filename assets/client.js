@@ -89,7 +89,12 @@ var SOCKET_URL = (() => {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url;
 })();
-var LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
+var LIVE_REVISION = (() => {
+  const live = SCRIPT_URL.searchParams.get("live");
+  if (live === null || !/^\d+$/.test(live)) return null;
+  const revision = Number(live);
+  return Number.isSafeInteger(revision) ? revision : null;
+})();
 var HOST_ID = "jampot";
 var DISMISSED_KEY = "jampot-dismissed-v1";
 var OUTBOX_KEY = "jampot-outbox-v1";
@@ -2577,7 +2582,7 @@ function install() {
   let you = null;
   let here = [];
   let pending = 0;
-  let reloadRevision = LIVE_REVISION;
+  let shownRevision = LIVE_REVISION;
   const socket = new PageSocket({
     hello(hello) {
       applyHello(hello);
@@ -2643,9 +2648,8 @@ function install() {
     outbox.sync(undelivered);
   };
   const onRevision = (revision) => {
-    if (LIVE_REVISION === null || revision === null) return;
-    if (String(revision) === reloadRevision) return;
-    reloadRevision = String(revision);
+    if (shownRevision === null || revision === null || revision <= shownRevision) return;
+    shownRevision = revision;
     dialog.reloadWhenClosed();
   };
   let restored = false;

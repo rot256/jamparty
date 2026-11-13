@@ -26,7 +26,8 @@ function install(): void {
   let here: Person[] = [];
   /** How many of this joiner's comments the share holds, as last said. */
   let pending = 0;
-  let reloadRevision = LIVE_REVISION;
+  /** The live-reload revision this page shows (shared directories only). */
+  let shownRevision = LIVE_REVISION;
 
   // Everything the page asks of the joiner goes over its one socket.
   const socket = new PageSocket({
@@ -92,10 +93,11 @@ function install(): void {
     outbox.sync(undelivered);
   };
 
+  // Only a newer revision reloads: a hello from a socket that opened
+  // again may carry the one this page already shows, or an older one.
   const onRevision = (revision: number | null): void => {
-    if (LIVE_REVISION === null || revision === null) return;
-    if (String(revision) === reloadRevision) return;
-    reloadRevision = String(revision);
+    if (shownRevision === null || revision === null || revision <= shownRevision) return;
+    shownRevision = revision;
     dialog.reloadWhenClosed();
   };
 
