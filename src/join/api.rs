@@ -28,24 +28,20 @@ use crate::{
 #[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
 pub(crate) struct RequestNumber(u64);
 
-/// What became of a page's request.
+/// What became of a page's comment.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) enum Outcome {
-    /// The comment is queued (or was delivered already) as `id`.
+pub(crate) enum CommentOutcome {
+    /// Queued (or delivered already) as `id`.
     Commented { id: CommentId },
-    /// The settings are saved; the `settings` message before this reply
-    /// has them.
-    Saved,
-    /// The comment may not have reached the share, or the share's queue
-    /// is full: the page keeps it and sends it again, under the same ref,
-    /// once connected.
+    /// It may not have reached the share, or the share's queue is full:
+    /// the page keeps it and sends it again, under the same ref, once
+    /// connected.
     Unsent { error: String },
-    /// Refused: the comment goes back to the dialog, the settings stay as
-    /// they were (over the rate limit, too many comments on their way, an
-    /// invalid comment or settings change, a settings file that could not
-    /// be written); with a rate limit, how long to wait.
+    /// Refused: it goes back to the dialog (over the rate limit, too many
+    /// comments on their way, an invalid comment); with a rate limit, how
+    /// long to wait.
     Refused {
         error: String,
         #[serde(
@@ -56,6 +52,18 @@ pub(crate) enum Outcome {
         #[cfg_attr(test, ts(rename = "retryAfterSecs", type = "number", optional))]
         retry_after: Option<Duration>,
     },
+}
+
+/// What became of a page's settings change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) enum SettingsOutcome {
+    /// Saved; the `settings` message before this reply has them.
+    Saved,
+    /// Not saved (an invalid change, a settings file that could not be
+    /// written): the settings stay as they were.
+    Refused { error: String },
 }
 
 /// What the joiner sends a page.
@@ -85,11 +93,17 @@ pub(crate) enum ToPage {
         url: PagePath,
         position: Option<Position>,
     },
-    /// The answer to the page's request `to`, after the messages that
+    /// The answer to the page's comment `to`, after the messages that
     /// carry its effect.
-    Reply {
+    CommentReply {
         to: RequestNumber,
-        outcome: Outcome,
+        outcome: CommentOutcome,
+    },
+    /// The answer to the page's settings change `to`, after the
+    /// `settings` message that carries it.
+    SettingsReply {
+        to: RequestNumber,
+        outcome: SettingsOutcome,
     },
     /// Every 15 s; a page that hears nothing for longer reconnects.
     Ping,
@@ -158,7 +172,10 @@ mod bindings {
             },
         },
         join::{
-            api::{Change, FromPage, Outcome, RequestNumber, Submission, ToPage},
+            api::{
+                Change, CommentOutcome, FromPage, RequestNumber, SettingsOutcome, Submission,
+                ToPage,
+            },
             preferences::PageSettings,
             state::{Answer, Link, Snapshot},
         },
@@ -204,7 +221,8 @@ mod bindings {
             Link::decl(&cfg),
             Snapshot::decl(&cfg),
             RequestNumber::decl(&cfg),
-            Outcome::decl(&cfg),
+            CommentOutcome::decl(&cfg),
+            SettingsOutcome::decl(&cfg),
             ToPage::decl(&cfg),
             Submission::decl(&cfg),
             Change::decl(&cfg),

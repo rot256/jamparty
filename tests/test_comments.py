@@ -233,7 +233,7 @@ HOLD_COMMENTS = """(outcome) => {
         if (message.type !== "comment") return original.call(this, data);
         void released.then(() => {
             if (outcome === null) return original.call(this, data);
-            const reply = { type: "reply", to: message.n, outcome };
+            const reply = { type: "comment_reply", to: message.n, outcome };
             this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(reply) }));
         });
     };
@@ -319,7 +319,7 @@ def test_a_reload_during_sending_does_not_send_twice(
         textarea = overlay(page, "textarea")
         textarea.press_sequentially("Exactly once")
         # The joiner's answer arrives, but the page never sees it.
-        tap.hold.add("reply")
+        tap.hold.add("comment_reply")
         textarea.press("Enter")
         waiting(page, "the joiner's answer", lambda: len(tap.held) > 0)
         tap.held.clear()
@@ -358,7 +358,7 @@ def test_unsent_comments_go_out_under_a_status_line(tmp_path: Path, page: Page) 
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         # The answer never reaches the page, and its socket goes: unsent.
-        tap.hold.add("reply")
+        tap.hold.add("comment_reply")
         page.locator("#intro").click(button="right")
         textarea = overlay(page, "textarea")
         textarea.press_sequentially("Despite the status line.")
@@ -538,7 +538,7 @@ def test_a_delivery_before_the_queued_answer(tmp_path: Path, page: Page) -> None
         tap = SocketTap(page)
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        tap.hold.update({"reply", "mine"})
+        tap.hold.update({"comment_reply", "mine"})
         page.locator("#intro").click(button="right")
         overlay(page, "textarea").fill("Fast agent.")
         overlay(page, "textarea").press("Enter")

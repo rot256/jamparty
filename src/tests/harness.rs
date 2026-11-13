@@ -482,7 +482,7 @@ impl PageSocket {
         let mut seen = Vec::new();
         loop {
             let message = self.next().await;
-            let reply = kind(&message) == "reply" && message["to"] == n;
+            let reply = kind(&message).ends_with("_reply") && message["to"] == n;
             seen.push(message);
             if reply {
                 return seen;

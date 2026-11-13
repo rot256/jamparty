@@ -300,7 +300,10 @@ pub(crate) fn follow(snapshot: &mut Snapshot, message: &ToPage) {
             }
         }
         ToPage::Hello(hello) => hello.clone_into(snapshot),
-        ToPage::Cursor { .. } | ToPage::Reply { .. } | ToPage::Ping => {}
+        ToPage::Cursor { .. }
+        | ToPage::CommentReply { .. }
+        | ToPage::SettingsReply { .. }
+        | ToPage::Ping => {}
     }
 }
 

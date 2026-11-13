@@ -6,14 +6,14 @@
 // while the outbox is full of them.
 
 import { MAX_OUTBOX, OUTBOX_KEY } from "./config";
-import type { Outcome, Submission } from "./generated/api";
+import type { CommentOutcome, Submission } from "./generated/api";
 import { isRecord } from "./json";
 
 /** A comment as the page hands it to the joiner, without its ref. */
 export type Draft = Omit<Submission, "ref" | "n">;
 
 /** Hands a comment to the joiner; what became of it. */
-export type Send = (submission: Omit<Submission, "n">) => Promise<Outcome>;
+export type Send = (submission: Omit<Submission, "n">) => Promise<CommentOutcome>;
 
 type OutboxState = "queued" | "delivered" | "unsent" | "sending";
 
@@ -145,7 +145,7 @@ export class Outbox {
    * comment is taken out again (it goes back to the dialog). Refused
    * without sending while the outbox is full of comments still to send.
    */
-  async submit(draft: Draft, ref: string): Promise<Outcome> {
+  async submit(draft: Draft, ref: string): Promise<CommentOutcome> {
     if (this.full) {
       return {
         refused: {
@@ -157,7 +157,7 @@ export class Outbox {
     this.entries.push(entry);
     this.changed();
     const outcome = await this.send({ ref, ...draft });
-    if (typeof outcome !== "string" && "refused" in outcome) {
+    if ("refused" in outcome) {
       const index = this.entries.indexOf(entry);
       if (index !== -1) this.entries.splice(index, 1);
       this.changed();
@@ -168,8 +168,8 @@ export class Outbox {
   }
 
   /** Records what became of `entry`. */
-  private take(entry: OutboxEntry, outcome: Outcome): void {
-    if (typeof outcome !== "string" && "commented" in outcome) {
+  private take(entry: OutboxEntry, outcome: CommentOutcome): void {
+    if ("commented" in outcome) {
       entry.id = outcome.commented.id;
       entry.state = "queued";
       // Delivered already if the joiner's latest word does not hold it.

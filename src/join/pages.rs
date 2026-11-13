@@ -141,7 +141,8 @@ impl Pages {
             | ToPage::Settings(_)
             | ToPage::Reload { .. }
             | ToPage::Answer(_)
-            | ToPage::Reply { .. }
+            | ToPage::CommentReply { .. }
+            | ToPage::SettingsReply { .. }
             | ToPage::Ping => None,
         };
         let mut behind = Vec::new();

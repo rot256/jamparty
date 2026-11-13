@@ -255,7 +255,7 @@ export class CommentDialog {
       this.sending = false;
       ui.send.disabled = false;
       ui.cancel.disabled = false;
-      if (outcome === "saved" || "commented" in outcome) {
+      if ("commented" in outcome) {
         this.close();
         ui.showToast(`Comment queued · ${this.pending()} pending`);
       } else if ("unsent" in outcome) {

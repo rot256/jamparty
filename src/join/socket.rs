@@ -26,7 +26,7 @@ use tokio_websockets::{CloseCode, Limits, Message, ServerBuilder, WebSocketStrea
 use crate::{
     adapters::http::{AppBody, RequestError, empty_response},
     join::{
-        api::{FromPage, Outcome, RequestNumber, ToPage},
+        api::{CommentOutcome, FromPage, RequestNumber, SettingsOutcome, ToPage},
         pages::{Attached, PageId, frame},
         session::Session,
     },
@@ -179,10 +179,19 @@ async fn run(socket: Socket, session: &Arc<Session>, attached: Attached) {
     let _ = time::timeout(SEND_TIMEOUT, sink.send(Message::close(Some(code), reason))).await;
 }
 
-/// The request number of a message that could not be read, to answer it.
+/// A request that could not be read: its kind and number, to answer it.
 #[derive(Deserialize)]
 struct Numbered {
+    #[serde(rename = "type")]
+    kind: RequestKind,
     n: RequestNumber,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RequestKind {
+    Comment,
+    Settings,
 }
 
 /// Handles one message from the page; an invalid one ends the socket
@@ -196,12 +205,20 @@ async fn handle(
     let message = match serde_json::from_str::<FromPage>(text) {
         Ok(message) => message,
         Err(error) => {
-            if let Ok(Numbered { n }) = serde_json::from_str(text) {
-                let outcome = Outcome::Refused {
-                    error: error.to_string(),
-                    retry_after: None,
-                };
-                session.reply(page, n, outcome);
+            if let Ok(Numbered { kind, n }) = serde_json::from_str(text) {
+                let error = error.to_string();
+                match kind {
+                    RequestKind::Comment => {
+                        let outcome = CommentOutcome::Refused {
+                            error,
+                            retry_after: None,
+                        };
+                        session.reply_comment(page, n, outcome);
+                    }
+                    RequestKind::Settings => {
+                        session.reply_settings(page, n, SettingsOutcome::Refused { error });
+                    }
+                }
                 return Ok(());
             }
             tracing::debug!(%error, "invalid page message");
@@ -214,11 +231,11 @@ async fn handle(
         FromPage::Comment(submission) => {
             while comments.try_join_next().is_some() {}
             if comments.len() >= MAX_IN_FLIGHT {
-                let outcome = Outcome::Refused {
+                let outcome = CommentOutcome::Refused {
                     error: "too many comments on their way; try again shortly".to_owned(),
                     retry_after: None,
                 };
-                session.reply(page, submission.n, outcome);
+                session.reply_comment(page, submission.n, outcome);
                 return Ok(());
             }
             let session = Arc::clone(session);
@@ -274,7 +291,11 @@ mod tests {
             .unwrap();
         assert_eq!(comments.len(), MAX_IN_FLIGHT);
         let reply: Value = serde_json::from_slice(&attached.queue.recv().await.unwrap()).unwrap();
-        assert_eq!(reply.pointer("/type"), Some(&json!("reply")), "{reply}");
+        assert_eq!(
+            reply.pointer("/type"),
+            Some(&json!("comment_reply")),
+            "{reply}"
+        );
         assert_eq!(reply.pointer("/to"), Some(&json!(9)), "{reply}");
         let error = reply.pointer("/outcome/refused/error");
         assert!(error.is_some_and(Value::is_string), "{reply}");

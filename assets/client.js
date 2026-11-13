@@ -416,8 +416,7 @@ function initials(name) {
   return letters === "" ? "?" : letters;
 }
 function failure(outcome) {
-  if (outcome === "saved" || "commented" in outcome) return null;
-  return "unsent" in outcome ? outcome.unsent.error : outcome.refused.error;
+  return outcome === "saved" ? null : outcome.refused.error;
 }
 function colourOf(person) {
   return PALETTE[person.colour % PALETTE.length] ?? "#555";
@@ -1145,7 +1144,7 @@ var CommentDialog = class {
       this.sending = false;
       ui.send.disabled = false;
       ui.cancel.disabled = false;
-      if (outcome === "saved" || "commented" in outcome) {
+      if ("commented" in outcome) {
         this.close();
         ui.showToast(`Comment queued · ${this.pending()} pending`);
       } else if ("unsent" in outcome) {
@@ -1573,7 +1572,7 @@ var Outbox = class {
     this.entries.push(entry);
     this.changed();
     const outcome = await this.send({ ref, ...draft });
-    if (typeof outcome !== "string" && "refused" in outcome) {
+    if ("refused" in outcome) {
       const index = this.entries.indexOf(entry);
       if (index !== -1) this.entries.splice(index, 1);
       this.changed();
@@ -1584,7 +1583,7 @@ var Outbox = class {
   }
   /** Records what became of `entry`. */
   take(entry, outcome) {
-    if (typeof outcome !== "string" && "commented" in outcome) {
+    if ("commented" in outcome) {
       entry.id = outcome.commented.id;
       entry.state = "queued";
       this.settle(entry);
@@ -1619,7 +1618,29 @@ function parseMessage(data) {
 }
 
 // client/src/socket.ts
-var LOST = { unsent: { error: "jampot join is not reachable" } };
+var UNREACHABLE = "jampot join is not reachable";
+var COMMENT_LOST = { unsent: { error: UNREACHABLE } };
+var SETTINGS_LOST = { refused: { error: `not saved: ${UNREACHABLE}` } };
+var Waiting = class {
+  constructor(lost) {
+    this.lost = lost;
+  }
+  lost;
+  settles = /* @__PURE__ */ new Map();
+  add(n, settle) {
+    this.settles.set(n, settle);
+  }
+  settle(n, outcome) {
+    const settle = this.settles.get(n);
+    this.settles.delete(n);
+    settle?.(outcome);
+  }
+  /** Every request fails with the socket. */
+  lose() {
+    for (const settle of this.settles.values()) settle(this.lost);
+    this.settles.clear();
+  }
+};
 var PageSocket = class {
   constructor(handlers) {
     this.handlers = handlers;
@@ -1638,7 +1659,8 @@ var PageSocket = class {
   /** The hello came: the socket carries the joiner's state. */
   ready = false;
   n = 0;
-  waiting = /* @__PURE__ */ new Map();
+  comments = new Waiting(COMMENT_LOST);
+  changes = new Waiting(SETTINGS_LOST);
   lastHeard = Date.now();
   wait = RECONNECT_MIN_MS;
   timer;
@@ -1673,12 +1695,12 @@ var PageSocket = class {
         this.handlers.open(true);
         break;
       }
-      case "reply": {
-        const settle = this.waiting.get(message.to);
-        this.waiting.delete(message.to);
-        settle?.(message.outcome);
+      case "comment_reply":
+        this.comments.settle(message.to, message.outcome);
         break;
-      }
+      case "settings_reply":
+        this.changes.settle(message.to, message.outcome);
+        break;
       case "ping":
         break;
       case "link":
@@ -1699,16 +1721,20 @@ var PageSocket = class {
     socket.send(JSON.stringify(message));
     return true;
   }
-  /** Makes a request; its outcome ("unsent" if the socket goes first). */
-  request(request) {
+  /** Hands over a comment; its outcome ("unsent" if the socket goes first). */
+  comment(submission) {
+    return this.request(this.comments, (n) => ({ type: "comment", ...submission, n }));
+  }
+  /** Changes the settings; the outcome ("refused" if the socket goes first). */
+  changeSettings(change) {
+    return this.request(this.changes, (n) => ({ type: "settings", change, n }));
+  }
+  request(waiting, message) {
     this.n += 1;
     const n = this.n;
     return new Promise((resolve) => {
-      if (!this.send({ ...request, n })) {
-        resolve(LOST);
-        return;
-      }
-      this.waiting.set(n, resolve);
+      if (this.send(message(n))) waiting.add(n, resolve);
+      else resolve(waiting.lost);
     });
   }
   /** Closes the socket without waiting for the joiner to agree. */
@@ -1720,8 +1746,8 @@ var PageSocket = class {
     if (socket !== null) socket.close();
     const wasReady = this.ready;
     this.ready = false;
-    for (const settle of this.waiting.values()) settle(LOST);
-    this.waiting.clear();
+    this.comments.lose();
+    this.changes.lose();
     if (wasReady) this.handlers.open(false);
   }
   /** The socket closed or went silent: shown at once, opened again soon. */
@@ -2621,8 +2647,8 @@ function install() {
       else sender.setPlaced(false);
     }
   });
-  const outbox = new Outbox((submission) => socket.request({ type: "comment", ...submission }));
-  const changeSettings = (change) => socket.request({ type: "settings", change });
+  const outbox = new Outbox((submission) => socket.comment(submission));
+  const changeSettings = (change) => socket.changeSettings(change);
   const answers = new Answers(ui);
   const dialog = new CommentDialog(ui, outbox, () => pending);
   const list = new CommentList(ui, outbox);

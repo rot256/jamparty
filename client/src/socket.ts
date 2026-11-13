@@ -1,20 +1,26 @@
 // The page's one socket to the joiner (`api/socket`). The joiner sends its
 // whole state first (`hello`), then every change in order; the page says
 // where it is and sends its pointer, comments and settings changes, each
-// request answered by a `reply`. A socket that closes, or stays silent
+// comment answered by a `comment_reply`, each change by a `settings_reply`. A socket that closes, or stays silent
 // past the watchdog, is opened again and starts over from a new hello.
 
 import { parseMessage } from "./api";
 import { RECONNECT_MAX_MS, RECONNECT_MIN_MS, SOCKET_URL, WATCHDOG_MS } from "./config";
-import type { FromPage, Outcome, Snapshot, ToPage } from "./generated/api";
-
-/** A request as the page makes it, without its number. */
-type Request =
-  | Omit<Extract<FromPage, { type: "comment" }>, "n">
-  | Omit<Extract<FromPage, { type: "settings" }>, "n">;
+import type {
+  CommentOutcome,
+  FromPage,
+  SettingsChange,
+  SettingsOutcome,
+  Snapshot,
+  Submission,
+  ToPage,
+} from "./generated/api";
 
 /** The messages after `hello` that change what the page shows. */
-export type Slice = Exclude<ToPage, { type: "hello" } | { type: "reply" } | { type: "ping" }>;
+export type Slice = Exclude<
+  ToPage,
+  { type: "hello" } | { type: "comment_reply" } | { type: "settings_reply" } | { type: "ping" }
+>;
 
 export interface SocketHandlers {
   /** The joiner's whole state, first on every socket. */
@@ -25,14 +31,43 @@ export interface SocketHandlers {
   open(open: boolean): void;
 }
 
-const LOST: Outcome = { unsent: { error: "jampot join is not reachable" } };
+const UNREACHABLE = "jampot join is not reachable";
+const COMMENT_LOST: CommentOutcome = { unsent: { error: UNREACHABLE } };
+const SETTINGS_LOST: SettingsOutcome = { refused: { error: `not saved: ${UNREACHABLE}` } };
+
+/** Requests waiting for their reply, by number. */
+class Waiting<T> {
+  private readonly settles = new Map<number, (outcome: T) => void>();
+
+  constructor(
+    /** What a request gets when its socket goes first. */
+    readonly lost: T,
+  ) {}
+
+  add(n: number, settle: (outcome: T) => void): void {
+    this.settles.set(n, settle);
+  }
+
+  settle(n: number, outcome: T): void {
+    const settle = this.settles.get(n);
+    this.settles.delete(n);
+    settle?.(outcome);
+  }
+
+  /** Every request fails with the socket. */
+  lose(): void {
+    for (const settle of this.settles.values()) settle(this.lost);
+    this.settles.clear();
+  }
+}
 
 export class PageSocket {
   private socket: WebSocket | null = null;
   /** The hello came: the socket carries the joiner's state. */
   private ready = false;
   private n = 0;
-  private readonly waiting = new Map<number, (outcome: Outcome) => void>();
+  private readonly comments = new Waiting(COMMENT_LOST);
+  private readonly changes = new Waiting(SETTINGS_LOST);
   private lastHeard = Date.now();
   private wait = RECONNECT_MIN_MS;
   private timer: number | undefined;
@@ -86,12 +121,12 @@ export class PageSocket {
         this.handlers.open(true);
         break;
       }
-      case "reply": {
-        const settle = this.waiting.get(message.to);
-        this.waiting.delete(message.to);
-        settle?.(message.outcome);
+      case "comment_reply":
+        this.comments.settle(message.to, message.outcome);
         break;
-      }
+      case "settings_reply":
+        this.changes.settle(message.to, message.outcome);
+        break;
       case "ping":
         break;
       case "link":
@@ -114,16 +149,22 @@ export class PageSocket {
     return true;
   }
 
-  /** Makes a request; its outcome ("unsent" if the socket goes first). */
-  request(request: Request): Promise<Outcome> {
+  /** Hands over a comment; its outcome ("unsent" if the socket goes first). */
+  comment(submission: Omit<Submission, "n">): Promise<CommentOutcome> {
+    return this.request(this.comments, (n) => ({ type: "comment", ...submission, n }));
+  }
+
+  /** Changes the settings; the outcome ("refused" if the socket goes first). */
+  changeSettings(change: SettingsChange): Promise<SettingsOutcome> {
+    return this.request(this.changes, (n) => ({ type: "settings", change, n }));
+  }
+
+  private request<T>(waiting: Waiting<T>, message: (n: number) => FromPage): Promise<T> {
     this.n += 1;
     const n = this.n;
     return new Promise((resolve) => {
-      if (!this.send({ ...request, n })) {
-        resolve(LOST);
-        return;
-      }
-      this.waiting.set(n, resolve);
+      if (this.send(message(n))) waiting.add(n, resolve);
+      else resolve(waiting.lost);
     });
   }
 
@@ -137,8 +178,8 @@ export class PageSocket {
     const wasReady = this.ready;
     this.ready = false;
     // Requests on it fail: comments are sent again under their ref.
-    for (const settle of this.waiting.values()) settle(LOST);
-    this.waiting.clear();
+    this.comments.lose();
+    this.changes.lose();
     if (wasReady) this.handlers.open(false);
   }
 

@@ -15,7 +15,7 @@ use crate::{
     core::{ids::CommentId, name::JoinerName, settings::Switch, version::Incompatible},
     describe,
     join::{
-        api::{Change, Outcome, RequestNumber, Submission, ToPage},
+        api::{Change, CommentOutcome, RequestNumber, SettingsOutcome, Submission, ToPage},
         control::Control,
         pages::{Attached, Dropped, Full, PageId, Pages},
         preferences::{self, Preferences},
@@ -68,8 +68,7 @@ pub(crate) struct Session {
 /// A reply to one page's request, queued after a commit's messages.
 struct Reply {
     page: PageId,
-    to: RequestNumber,
-    outcome: Outcome,
+    message: ToPage,
 }
 
 /// What a commit queues: messages for every page, then a reply for one.
@@ -115,7 +114,10 @@ impl Session {
         let mut inner = self.lock();
         let Told { messages, reply } = change(&mut inner);
         let changed = messages.iter().any(|message| match message {
-            ToPage::Cursor { .. } | ToPage::Reply { .. } | ToPage::Ping => false,
+            ToPage::Cursor { .. }
+            | ToPage::CommentReply { .. }
+            | ToPage::SettingsReply { .. }
+            | ToPage::Ping => false,
             ToPage::Hello(_)
             | ToPage::Link(_)
             | ToPage::People { .. }
@@ -130,8 +132,8 @@ impl Session {
                 dropped = Dropped::Some;
             }
         }
-        if let Some(Reply { page, to, outcome }) = reply
-            && let Dropped::Some = inner.pages.send(page, &ToPage::Reply { to, outcome })
+        if let Some(Reply { page, message }) = reply
+            && let Dropped::Some = inner.pages.send(page, &message)
         {
             dropped = Dropped::Some;
         }
@@ -244,38 +246,40 @@ impl Session {
         }) {
             Ok(draft) => draft,
             Err(error) => {
-                let outcome = Outcome::Refused {
+                let outcome = CommentOutcome::Refused {
                     error: error.to_string(),
                     retry_after: None,
                 };
-                self.reply(page, n, outcome);
+                self.reply_comment(page, n, outcome);
                 return;
             }
         };
-        let unsent = || Outcome::Unsent {
+        let unsent = || CommentOutcome::Unsent {
             error: NOT_SENT.to_owned(),
         };
         let Some(control) = self.control() else {
-            self.reply(page, n, unsent());
+            self.reply_comment(page, n, unsent());
             return;
         };
         let Ok(acked) = control.comment(reference, draft).await else {
-            self.reply(page, n, unsent());
+            self.reply_comment(page, n, unsent());
             return;
         };
         let outcome = match acked {
-            AckOutcome::Queued { id } | AckOutcome::Delivered { id } => Outcome::Commented { id },
-            AckOutcome::RateLimited { retry_after } => Outcome::Refused {
+            AckOutcome::Queued { id } | AckOutcome::Delivered { id } => {
+                CommentOutcome::Commented { id }
+            }
+            AckOutcome::RateLimited { retry_after } => CommentOutcome::Refused {
                 error: "too many comments; try again shortly".to_owned(),
                 retry_after: Some(retry_after),
             },
             // Kept in the page and sent again later, as when unreachable.
-            AckOutcome::QueueFull => Outcome::Unsent {
+            AckOutcome::QueueFull => CommentOutcome::Unsent {
                 error: "the share's queue is full".to_owned(),
             },
         };
         // The acknowledgement changed the state when it arrived.
-        self.reply(page, n, outcome);
+        self.reply_comment(page, n, outcome);
     }
 
     /// Saves a change from a page and tells every page. The file is
@@ -294,29 +298,39 @@ impl Session {
                     messages: inner.state.set_settings(settings),
                     reply: Some(Reply {
                         page,
-                        to: n,
-                        outcome: Outcome::Saved,
+                        message: ToPage::SettingsReply {
+                            to: n,
+                            outcome: SettingsOutcome::Saved,
+                        },
                     }),
                 }
             }),
             Err(error) => {
                 tracing::warn!(error = %describe(&error), "could not save the settings");
-                let outcome = Outcome::Refused {
+                let outcome = SettingsOutcome::Refused {
                     error: format!("could not save the settings: {}", describe(&error)),
-                    retry_after: None,
                 };
-                self.reply(page, n, outcome);
+                self.reply_settings(page, n, outcome);
             }
         }
         // A new name or cursor switch is news for the share.
         self.uplink.changed();
     }
 
-    /// Answers request `to` of `page` without changing anything.
-    pub(crate) fn reply(&self, page: PageId, to: RequestNumber, outcome: Outcome) {
+    /// Answers comment `to` of `page` without changing anything.
+    pub(crate) fn reply_comment(&self, page: PageId, to: RequestNumber, outcome: CommentOutcome) {
+        self.reply(page, ToPage::CommentReply { to, outcome });
+    }
+
+    /// Answers settings change `to` of `page` without changing anything.
+    pub(crate) fn reply_settings(&self, page: PageId, to: RequestNumber, outcome: SettingsOutcome) {
+        self.reply(page, ToPage::SettingsReply { to, outcome });
+    }
+
+    fn reply(&self, page: PageId, message: ToPage) {
         self.commit(|_| Told {
             messages: Vec::new(),
-            reply: Some(Reply { page, to, outcome }),
+            reply: Some(Reply { page, message }),
         });
     }
 

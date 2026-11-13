@@ -3,7 +3,14 @@
 
 import { PALETTE } from "./config";
 import { RESERVED_KEYS } from "./generated/api";
-import type { Corner, Keys, Outcome, PageSettings, Person, SettingsChange } from "./generated/api";
+import type {
+  Corner,
+  Keys,
+  PageSettings,
+  Person,
+  SettingsChange,
+  SettingsOutcome,
+} from "./generated/api";
 import type { Ui } from "./ui";
 
 type Action = keyof Keys;
@@ -45,12 +52,11 @@ function initials(name: string): string {
 }
 
 /** Changes the joiner's settings; what became of the change. */
-export type ChangeSettings = (change: SettingsChange) => Promise<Outcome>;
+export type ChangeSettings = (change: SettingsChange) => Promise<SettingsOutcome>;
 
 /** Why a change did not go through, or null when it did. */
-export function failure(outcome: Outcome): string | null {
-  if (outcome === "saved" || "commented" in outcome) return null;
-  return "unsent" in outcome ? outcome.unsent.error : outcome.refused.error;
+export function failure(outcome: SettingsOutcome): string | null {
+  return outcome === "saved" ? null : outcome.refused.error;
 }
 
 export function colourOf(person: Person): string {

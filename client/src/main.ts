@@ -9,12 +9,12 @@ import { CursorLayer, CursorSender } from "./cursors";
 import { CommentDialog } from "./dialog";
 import { loadDraft } from "./draft";
 import { EditMode } from "./edit";
-import type { Outcome, PageSettings, Person, SettingsChange, Snapshot } from "./generated/api";
+import type { PageSettings, Person, Snapshot } from "./generated/api";
 import { CommentList } from "./list";
 import { pageUrl, watchUrl } from "./location";
 import { NamePrompt } from "./name";
 import { Outbox } from "./outbox";
-import { Panel, isEditing } from "./panel";
+import { type ChangeSettings, Panel, isEditing } from "./panel";
 import { PageSocket, type Slice } from "./socket";
 import { Ui } from "./ui";
 
@@ -39,9 +39,8 @@ function install(): void {
       else sender.setPlaced(false);
     },
   });
-  const outbox = new Outbox((submission) => socket.request({ type: "comment", ...submission }));
-  const changeSettings = (change: SettingsChange): Promise<Outcome> =>
-    socket.request({ type: "settings", change });
+  const outbox = new Outbox((submission) => socket.comment(submission));
+  const changeSettings: ChangeSettings = (change) => socket.changeSettings(change);
   const answers = new Answers(ui);
   const dialog = new CommentDialog(ui, outbox, () => pending);
   const list = new CommentList(ui, outbox);

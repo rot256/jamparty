@@ -124,9 +124,11 @@ revision: Revision | null, };
 
 export type RequestNumber = number;
 
-export type Outcome = { "commented": { id: CommentId, } } | "saved" | { "unsent": { error: string, } } | { "refused": { error: string, retryAfterSecs?: number, } };
+export type CommentOutcome = { "commented": { id: CommentId, } } | { "unsent": { error: string, } } | { "refused": { error: string, retryAfterSecs?: number, } };
 
-export type ToPage = { "type": "hello" } & Snapshot | { "type": "link" } & Link | { "type": "people", here: Array<Person>, } | { "type": "mine", undelivered: Array<CommentId> | null, } | { "type": "settings" } & PageSettings | { "type": "reload", revision: Revision, } | { "type": "answer" } & Answer | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, } | { "type": "reply", to: RequestNumber, outcome: Outcome, } | { "type": "ping" };
+export type SettingsOutcome = "saved" | { "refused": { error: string, } };
+
+export type ToPage = { "type": "hello" } & Snapshot | { "type": "link" } & Link | { "type": "people", here: Array<Person>, } | { "type": "mine", undelivered: Array<CommentId> | null, } | { "type": "settings" } & PageSettings | { "type": "reload", revision: Revision, } | { "type": "answer" } & Answer | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, } | { "type": "comment_reply", to: RequestNumber, outcome: CommentOutcome, } | { "type": "settings_reply", to: RequestNumber, outcome: SettingsOutcome, } | { "type": "ping" };
 
 export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage, selector: CommentSelector, selectedText: string | null, comment: string, };
 

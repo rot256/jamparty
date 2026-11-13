@@ -290,7 +290,7 @@ class PageSocket:
         self.send({**message, "n": 1})
         while True:
             reply = self.next()
-            if reply["type"] == "reply" and reply["to"] == 1:
+            if str(reply["type"]).endswith("_reply") and reply["to"] == 1:
                 return reply
 
     def close(self) -> None:
