@@ -256,10 +256,6 @@ export class CursorLayer {
     for (const key of [...this.drawn.keys()]) this.remove(key);
   }
 
-  get keys(): string[] {
-    return [...this.drawn.keys()];
-  }
-
   private remove(key: string): void {
     this.drawn.get(key)?.node.remove();
     this.drawn.delete(key);

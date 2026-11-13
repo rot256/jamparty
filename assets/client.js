@@ -526,10 +526,6 @@ var Connection = class {
     }
     return { colour, text, incompatible: this.incompatible };
   }
-  /** Whether comments can go out now. */
-  get connected() {
-    return this.colour === "green";
-  }
   /** Whether the page has its event stream (so it is one of the joiner's tabs). */
   get streaming() {
     return this.streamOpen;
@@ -791,7 +787,6 @@ var Panel = class {
   ui;
   settings = null;
   listening = null;
-  you = null;
   /** Called when the panel opens (the comment list closes then). */
   onOpen = () => void 0;
   /** Called with the settings whenever they change. */
@@ -922,17 +917,16 @@ var Panel = class {
   }
   /** Who is here: the count and an avatar each, the joiner's own outlined. */
   showPeople(here, you) {
-    this.you = you;
     const { hereCount, avatars } = this.ui;
     hereCount.textContent = `${here.length} here`;
     const ordered = [
-      ...here.filter((person) => person.key === this.you),
-      ...here.filter((person) => person.key !== this.you)
+      ...here.filter((person) => person.key === you),
+      ...here.filter((person) => person.key !== you)
     ];
     avatars.replaceChildren(...ordered.map((person) => {
       const item = document.createElement("li");
       item.className = "avatar";
-      const mine = person.key === this.you;
+      const mine = person.key === you;
       item.dataset.you = String(mine);
       item.dataset.key = person.key;
       item.title = mine ? `${person.name} (you)` : person.name;
@@ -1148,9 +1142,6 @@ var CursorLayer = class {
   }
   clear() {
     for (const key of [...this.drawn.keys()]) this.remove(key);
-  }
-  get keys() {
-    return [...this.drawn.keys()];
   }
   remove(key) {
     this.drawn.get(key)?.node.remove();

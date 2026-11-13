@@ -8,7 +8,7 @@ import type { Outbox, OutboxEntry } from "./outbox";
 import type { Ui } from "./ui";
 
 /** The last step of a selector, for people: `h1`, `#intro`, `page`. */
-export function shortSelector(selector: string): string {
+function shortSelector(selector: string): string {
   if (selector === "") return "page";
   if (selector.startsWith(AGENT_TARGET_PREFIX)) return "answer";
   const parts = selector.split(" > ");
@@ -16,7 +16,7 @@ export function shortSelector(selector: string): string {
 }
 
 /** `just now`, `3 min ago`, `2 h ago`. */
-export function relativeTime(at: number, now = Date.now()): string {
+function relativeTime(at: number, now = Date.now()): string {
   const minutes = Math.floor((now - at) / 60000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min ago`;

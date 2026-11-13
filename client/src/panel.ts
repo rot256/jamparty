@@ -20,7 +20,7 @@ const ACTION_NAMES: Record<Action, string> = {
 };
 
 /** A key as it is bound: single characters in lower case. */
-export function normalizeKey(key: string): string {
+function normalizeKey(key: string): string {
   return key.length === 1 ? key.toLowerCase() : key;
 }
 
@@ -38,7 +38,7 @@ export function isEditing(event: Event): boolean {
 }
 
 /** Up to two initials: `alice` → `A`, `bob.smith` → `BS`. */
-export function initials(name: string): string {
+function initials(name: string): string {
   const parts = name.split("@")[0]?.split(/[._+-]+/u).filter((part) => part !== "") ?? [];
   const letters = parts.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join("");
   return letters === "" ? "?" : letters;
@@ -51,7 +51,6 @@ export function colourOf(person: Person): string {
 export class Panel {
   private settings: PageSettings | null = null;
   private listening: Action | null = null;
-  private you: string | null = null;
   /** Called when the panel opens (the comment list closes then). */
   onOpen: () => void = () => undefined;
   /** Called with the settings whenever they change. */
@@ -235,17 +234,16 @@ export class Panel {
 
   /** Who is here: the count and an avatar each, the joiner's own outlined. */
   showPeople(here: readonly Person[], you: string | null): void {
-    this.you = you;
     const { hereCount, avatars } = this.ui;
     hereCount.textContent = `${here.length} here`;
     const ordered = [
-      ...here.filter((person) => person.key === this.you),
-      ...here.filter((person) => person.key !== this.you),
+      ...here.filter((person) => person.key === you),
+      ...here.filter((person) => person.key !== you),
     ];
     avatars.replaceChildren(...ordered.map((person) => {
       const item = document.createElement("li");
       item.className = "avatar";
-      const mine = person.key === this.you;
+      const mine = person.key === you;
       item.dataset.you = String(mine);
       item.dataset.key = person.key;
       item.title = mine ? `${person.name} (you)` : person.name;

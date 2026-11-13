@@ -10,9 +10,9 @@ const MAX_EARLY = 100;
 import type { Queued, Submission } from "./generated/api";
 
 /** A comment as the page hands it to the joiner, without its ref. */
-export type Draft = Omit<Submission, "ref">;
+type Draft = Omit<Submission, "ref">;
 
-export type OutboxState = "queued" | "delivered" | "unsent" | "sending";
+type OutboxState = "queued" | "delivered" | "unsent" | "sending";
 
 export interface OutboxEntry {
   draft: Draft;

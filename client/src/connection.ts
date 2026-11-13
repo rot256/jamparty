@@ -17,7 +17,7 @@ export interface ConnectionView {
 }
 
 /** The parts of the joiner's view a status snapshot is taken in. */
-export type Part = "connection" | "presence" | "mine" | "settings" | "reload";
+type Part = "connection" | "presence" | "mine" | "settings" | "reload";
 
 const PARTS: readonly Part[] = ["connection", "presence", "mine", "settings", "reload"];
 
@@ -48,7 +48,7 @@ function partOf(event: Stamped): Part | null {
   }
 }
 
-export interface Handlers {
+interface Handlers {
   /** The state changed. */
   state(view: ConnectionView, recovered: boolean): void;
   /**
@@ -131,11 +131,6 @@ export class Connection {
       text = this.statusLine;
     }
     return { colour, text, incompatible: this.incompatible };
-  }
-
-  /** Whether comments can go out now. */
-  get connected(): boolean {
-    return this.colour === "green";
   }
 
   /** Whether the page has its event stream (so it is one of the joiner's tabs). */

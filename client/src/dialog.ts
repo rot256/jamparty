@@ -6,7 +6,7 @@ import { type Captured, captureTarget, capturePageTarget } from "./capture";
 import type { Outbox } from "./outbox";
 import type { Ui } from "./ui";
 
-export const ELEMENT_LABEL = "Comment:";
+const ELEMENT_LABEL = "Comment:";
 export const ANSWER_LABEL = "Comment on agent response:";
 
 export class CommentDialog {

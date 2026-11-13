@@ -67,7 +67,7 @@ export async function submit(submission: Submission): Promise<Queued> {
   return body as Queued;
 }
 
-export type Checked = { status: Status } | { incompatible: string };
+type Checked = { status: Status } | { incompatible: string };
 
 /** `api/status`, checked for the API version; null when the joiner is not reachable. */
 export async function fetchStatus(): Promise<Checked | null> {
@@ -80,7 +80,7 @@ export async function fetchStatus(): Promise<Checked | null> {
   }
 }
 
-export function checkVersion(body: unknown): Checked {
+function checkVersion(body: unknown): Checked {
   const api = isObject(body) ? body.api : undefined;
   if (api === API_VERSION) return { status: body as Status };
   const share = SHARE_VERSION ?? "unknown";
