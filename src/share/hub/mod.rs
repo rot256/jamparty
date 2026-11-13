@@ -2,6 +2,14 @@
 //! limiter, who is connected (and where), the status line and recent
 //! answers; sends to every joiner's control stream, or one joiner's.
 
+mod answers;
+mod comments;
+mod presence;
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -9,15 +17,11 @@ use std::{
 };
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-#[cfg(test)]
 use jiff::Timestamp;
+use tokio::sync::{Notify, broadcast, mpsc};
 
 #[cfg(test)]
 use crate::core::queue::DeliveryState;
-use tokio::sync::{Notify, broadcast, mpsc};
-
 use crate::{
     core::{
         clock::Clock,
@@ -31,6 +35,14 @@ use crate::{
         comment::{Author, Comment},
         control::{Anchor, CommentRef, ShareMessage, StatusLine},
     },
+    share::hub::presence::Seat,
+};
+
+pub(crate) use crate::share::hub::presence::{ConnectionId, Presence, flush_presence};
+#[cfg(test)]
+pub(crate) use crate::share::hub::{
+    comments::{HELD, RETRYING},
+    presence::Ignored,
 };
 
 /// Broadcast messages a slow joiner may fall behind by before it is
@@ -248,6 +260,7 @@ impl Hub {
         self.lock().queue.iter().cloned().collect()
     }
 }
+
 /// Who a message from the hub is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Audience {
@@ -283,18 +296,3 @@ pub(crate) struct Outgoing {
     pub(crate) audience: Audience,
     pub(crate) message: ShareMessage,
 }
-
-mod answers;
-mod comments;
-mod presence;
-
-use crate::share::hub::presence::Seat;
-pub(crate) use crate::share::hub::presence::{ConnectionId, Presence, flush_presence};
-#[cfg(test)]
-pub(crate) use crate::share::hub::{
-    comments::{HELD, RETRYING},
-    presence::Ignored,
-};
-
-#[cfg(test)]
-mod tests;

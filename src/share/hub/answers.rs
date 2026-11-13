@@ -7,9 +7,8 @@ use crate::{
         comment::Author,
         control::{AnswerText, ShareMessage},
     },
+    share::hub::{Audience, Hub, MAX_ANSWERS, Outgoing},
 };
-
-use crate::share::hub::{Audience, Hub, MAX_ANSWERS, Outgoing};
 
 impl Hub {
     /// Sends an answer, to everyone or to one person: `to` (resolved among

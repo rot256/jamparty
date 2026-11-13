@@ -2,9 +2,9 @@
 //! presence updates and cursors, and what everyone is told of them.
 
 use std::sync::Arc;
-
 #[cfg(test)]
 use std::sync::atomic::Ordering;
+
 use tokio::{sync::mpsc, time};
 
 use crate::{
@@ -14,35 +14,31 @@ use crate::{
         control::{AckOutcome, CommentRef, ShareMessage},
         presence::{PagePath, Person, Position, Whereabouts},
     },
+    share::hub::{Audience, Hub, PRESENCE_INTERVAL},
 };
 
-use crate::share::hub::{Audience, Hub, PRESENCE_INTERVAL};
+/// Who `here` are, as their comments are signed.
+fn authors(here: &[Person]) -> Vec<Author> {
+    here.iter()
+        .map(|person| Author {
+            name: person.name.clone(),
+            fingerprint: person.fingerprint,
+            key: person.key,
+        })
+        .collect()
+}
 
 impl Hub {
     pub(super) fn broadcast_presence(&self) {
         let here = self.here();
-        let joiners = here
-            .iter()
-            .map(|person| Author {
-                name: person.name.clone(),
-                fingerprint: person.fingerprint,
-                key: person.key,
-            })
-            .collect();
+        let joiners = authors(&here);
         self.broadcast(ShareMessage::Presence { joiners, here });
     }
 
     /// Who is connected, in order of admission, once per key.
     #[must_use]
     pub(crate) fn presence(&self) -> Vec<Author> {
-        self.here()
-            .into_iter()
-            .map(|person| Author {
-                name: person.name,
-                fingerprint: person.fingerprint,
-                key: person.key,
-            })
-            .collect()
+        authors(&self.here())
     }
 
     /// Who is connected and where, once per key (in order of the key's
@@ -168,9 +164,7 @@ impl Presence {
         }
         Ok(author)
     }
-}
 
-impl Presence {
     /// Queues a comment from this connection's `author` (see
     /// [`Hub::comment`]) and sends its acknowledgement to this connection
     /// under the hub's lock: before anything the comment leads to, its

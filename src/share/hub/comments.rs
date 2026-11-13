@@ -12,9 +12,8 @@ use crate::{
         comment::{Author, Comment, Draft},
         control::{AckOutcome, Anchor, CommentRef, ShareMessage, StatusLine},
     },
+    share::hub::{Audience, Hub, Inner, MAX_ANCHORS, MAX_QUEUED_PER_KEY, MAX_REFS},
 };
-
-use crate::share::hub::{Audience, Hub, Inner, MAX_ANCHORS, MAX_QUEUED_PER_KEY, MAX_REFS};
 
 impl Hub {
     /// Rate-limits and queues a comment from `author`. A `reference` this
