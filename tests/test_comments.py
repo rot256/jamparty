@@ -297,6 +297,48 @@ def test_a_reload_during_sending_does_not_send_twice(
         assert record["selector"] == "#intro"
 
 
+def with_status(message: dict[str, object]) -> dict[str, object]:
+    """`message` from the joiner as if the share had a status line."""
+    line = "delivery failing, retrying"
+    if message["type"] == "hello":
+        link = cast(dict[str, object], message["link"])
+        return {**message, "link": {**link, "status": line}}
+    if message["type"] == "link":
+        return {**message, "status": line}
+    return message
+
+
+def test_unsent_comments_go_out_under_a_status_line(tmp_path: Path, page: Page) -> None:
+    """A comment the page could not send goes out again once the joiner is
+    back, even while the share's status line shows."""
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        # The answer never reaches the page, and its socket goes: unsent.
+        tap.hold.add("reply")
+        page.locator("#intro").click(button="right")
+        textarea = overlay(page, "textarea")
+        textarea.press_sequentially("Despite the status line.")
+        textarea.press("Enter")
+        waiting(page, "the joiner's answer", lambda: len(tap.held) > 0)
+        tap.held.clear()
+        tap.hold.clear()
+        tap.edit = with_status
+        tap.sockets[-1].close()
+        rows = overlay(page, "#outbox-list li")
+        expect(rows).to_have_attribute("data-state", "queued")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "grey")
+        expect(overlay(page, "#connection-text")).to_contain_text(
+            "delivery failing, retrying"
+        )
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "Despite the status line."
+
+
 def test_the_comment_list(tmp_path: Path, page: Page) -> None:
     with (
         share(tmp_path, "serve", str(SITE)) as shared,

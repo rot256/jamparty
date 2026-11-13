@@ -14,11 +14,15 @@ export interface ConnectionView {
 export class Connection {
   private socketOpen = false;
   private link: Link | null = null;
-  private colour: Colour = "amber";
+  /** The share is reachable through the joiner, status line or not. */
+  private reachable = false;
 
   constructor(
-    /** The state changed; `recovered` when it turned green again. */
-    private readonly changed: (view: ConnectionView, recovered: boolean) => void,
+    /**
+     * The state changed; `reached` when the share became reachable again
+     * (comments can go out, even with a status line showing).
+     */
+    private readonly changed: (view: ConnectionView, reached: boolean) => void,
   ) {}
 
   get view(): ConnectionView {
@@ -48,9 +52,9 @@ export class Connection {
   }
 
   private render(): void {
-    const view = this.view;
-    const recovered = view.colour === "green" && this.colour !== "green";
-    this.colour = view.colour;
-    this.changed(view, recovered);
+    const reachable = this.socketOpen && this.link?.connected === true;
+    const reached = reachable && !this.reachable;
+    this.reachable = reachable;
+    this.changed(this.view, reached);
   }
 }

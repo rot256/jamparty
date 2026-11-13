@@ -406,12 +406,14 @@ def pages(browser: Browser, *joined: Joined) -> Iterator[list[Page]]:
 
 class SocketTap:
     """Routes a page's sockets to its joiner through the test, so messages
-    from the joiner of the types in `hold` can be held back."""
+    from the joiner of the types in `hold` can be held back, and others
+    changed on their way by `edit`."""
 
     def __init__(self, page: Page) -> None:
         self.hold: set[str] = set()
         self.held: list[tuple[WebSocketRoute, str]] = []
         self.sockets: list[WebSocketRoute] = []
+        self.edit: Callable[[dict[str, object]], dict[str, object]] | None = None
         page.route_web_socket("**/_jampot/api/socket", self._route)
 
     def _route(self, route: WebSocketRoute) -> None:
@@ -419,9 +421,11 @@ class SocketTap:
         server = route.connect_to_server()
 
         def from_joiner(message: str | bytes) -> None:
-            kind = cast(dict[str, object], json.loads(message))["type"]
-            if kind in self.hold:
+            parsed = cast(dict[str, object], json.loads(message))
+            if parsed["type"] in self.hold:
                 self.held.append((route, str(message)))
+            elif self.edit is not None:
+                route.send(json.dumps(self.edit(parsed)))
             else:
                 route.send(message)
 

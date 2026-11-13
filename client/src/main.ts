@@ -72,10 +72,10 @@ function install(): void {
     editMode.refresh();
   };
 
-  const connection = new Connection((view, recovered) => {
+  const connection = new Connection((view, reached) => {
     list.showState(view);
     if (view.colour !== "green") layer.clear();
-    if (recovered) void outbox.resendAll();
+    if (reached) void outbox.resendAll();
   });
 
   const showPeople = (people: Person[]): void => {

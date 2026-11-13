@@ -352,7 +352,8 @@ var Connection = class {
   changed;
   socketOpen = false;
   link = null;
-  colour = "amber";
+  /** The share is reachable through the joiner, status line or not. */
+  reachable = false;
   get view() {
     let colour = "green";
     let text = "connected";
@@ -377,10 +378,10 @@ var Connection = class {
     this.render();
   }
   render() {
-    const view = this.view;
-    const recovered = view.colour === "green" && this.colour !== "green";
-    this.colour = view.colour;
-    this.changed(view, recovered);
+    const reachable = this.socketOpen && this.link?.connected === true;
+    const reached = reachable && !this.reachable;
+    this.reachable = reachable;
+    this.changed(this.view, reached);
   }
 };
 
@@ -2625,10 +2626,10 @@ function install() {
     prompt.show(settings);
     editMode.refresh();
   };
-  const connection = new Connection((view, recovered) => {
+  const connection = new Connection((view, reached) => {
     list.showState(view);
     if (view.colour !== "green") layer.clear();
-    if (recovered) void outbox.resendAll();
+    if (reached) void outbox.resendAll();
   });
   const showPeople = (people) => {
     here = people;
