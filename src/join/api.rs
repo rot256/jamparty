@@ -1,10 +1,8 @@
-//! What the joiner and its pages say to each other: `api/status` (the
-//! version probe) and the messages on `api/socket`, one JSON text frame
-//! each.
+//! What the joiner and its pages say to each other on `api/socket`, one
+//! JSON text frame each.
 
 use std::time::Duration;
 
-use hyper::{Response, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -22,14 +20,12 @@ use crate::{
         control::{CommentRef, Revision},
         presence::{PagePath, Person, Position},
     },
-    share::body::{AppBody, json_response},
 };
 
 /// The version of what the page's client and the joiner say to each
-/// other. The client is served by the share and the socket by the joiner,
-/// which may run another jampot; the client compares this number (from
-/// `api/status`, and again in `hello`) with its own and refuses to go on
-/// when they differ. Bump it on any change an older client or joiner
+/// other. The joiner serves the client too, so the two match; the client
+/// still compares this number in `hello` with its own and refuses to go
+/// on when they differ. Bump it on any change an older client or joiner
 /// cannot handle; the client ignores message types it does not know, so a
 /// new joiner message alone needs none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -38,25 +34,6 @@ use crate::{
 pub(crate) struct ApiVersion(u32);
 
 pub(crate) const API_VERSION: ApiVersion = ApiVersion(3);
-
-/// `api/status`: the page API's version and this jampot's.
-#[derive(Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct Status {
-    api: ApiVersion,
-    version: JampotVersion,
-}
-
-/// `GET api/status`: which page API this joiner speaks.
-pub(crate) fn status() -> Response<AppBody> {
-    json_response(
-        StatusCode::OK,
-        &Status {
-            api: API_VERSION,
-            version: JampotVersion::current(),
-        },
-    )
-}
 
 /// The first message on a socket: the versions, then the whole state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -215,7 +192,7 @@ mod bindings {
         },
         join::{
             api::{
-                API_VERSION, ApiVersion, Change, FromPage, Hello, Outcome, RequestNumber, Status,
+                API_VERSION, ApiVersion, Change, FromPage, Hello, Outcome, RequestNumber,
                 Submission, ToPage,
             },
             preferences::PageSettings,
@@ -264,7 +241,6 @@ mod bindings {
             Answer::decl(&cfg),
             Link::decl(&cfg),
             Snapshot::decl(&cfg),
-            Status::decl(&cfg),
             Hello::decl(&cfg),
             RequestNumber::decl(&cfg),
             Outcome::decl(&cfg),

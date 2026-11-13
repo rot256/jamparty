@@ -85,7 +85,6 @@ function samePage(page) {
 // client/src/config.ts
 var SCRIPT_URL = new URL(import.meta.url);
 var BASE = new URL("./", SCRIPT_URL);
-var STATUS_URL = new URL("api/status", BASE);
 var SOCKET_URL = (() => {
   const url = new URL("api/socket", BASE);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -1590,22 +1589,7 @@ var Outbox = class {
 // client/src/api.ts
 function incompatibility(api, version) {
   if (api === API_VERSION) return null;
-  const share = SHARE_VERSION ?? "unknown";
-  const joiner = typeof version === "string" ? version : "another";
-  return typeof api === "number" ? `jampot versions do not match: the share runs ${share} (page API ${API_VERSION}), your jampot join runs ${joiner} (page API ${api}). Use the same jampot version on both sides and join again.` : `Your jampot join is older than the share's jampot ${share} and cannot serve this page. Use the same jampot version on both sides and join again.`;
-}
-async function probe() {
-  try {
-    const response = await fetch(STATUS_URL, { cache: "no-store" });
-    if (!response.ok) return null;
-    const body = await response.json();
-    return incompatibility(
-      isRecord(body) ? body.api : void 0,
-      isRecord(body) ? body.version : void 0
-    ) ?? "";
-  } catch {
-    return null;
-  }
+  return `This page's jampot client (page API ${API_VERSION}) does not match jampot join ${version} (page API ${api}). Reload the page.`;
 }
 function parseMessage(data) {
   if (typeof data !== "string") return null;
@@ -1642,29 +1626,16 @@ var PageSocket = class {
   wait = RECONNECT_MIN_MS;
   timer;
   stopped = false;
-  /** A version check is out: one connection attempt at a time. */
-  probing = false;
   /** Whether the socket carries the joiner's state now. */
   get isOpen() {
     return this.ready;
   }
-  /** Checks the joiner's page API, then opens the socket. */
+  /** Opens the socket. */
   start() {
-    void this.connect();
+    this.connect();
   }
-  async connect() {
-    if (this.stopped || this.socket !== null || this.probing) return;
-    this.probing = true;
-    const checked = await probe();
-    this.probing = false;
-    if (checked === null) {
-      this.backOff();
-      return;
-    }
-    if (checked !== "") {
-      this.refuse(checked);
-      return;
-    }
+  connect() {
+    if (this.stopped || this.socket !== null) return;
     const socket = new WebSocket(SOCKET_URL);
     this.socket = socket;
     this.lastHeard = Date.now();
@@ -1756,7 +1727,7 @@ var PageSocket = class {
     if (this.stopped || this.timer !== void 0) return;
     this.timer = window.setTimeout(() => {
       this.timer = void 0;
-      void this.connect();
+      this.connect();
     }, wait);
   }
   refuse(reason) {

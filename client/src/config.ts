@@ -3,7 +3,6 @@
 const SCRIPT_URL = new URL(import.meta.url);
 const BASE = new URL("./", SCRIPT_URL);
 
-export const STATUS_URL = new URL("api/status", BASE);
 /** The joiner's socket for this page, on the same host. */
 export const SOCKET_URL = ((): URL => {
   const url = new URL("api/socket", BASE);

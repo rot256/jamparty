@@ -127,8 +127,6 @@ answers: Array<Answer>,
  */
 revision: Revision | null, };
 
-export type Status = { api: ApiVersion, version: JampotVersion, };
-
 export type Hello = { api: ApiVersion, version: JampotVersion, link: Link, 
 /**
  * Who is here, this joiner included, with their colour, page and

@@ -1,42 +1,16 @@
-// The joiner's page API: `api/status`, which says which version of it the
-// joiner speaks, and the messages on its socket, typed by the bindings
-// generated from its Rust types. The joiner may run another jampot than
-// the share this client came from, so the version is checked before the
-// socket is opened, and again in its hello.
+// The joiner's page API: the messages on its socket, typed by the
+// bindings generated from its Rust types. The joiner serves this client
+// too; a page that outlived its joiner (restarted as another jampot)
+// learns so from the version in the hello.
 
-import { SHARE_VERSION, STATUS_URL } from "./config";
 import { API_VERSION, type ToPage } from "./generated/api";
 import { isRecord } from "./json";
 
 /** Why the joiner cannot serve this page, or null when it can. */
-export function incompatibility(api: unknown, version: unknown): string | null {
+export function incompatibility(api: number, version: string): string | null {
   if (api === API_VERSION) return null;
-  const share = SHARE_VERSION ?? "unknown";
-  const joiner = typeof version === "string" ? version : "another";
-  return typeof api === "number"
-    ? `jampot versions do not match: the share runs ${share} (page API ${API_VERSION}), ` +
-      `your jampot join runs ${joiner} (page API ${api}). ` +
-      "Use the same jampot version on both sides and join again."
-    : `Your jampot join is older than the share's jampot ${share} and cannot serve this page. ` +
-      "Use the same jampot version on both sides and join again.";
-}
-
-/**
- * Asks the joiner which page API it speaks: null when it is not
- * reachable, "" when it speaks this one, or why it cannot serve the page.
- */
-export async function probe(): Promise<string | null> {
-  try {
-    const response = await fetch(STATUS_URL, { cache: "no-store" });
-    if (!response.ok) return null;
-    const body: unknown = await response.json();
-    return incompatibility(
-      isRecord(body) ? body.api : undefined,
-      isRecord(body) ? body.version : undefined,
-    ) ?? "";
-  } catch {
-    return null;
-  }
+  return `This page's jampot client (page API ${API_VERSION}) does not match ` +
+    `jampot join ${version} (page API ${api}). Reload the page.`;
 }
 
 /** A socket message, if `data` is one (unknown types pass: they are ignored). */

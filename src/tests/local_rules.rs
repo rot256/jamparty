@@ -82,8 +82,8 @@ async fn host_and_cross_site_rules() {
         .collect();
     assert_eq!(csp, ["frame-ancestors 'self'"]);
 
-    // Another site cannot read pages or the status.
-    for path in ["/", "/_jampot/api/status"] {
+    // Another site cannot read pages or the client.
+    for path in ["/", "/_jampot/client.js"] {
         let reply = send("GET", path, &cross_fetch).await;
         assert_eq!(reply.status, 403, "{path}");
         assert!(reply.headers.contains_key(header::CONTENT_SECURITY_POLICY));
@@ -93,13 +93,9 @@ async fn host_and_cross_site_rules() {
     assert_eq!(send("GET", "/socket", &upgrade).await.status, 403);
     // Reserved paths take only their method.
     assert_eq!(
-        send(
-            "POST",
-            "/_jampot/api/status",
-            &[("origin", origin.as_str())]
-        )
-        .await
-        .status,
+        send("POST", "/_jampot/client.js", &[("origin", origin.as_str())])
+            .await
+            .status,
         405
     );
     assert_eq!(send("GET", SOCKET, &[]).await.status, 405);
@@ -177,6 +173,7 @@ async fn the_joiners_paths_never_reach_the_site() {
     for path in [
         "/_jampot/api/events",
         "/_jampot/api/comments",
+        "/_jampot/api/status",
         "/_jampot/api/status/",
         "/_jampot/api/",
         "/_jampot/api/socket/x",

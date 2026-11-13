@@ -2,10 +2,9 @@
 // whole state first (`hello`), then every change in order; the page says
 // where it is and sends its pointer, comments and settings changes, each
 // request answered by a `reply`. A socket that closes, or stays silent
-// past the watchdog, is opened again (after checking the joiner's version)
-// and starts over from a new hello.
+// past the watchdog, is opened again and starts over from a new hello.
 
-import { incompatibility, parseMessage, probe } from "./api";
+import { incompatibility, parseMessage } from "./api";
 import { RECONNECT_MAX_MS, RECONNECT_MIN_MS, SOCKET_URL, WATCHDOG_MS } from "./config";
 import type { FromPage, Hello, Outcome, ToPage } from "./generated/api";
 
@@ -40,8 +39,6 @@ export class PageSocket {
   private wait = RECONNECT_MIN_MS;
   private timer: number | undefined;
   private stopped = false;
-  /** A version check is out: one connection attempt at a time. */
-  private probing = false;
 
   constructor(private readonly handlers: SocketHandlers) {
     // The joiner pings every 15 s; a silent socket is a dead one.
@@ -63,24 +60,13 @@ export class PageSocket {
     return this.ready;
   }
 
-  /** Checks the joiner's page API, then opens the socket. */
+  /** Opens the socket. */
   start(): void {
-    void this.connect();
+    this.connect();
   }
 
-  private async connect(): Promise<void> {
-    if (this.stopped || this.socket !== null || this.probing) return;
-    this.probing = true;
-    const checked = await probe();
-    this.probing = false;
-    if (checked === null) {
-      this.backOff();
-      return;
-    }
-    if (checked !== "") {
-      this.refuse(checked);
-      return;
-    }
+  private connect(): void {
+    if (this.stopped || this.socket !== null) return;
     const socket = new WebSocket(SOCKET_URL);
     this.socket = socket;
     this.lastHeard = Date.now();
@@ -180,7 +166,7 @@ export class PageSocket {
     if (this.stopped || this.timer !== undefined) return;
     this.timer = window.setTimeout(() => {
       this.timer = undefined;
-      void this.connect();
+      this.connect();
     }, wait);
   }
 

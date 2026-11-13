@@ -4,8 +4,7 @@ use crate::core::{
     ids::EndpointKey,
     port::Port,
     request::{
-        CLIENT_PATH, LocalOrigin, Method, Refusal, RequestFacts, Route, SOCKET_PATH, STATUS_PATH,
-        Upgrade,
+        CLIENT_PATH, LocalOrigin, Method, Refusal, RequestFacts, Route, SOCKET_PATH, Upgrade,
     },
 };
 
@@ -111,7 +110,6 @@ fn table() {
         ("page", nav("/", "none"), Ok(Route::Proxy)),
         ("asset", fetch(Method::Get, "/app.js"), Ok(Route::Proxy)),
         ("head", fetch(Method::Head, "/"), Ok(Route::Proxy)),
-        ("status", fetch(Method::Get, STATUS_PATH), Ok(Route::Status)),
         ("socket", socket(Some("same-origin")), Ok(Route::Socket)),
         ("site post", fetch(Method::Post, "/form"), Ok(Route::Proxy)),
         ("site put", fetch(Method::Other, "/api/x"), Ok(Route::Proxy)),
@@ -144,9 +142,9 @@ fn table() {
         ),
         ("nav same-site", nav("/", "same-site"), Ok(Route::Proxy)),
         (
-            "nav to status",
-            nav(STATUS_PATH, "cross-site"),
-            Ok(Route::Status),
+            "nav to client.js",
+            nav(CLIENT_PATH, "cross-site"),
+            Ok(Route::Client),
         ),
         // Non-browser clients.
         ("curl get", bare(Method::Get, "/"), Ok(Route::Proxy)),
@@ -160,19 +158,6 @@ fn table() {
         ),
         ("curl socket with origin", socket(None), Ok(Route::Socket)),
         // Reserved paths: exact path, method and upgrade.
-        (
-            "post status",
-            fetch(Method::Post, STATUS_PATH),
-            Err(Refusal::MethodNotAllowed),
-        ),
-        (
-            "upgrade status",
-            RequestFacts {
-                path: STATUS_PATH,
-                ..upgrade(Some("same-origin"))
-            },
-            Err(Refusal::MethodNotAllowed),
-        ),
         (
             "post client.js",
             fetch(Method::Post, CLIENT_PATH),
@@ -207,12 +192,12 @@ fn table() {
             },
             Err(Refusal::MethodNotAllowed),
         ),
-        (
-            "head status",
-            fetch(Method::Head, STATUS_PATH),
-            Err(Refusal::MethodNotAllowed),
-        ),
         // The rest of the joiner's paths: its own, and not found.
+        (
+            "the removed status",
+            fetch(Method::Get, "/_jampot/api/status"),
+            Ok(Route::Unknown),
+        ),
         (
             "trailing slash",
             fetch(Method::Get, "/_jampot/api/status/"),
@@ -315,8 +300,8 @@ fn cross_site_requests_are_refused() {
                 origin: Some(OTHER_ORIGIN),
                 ..socket(Some("same-origin"))
             },
-            // Reading the status, or any page by fetch.
-            fetch(Method::Get, STATUS_PATH),
+            // Reading the client, or any page by fetch.
+            fetch(Method::Get, CLIENT_PATH),
             fetch(Method::Get, "/"),
             // An upgrade.
             upgrade(None),
@@ -348,16 +333,16 @@ fn cross_site_requests_are_refused() {
 fn reads_with_another_origin_are_refused() {
     let local = local();
     for origin in [Some("null"), Some(OTHER_ORIGIN)] {
-        for facts in [fetch(Method::Get, "/"), bare(Method::Head, STATUS_PATH)] {
+        for facts in [fetch(Method::Get, "/"), bare(Method::Head, CLIENT_PATH)] {
             let facts = RequestFacts { origin, ..facts };
             assert_eq!(local.decide(&facts), Err(Refusal::BadOrigin), "{origin:?}");
         }
     }
     let own = RequestFacts {
         origin: Some(ORIGIN),
-        ..fetch(Method::Get, STATUS_PATH)
+        ..fetch(Method::Get, CLIENT_PATH)
     };
-    assert_eq!(local.decide(&own), Ok(Route::Status));
+    assert_eq!(local.decide(&own), Ok(Route::Client));
     // Navigations are allowed from anywhere, with their Origin.
     let navigation = RequestFacts {
         origin: Some(OTHER_ORIGIN),

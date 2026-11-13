@@ -1,5 +1,6 @@
 """Sharing a site: serving and proxying through a joiner, its ports, live reload, and the bare command."""
 
+import http.client
 import json
 import socket
 import time
@@ -13,9 +14,12 @@ from playwright.sync_api import (
     expect,
 )
 from support import (
+    ROOT,
     SITE,
+    TIMEOUT,
     FixtureHandler,
     PageSocket,
+    eventually,
     hello,
     jampot,
     join,
@@ -78,7 +82,7 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         assert b"Fixture page" in body
         assert b"/_jampot/client.js?live=0" in body
         status, body = request(joined, "/_jampot/client.js")
-        assert status == 200 and b"api/socket" in body
+        assert status == 200 and body == (ROOT / "assets/client.js").read_bytes()
         assert request(joined, "/missing")[0] == 404
 
         # Wrong Host (DNS rebinding) and cross-site reads are refused.
@@ -109,9 +113,12 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         finally:
             page.close()
         assert hello(joined)["mine"] == [outcome["commented"]["id"]]
-        assert request(joined, "/_jampot/api/status")[0] == 200
         # The rest of the API is reserved: nothing there reaches the site.
-        for path in ["/_jampot/api/events", "/_jampot/api/missing"]:
+        for path in [
+            "/_jampot/api/status",
+            "/_jampot/api/events",
+            "/_jampot/api/missing",
+        ]:
             status, body = request(joined, path)
             assert status == 404, path
             assert b"no such jampot path" in body, body
@@ -238,3 +245,32 @@ def test_bare_jampot_and_the_agent_guides(tmp_path: Path) -> None:
     assert "--t3-url" in jampot(tmp_path, "agent", "t3")
     help_text = jampot(tmp_path, "--help")
     assert "serve" in help_text and "recv" not in help_text
+
+
+def test_the_joiner_answers_the_client_itself(tmp_path: Path) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        # With the share gone the site is not reachable, but its client is.
+        shared.process.stop()
+
+        def disconnected() -> bool:
+            return cast(dict[str, object], hello(joined)["link"])["connected"] is False
+
+        eventually("the joiner to lose the share", disconnected)
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", joined.port, timeout=TIMEOUT
+        )
+        try:
+            connection.request(
+                "GET", "/_jampot/client.js?live=3", headers={"Host": joined.host}
+            )
+            response = connection.getresponse()
+            body = response.read()
+        finally:
+            connection.close()
+        assert response.status == 200
+        assert response.getheader("Cache-Control") == "no-store"
+        assert response.getheader("Content-Type") == "text/javascript; charset=utf-8"
+        assert body == (ROOT / "assets/client.js").read_bytes()

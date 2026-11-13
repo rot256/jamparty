@@ -28,7 +28,7 @@ use crate::{
     core::request::{
         FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade, is_navigation,
     },
-    join::{api, control::Control, session::Session, socket},
+    join::{control::Control, session::Session, socket},
     share::{
         HEADER_READ_TIMEOUT,
         body::{AppBody, RequestError, full_body, javascript_response, map_incoming_response},
@@ -104,7 +104,6 @@ async fn handle(
     let decision = origin.decide(&request_facts);
     let mut response = match decision {
         Ok(Route::Client) => javascript_response(CLIENT_JS),
-        Ok(Route::Status) => api::status(),
         Ok(Route::Socket) => socket::open(request, session),
         Ok(Route::Unknown) => {
             RequestError::new(StatusCode::NOT_FOUND, "no such jampot path").into()

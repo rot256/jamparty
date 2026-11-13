@@ -338,12 +338,11 @@ async fn a_restarted_joiner_takes_what_is_pending_from_the_share() {
     connected(&again).await;
     let (_, hello) = PageSocket::hello(&again).await;
     assert_eq!(hello["mine"], json!([id]), "{hello}");
-    let status = get(&again, "/_jampot/api/status").await;
-    assert_eq!(status.status, 200);
-    let status: Value = serde_json::from_str(&status.body).unwrap();
+    assert_eq!(hello["api"], json!(3), "{hello}");
     assert_eq!(
-        status,
-        json!({"api": 3, "version": env!("CARGO_PKG_VERSION")})
+        hello["version"],
+        json!(env!("CARGO_PKG_VERSION")),
+        "{hello}"
     );
 }
 

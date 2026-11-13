@@ -27,7 +27,6 @@ pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
 pub(crate) const CLIENT_PATH: &str = "/_jampot/client.js";
 /// The joiner's API paths start with this.
 const API_PREFIX: &str = "/_jampot/api/";
-pub(crate) const STATUS_PATH: &str = "/_jampot/api/status";
 pub(crate) const SOCKET_PATH: &str = "/_jampot/api/socket";
 
 /// The request method, as far as the decision cares.
@@ -77,8 +76,6 @@ pub(crate) struct RequestFacts<'a> {
 pub(crate) enum Route {
     /// GET or HEAD the browser client.
     Client,
-    /// GET the page API's version.
-    Status,
     /// GET with an upgrade: the page's WebSocket.
     Socket,
     /// Another path under [`API_PREFIX`]: not found, and not the share's.
@@ -195,7 +192,6 @@ fn route(facts: &RequestFacts<'_>) -> Result<Route, Refusal> {
                 Err(Refusal::MethodNotAllowed)
             };
         }
-        STATUS_PATH => (Route::Status, Method::Get, Upgrade::No),
         SOCKET_PATH => (Route::Socket, Method::Get, Upgrade::Yes),
         path if path.starts_with(API_PREFIX) => return Ok(Route::Unknown),
         _ => return Ok(Route::Proxy),
