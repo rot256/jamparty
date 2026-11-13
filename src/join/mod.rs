@@ -88,11 +88,16 @@ pub(crate) struct Refused(pub(crate) RefusedReason);
 
 impl fmt::Display for Refused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "the share refused this joiner ({:?}): the token is wrong or from an earlier run",
-            self.0
-        )
+        let why = match self.0 {
+            RefusedReason::WrongSecret => "the token is wrong or from an earlier run",
+            RefusedReason::BadHello => {
+                "it could not read this joiner's hello: the share may run another jampot \
+                 version (compare `jampot --version` on both sides), or the token is wrong"
+            }
+            RefusedReason::Full => "it has as many joiners as it takes",
+            RefusedReason::Incompatible => "it speaks another protocol version",
+        };
+        write!(f, "the share refused this joiner ({:?}): {why}", self.0)
     }
 }
 
@@ -401,5 +406,18 @@ impl Joiner {
 
     pub(crate) async fn stop(self) {
         self.endpoint.close().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{join::Refused, protocol::control::RefusedReason};
+
+    #[test]
+    fn a_hello_the_share_cannot_read_may_mean_another_version() {
+        let said = Refused(RefusedReason::BadHello).to_string();
+        assert!(said.contains("another jampot version"), "{said}");
+        let said = Refused(RefusedReason::WrongSecret).to_string();
+        assert!(said.contains("the token is wrong"), "{said}");
     }
 }
