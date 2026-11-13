@@ -36,6 +36,9 @@ use crate::{
 /// How often the joiner pings a page; a page that hears nothing for more
 /// than twice as long reconnects.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
+/// Comments one page may have waiting for the share at once; more are
+/// refused. A page sends one at a time, and its unsent ones one by one.
+pub(crate) const MAX_IN_FLIGHT: usize = 8;
 
 /// RFC 6455's key suffix for `Sec-WebSocket-Accept`.
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -204,6 +207,15 @@ async fn handle(
         FromPage::Page { url } => session.visit(page, url),
         FromPage::Cursor { position } => session.cursor(page, position),
         FromPage::Comment(submission) => {
+            while comments.try_join_next().is_some() {}
+            if comments.len() >= MAX_IN_FLIGHT {
+                let outcome = Outcome::Refused {
+                    error: "too many comments on their way; try again shortly".to_owned(),
+                    retry_after: None,
+                };
+                session.reply(page, submission.n, outcome);
+                return Ok(());
+            }
             let session = Arc::clone(session);
             comments.spawn(async move { session.comment(page, submission).await });
         }
@@ -219,4 +231,47 @@ async fn handle(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{future, sync::Arc};
+
+    use serde_json::{Value, json};
+    use tokio::task::JoinSet;
+
+    use crate::join::{
+        session::tests::session,
+        socket::{MAX_IN_FLIGHT, handle},
+    };
+
+    #[tokio::test]
+    async fn comments_in_flight_are_capped_per_page() {
+        let session = Arc::new(session());
+        let mut attached = session.attach().unwrap();
+        attached.queue.recv().await.unwrap();
+        // As many comments as a page may have waiting, none answered yet.
+        let mut comments = JoinSet::new();
+        for _ in 0..MAX_IN_FLIGHT {
+            comments.spawn(future::pending::<()>());
+        }
+        let comment = json!({
+            "type": "comment",
+            "n": 9,
+            "ref": "one-more",
+            "page": "http://x.localhost/",
+            "selector": "h1",
+            "comment": "hi",
+        });
+        handle(&session, attached.id, &comment.to_string(), &mut comments)
+            .await
+            .ok()
+            .unwrap();
+        assert_eq!(comments.len(), MAX_IN_FLIGHT);
+        let reply: Value = serde_json::from_slice(&attached.queue.recv().await.unwrap()).unwrap();
+        assert_eq!(reply.pointer("/type"), Some(&json!("reply")), "{reply}");
+        assert_eq!(reply.pointer("/to"), Some(&json!(9)), "{reply}");
+        let error = reply.pointer("/outcome/refused/error");
+        assert!(error.is_some_and(Value::is_string), "{reply}");
+    }
 }

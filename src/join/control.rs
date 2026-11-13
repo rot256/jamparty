@@ -11,7 +11,7 @@ use iroh::endpoint::{Connection, SendStream};
 use rootcause::prelude::report;
 use tokio::{
     sync::{mpsc, oneshot},
-    time,
+    time::{self, Instant},
 };
 
 use crate::{
@@ -72,12 +72,15 @@ impl Control {
             reference: reference.clone(),
             waiter,
         };
+        // One deadline for both: a writer that cannot keep up fails the
+        // comment as a share that does not answer does.
+        let deadline = Instant::now() + ACK_TIMEOUT;
         let line = Envelope::from(JoinerMessage::Comment { reference, draft });
-        self.lines
-            .send(line)
+        time::timeout_at(deadline, self.lines.send(line))
             .await
+            .map_err(|_| report!("the comment could not be sent in time"))?
             .map_err(|_| report!("the connection to the share was lost"))?;
-        time::timeout(ACK_TIMEOUT, acked)
+        time::timeout_at(deadline, acked)
             .await
             .map_err(|_| report!("the share did not acknowledge the comment"))?
             .map_err(|_| report!("the connection to the share was lost"))

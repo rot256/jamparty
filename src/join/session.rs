@@ -338,7 +338,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::PathBuf;
 
     use crate::{
@@ -347,7 +347,8 @@ mod tests {
         protocol::presence::{CursorSelector, Fraction, PagePath, Position},
     };
 
-    fn session() -> Session {
+    /// A session with its cursor switch on, and a settings file nowhere.
+    pub(crate) fn session() -> Session {
         let Settings {
             name,
             keys,
