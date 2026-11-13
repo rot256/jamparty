@@ -1,6 +1,6 @@
-//! The party token `<iroh public key>:<secret>`: the share's key (how
-//! joiners find and authenticate it) and the party secret (what admits
-//! them).
+//! The party token: the share's iroh public key (how joiners find and
+//! authenticate it) and the party secret (what admits them), written as
+//! one base58 string.
 
 use std::{error::Error, fmt, str::FromStr};
 
@@ -141,8 +141,11 @@ impl fmt::Debug for PartySecret {
     }
 }
 
-/// `<share key>:<secret>`, as printed by `jampot share` and taken by
-/// `jampot join`.
+/// The share's key and the party secret, written as the base58 (Bitcoin
+/// alphabet: no `0`, `O`, `I` or `l`) of their 48 bytes, the 32-byte key
+/// then the 16-byte secret, as `jampot serve` prints it and `jampot join`
+/// takes it. That is at most 66 characters, usually 64 to 66 (the all-zero
+/// token is 48 `1`s). Base58 gives each byte string exactly one spelling.
 #[derive(Clone, Debug)]
 pub(crate) struct PartyToken {
     pub(crate) share: EndpointKey,
@@ -154,29 +157,64 @@ pub(crate) struct TokenError;
 
 impl fmt::Display for TokenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a party token is <64 hex characters>:<26 base32 characters>")
+        f.write_str(
+            "a party token is one base58 string of about 66 characters, as jampot serve prints it",
+        )
     }
 }
+
+const KEY_BYTES: usize = 32;
+/// The key and the secret, as the token encodes them.
+const TOKEN_BYTES: usize = KEY_BYTES + SECRET_BYTES;
+/// Room for the base58 text of [`TOKEN_BYTES`] bytes (at most 66
+/// characters), which bs58 also uses as its working space.
+const MAX_TOKEN_TEXT: usize = 70;
 
 impl Error for TokenError {}
 
 impl FromStr for PartyToken {
     type Err = TokenError;
 
-    /// Surrounding whitespace (from copy and paste) is ignored.
+    /// Surrounding whitespace (from copy and paste) is ignored. The text
+    /// must decode to exactly 48 bytes; an extra leading `1` is an extra
+    /// zero byte and is rejected.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let (share, secret) = raw.trim().split_once(':').ok_or(TokenError)?;
-        Ok(Self {
-            share: share.parse().map_err(|_| TokenError)?,
-            secret: secret.parse().map_err(|_| TokenError)?,
-        })
+        let raw = raw.trim();
+        if raw.is_empty() || raw.len() > MAX_TOKEN_TEXT {
+            return Err(TokenError);
+        }
+        let mut bytes = Zeroizing::new([0; TOKEN_BYTES]);
+        let decoded = bs58::decode(raw)
+            .onto(bytes.as_mut_slice())
+            .map_err(|_| TokenError)?;
+        if decoded != TOKEN_BYTES {
+            return Err(TokenError);
+        }
+        let (key, rest) = bytes.split_at(KEY_BYTES);
+        let mut token = Self {
+            share: EndpointKey(key.try_into().map_err(|_| TokenError)?),
+            secret: PartySecret([0; SECRET_BYTES]),
+        };
+        token.secret.0.copy_from_slice(rest);
+        Ok(token)
     }
 }
 
 impl fmt::Display for PartyToken {
+    /// The bytes and the text only ever sit in fixed buffers wiped on drop
+    /// (the text carries the secret).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { share, secret } = self;
-        write!(f, "{share}:{secret}")
+        let mut bytes = Zeroizing::new([0; TOKEN_BYTES]);
+        let (key, rest) = bytes.split_at_mut(KEY_BYTES);
+        key.copy_from_slice(&share.0);
+        rest.copy_from_slice(&secret.0);
+        let mut text = Zeroizing::new([0; MAX_TOKEN_TEXT]);
+        let written = bs58::encode(bytes.as_slice())
+            .onto(text.as_mut_slice())
+            .map_err(|_| fmt::Error)?;
+        let text = text.get(..written).ok_or(fmt::Error)?;
+        f.write_str(str::from_utf8(text).map_err(|_| fmt::Error)?)
     }
 }
 
@@ -189,7 +227,7 @@ mod tests {
     use crate::core::{
         ids::EndpointKey,
         rng::SeededRng,
-        token::{PartySecret, PartyToken, SECRET_BYTES, SECRET_LEN},
+        token::{MAX_TOKEN_TEXT, PartySecret, PartyToken, SECRET_BYTES, SECRET_LEN},
     };
 
     fn token(seed: u64) -> PartyToken {
@@ -199,16 +237,24 @@ mod tests {
         }
     }
 
+    const BASE58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
     #[test]
     fn token_round_trips() {
         let token = token(1);
         let text = token.to_string();
-        let (key, secret) = text.split_once(':').unwrap();
-        assert_eq!(key, "5a".repeat(32));
-        assert_eq!(secret.len(), 26);
+        assert!((64..=66).contains(&text.len()), "{text}");
+        assert!(text.chars().all(|c| BASE58.contains(c)), "{text}");
         let parsed: PartyToken = format!("  {text}\n").parse().unwrap();
         assert_eq!(parsed.share, token.share);
         assert!(parsed.secret.matches(&token.secret));
+        // Known answer: all-zero key and secret.
+        let zeros = PartyToken {
+            share: EndpointKey([0; 32]),
+            secret: PartySecret([0; SECRET_BYTES]),
+        };
+        assert_eq!(zeros.to_string(), "1".repeat(48));
+        assert!(zeros.to_string().parse::<PartyToken>().is_ok());
     }
 
     #[test]
@@ -247,29 +293,50 @@ mod tests {
 
     #[test]
     fn malformed_tokens_are_rejected() {
-        let good = token(3).to_string();
-        let (key, secret) = good.split_once(':').unwrap();
+        let token = token(3);
+        let good = token.to_string();
+        let old_format = format!("{}:{}", token.share, token.secret);
+        let mut chars = good.chars();
+        let (first, rest) = (chars.next().unwrap(), chars.as_str());
+        let swap = |c: char| if c == 'z' { 'y' } else { 'z' };
         for bad in [
             String::new(),
-            key.to_owned(),
-            format!("{key}:"),
-            format!(":{secret}"),
-            format!("{key}:{secret}:x"),
-            format!("{key}{secret}"),
-            format!("{}:{secret}", key.to_uppercase()),
-            format!("{key}:{}", secret.to_uppercase()),
-            format!("{key}:{secret}a"),
-            format!("{key}:{}", &secret[1..]),
-            format!("{key}:{}=", &secret[1..]),
-            format!("{key}:{}1", &secret[1..]),
-            // Same bits, non-zero trailing bits: not canonical.
-            format!("{key}:{}", "a".repeat(25) + "b"),
+            old_format,
+            format!("{good}:"),
+            // Characters outside base58.
+            format!("0{rest}"),
+            format!("O{rest}"),
+            format!("I{rest}"),
+            format!("l{rest}"),
+            format!("{first}{rest}="),
+            // Too long for 48 bytes. (A shortened token can still be another
+            // valid one: base58 carries no checksum.)
+            format!("{good}{}", swap(first)),
+            "z".repeat(MAX_TOKEN_TEXT + 1),
+            // A leading `1` is one more (zero) byte: not 48 bytes.
+            format!("1{good}"),
+            "1".repeat(47),
         ] {
             assert!(bad.parse::<PartyToken>().is_err(), "{bad:?}");
         }
     }
 
     proptest! {
+        #[test]
+        fn token_parse_round_trips(key in any::<[u8; 32]>(), secret in any::<[u8; 16]>()) {
+            let token = PartyToken { share: EndpointKey(key), secret: PartySecret(secret) };
+            let text = token.to_string();
+            prop_assert!(text.len() <= 66);
+            let parsed: PartyToken = text.parse().unwrap();
+            prop_assert_eq!(parsed.share, token.share);
+            prop_assert!(parsed.secret.matches(&token.secret));
+        }
+
+        #[test]
+        fn token_parse_never_panics(raw in "\\PC{0,80}") {
+            let _ = raw.parse::<PartyToken>();
+        }
+
         #[test]
         fn secret_parse_round_trips(bytes in any::<[u8; 16]>()) {
             let secret = PartySecret(bytes);

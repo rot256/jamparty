@@ -375,10 +375,35 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         assert cast(dict[str, object], json.loads(body))["pending"] == 1
 
 
+BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def base58_decode(text: str) -> bytes:
+    """A party token's bytes: the share's key (32) and the secret (16)."""
+    value = 0
+    for character in text:
+        value = value * 58 + BASE58.index(character)
+    zeros = len(text) - len(text.lstrip("1"))
+    return bytes(zeros) + value.to_bytes((value.bit_length() + 7) // 8, "big")
+
+
+def base58_encode(data: bytes) -> str:
+    value = int.from_bytes(data, "big")
+    digits = ""
+    while value:
+        value, digit = divmod(value, 58)
+        digits = BASE58[digit] + digits
+    zeros = len(data) - len(data.lstrip(b"\0"))
+    return "1" * zeros + digits
+
+
 def test_a_wrong_token_is_refused(tmp_path: Path) -> None:
     with share(tmp_path, "serve", str(SITE)) as shared:
-        key, _secret = shared.token.split(":")
-        wrong = f"{key}:{'a' * 26}"
+        token = base58_decode(shared.token)
+        assert len(token) == 48
+        assert base58_encode(token) == shared.token
+        # The share's own key with another secret.
+        wrong = base58_encode(token[:32] + bytes(range(16)))
         with join_process(tmp_path, shared, wrong) as process:
             _ = process.wait_for("jampot: open ")
             output = process.wait_for("jampot: the share refused")

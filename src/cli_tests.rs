@@ -5,13 +5,22 @@ use clap::{CommandFactory, Parser};
 use crate::{
     Cli, Command, Delivery, TokenArg,
     agent::guides,
+    core::{
+        ids::EndpointKey,
+        rng::SeededRng,
+        token::{PartySecret, PartyToken},
+    },
     protocol::agent::Addressee,
     share::delivery::{CommandTarget, Target},
     target,
 };
 
 fn token() -> String {
-    format!("{}:{}", "ab".repeat(32), "a".repeat(26))
+    PartyToken {
+        share: EndpointKey([0xab; 32]),
+        secret: PartySecret::generate(&SeededRng::new(7)),
+    }
+    .to_string()
 }
 
 #[test]

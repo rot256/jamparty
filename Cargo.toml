@@ -12,6 +12,7 @@ publish = ["crates-io"]
 include = ["/assets/client.js", "/src", "/LICENSE", "/README.md"]
 
 [dependencies]
+bs58 = { version = "0.5.1", default-features = false }
 bytes = "1.12.1"
 clap = { version = "4.6.6", features = ["derive"] }
 data-encoding = "2.11.1"
