@@ -36,7 +36,7 @@ joiner's local endpoints and the share; nothing in the site itself.
 
 ## Comment dialog
 
-- Title `Comment:` for element and page comments (done, `d4b01b4`);
+- Title `Comment:` for element and page comments;
   `Comment on agent response:` stays for replies to answers.
 
 ## Edit mode
