@@ -44,8 +44,9 @@ pub(crate) enum Dropped {
 struct Page {
     /// None before the page said where it is, or while it cannot say.
     url: Option<PagePath>,
-    /// When it was last in front (0: it has not said where it is yet).
-    active: u64,
+    /// When it was last in front, on the pages' clock (none: it has not
+    /// said where it is yet).
+    active: Option<u64>,
     queue: mpsc::Sender<Bytes>,
     _dropped: oneshot::Sender<()>,
 }
@@ -67,13 +68,15 @@ impl Pages {
         self.next = self.next.wrapping_add(1);
         let (sender, queue) = mpsc::channel(PAGE_QUEUE);
         // A new queue has room for its hello.
-        let _ = sender.try_send(frame(hello));
+        if let Ok(hello) = frame(hello) {
+            let _ = sender.try_send(hello);
+        }
         let (dropped_sender, dropped) = oneshot::channel();
         self.pages.insert(
             id,
             Page {
                 url: None,
-                active: 0,
+                active: None,
                 queue: sender,
                 _dropped: dropped_sender,
             },
@@ -91,7 +94,7 @@ impl Pages {
         self.clock = self.clock.wrapping_add(1);
         if let Some(page) = self.pages.get_mut(&id) {
             page.url = url;
-            page.active = self.clock;
+            page.active = Some(self.clock);
         }
     }
 
@@ -111,8 +114,9 @@ impl Pages {
     fn front(&self) -> Option<(&PageId, &Page)> {
         self.pages
             .iter()
-            .filter(|(_, page)| page.active > 0)
-            .max_by_key(|(_, page)| page.active)
+            .filter_map(|(id, page)| page.active.map(|active| (active, id, page)))
+            .max_by_key(|(active, _, _)| *active)
+            .map(|(_, id, page)| (id, page))
     }
 
     /// Where the joiner is: the page of its most recently active page.
@@ -131,7 +135,9 @@ impl Pages {
     /// its page, and none to a page more than half behind (the next
     /// movement replaces it); everything else to all.
     pub(crate) fn publish(&mut self, message: &ToPage) -> Dropped {
-        let frame = frame(message);
+        let Ok(frame) = frame(message) else {
+            return Dropped::None;
+        };
         let cursor_url = match message {
             ToPage::Cursor { url, .. } => Some(url),
             ToPage::Hello(_)
@@ -176,7 +182,10 @@ impl Pages {
         let Some(page) = self.pages.get(&id) else {
             return Dropped::None;
         };
-        if page.queue.try_send(frame(message)).is_err() {
+        let Ok(frame) = frame(message) else {
+            return Dropped::None;
+        };
+        if page.queue.try_send(frame).is_err() {
             tracing::debug!(?id, "a page fell behind; dropping it");
             self.detach(id);
             return Dropped::Some;
@@ -192,11 +201,13 @@ impl Pages {
     }
 }
 
-/// `message` as a text frame's payload.
-#[must_use]
-pub(crate) fn frame(message: &ToPage) -> Bytes {
-    // Serialising these types cannot fail: no maps with non-string keys.
-    Bytes::from(serde_json::to_vec(message).unwrap_or_else(|_| b"{}".to_vec()))
+/// `message` as a text frame's payload. Serialising these types does not
+/// fail (no maps with non-string keys, no fallible `Serialize`); were it
+/// ever to, the message is not sent, and the error is logged.
+pub(crate) fn frame(message: &ToPage) -> Result<Bytes, serde_json::Error> {
+    serde_json::to_vec(message).map(Bytes::from).inspect_err(
+        |error| tracing::error!(%error, "a page message could not be serialised; not sent"),
+    )
 }
 
 #[cfg(test)]

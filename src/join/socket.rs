@@ -148,7 +148,9 @@ async fn run(socket: Socket, session: &Arc<Session>, attached: Attached) {
     let writer = async {
         let mut keep_alive = time::interval_at(time::Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
         keep_alive.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let ping = frame(&ToPage::Ping);
+        let Ok(ping) = frame(&ToPage::Ping) else {
+            return Ended(CloseCode::INTERNAL_SERVER_ERROR, "no ping");
+        };
         loop {
             let payload: Bytes = tokio::select! {
                 biased;
