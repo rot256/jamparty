@@ -24,6 +24,16 @@ pub(crate) async fn deliver(
         return (DeliveryResult::Gone, "no command".to_owned());
     };
     let name = program.to_string_lossy();
+    let mut input = Vec::new();
+    for comment in batch {
+        if let Err(error) = serde_json::to_writer(&mut input, comment) {
+            return (
+                DeliveryResult::Error,
+                format!("could not encode a comment: {error}"),
+            );
+        }
+        input.push(b'\n');
+    }
     let mut child = match Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
@@ -45,14 +55,6 @@ pub(crate) async fn deliver(
             return (result, format!("could not run {name}: {error}"));
         }
     };
-    let mut input = Vec::new();
-    for comment in batch {
-        // Serialising plain strings and ids cannot fail.
-        if let Ok(line) = serde_json::to_vec(comment) {
-            input.extend_from_slice(&line);
-            input.push(b'\n');
-        }
-    }
     let group = child
         .id()
         .and_then(|id| i32::try_from(id).ok())

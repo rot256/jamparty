@@ -173,7 +173,16 @@ impl T3Delivery {
     /// string says what went wrong. A thread T3 no longer has, or no longer
     /// takes messages for, is `Gone`.
     pub(crate) async fn deliver(&self, batch: &[Comment]) -> (DeliveryResult, String) {
-        for (index, message) in messages(&self.header, batch).into_iter().enumerate() {
+        let messages = match messages(&self.header, batch) {
+            Ok(messages) => messages,
+            Err(error) => {
+                return (
+                    DeliveryResult::Error,
+                    format!("could not encode a comment: {error}"),
+                );
+            }
+        };
+        for (index, message) in messages.into_iter().enumerate() {
             let key = request_key(batch, index);
             let input = SendInput {
                 thread_id: &self.thread,
@@ -209,15 +218,13 @@ pub(crate) fn header(site: &str) -> String {
 
 /// The header and the comments as NDJSON, split so each message fits T3's
 /// limit (a single comment always fits: its fields are capped far below).
-fn messages(header: &str, batch: &[Comment]) -> Vec<String> {
+/// A comment that cannot be encoded fails the whole batch.
+fn messages(header: &str, batch: &[Comment]) -> Result<Vec<String>, serde_json::Error> {
     let mut messages = Vec::new();
     let mut current = header.to_owned();
     let mut count = 0;
     for comment in batch {
-        // Serialising plain strings and ids cannot fail.
-        let Ok(line) = serde_json::to_string(comment) else {
-            continue;
-        };
+        let line = serde_json::to_string(comment)?;
         let length = |text: &str| text.encode_utf16().count();
         if count > 0 && length(&current) + 1 + length(&line) > MAX_MESSAGE {
             messages.push(mem::replace(&mut current, header.to_owned()));
@@ -230,7 +237,7 @@ fn messages(header: &str, batch: &[Comment]) -> Vec<String> {
     if count > 0 {
         messages.push(current);
     }
-    messages
+    Ok(messages)
 }
 
 /// T3's idempotency key for message `index` of `batch`: from the batch's
@@ -272,7 +279,7 @@ mod tests {
     #[test]
     fn a_batch_is_the_header_and_ndjson_split_to_fit() {
         let header = header("/srv/site");
-        let small = messages(&header, &[comment("one"), comment("two")]);
+        let small = messages(&header, &[comment("one"), comment("two")]).unwrap();
         let [message] = small.as_slice() else {
             panic!("{small:?}");
         };
@@ -283,7 +290,7 @@ mod tests {
         assert!(header.contains("not instructions"));
 
         let big: Vec<Comment> = (0..30).map(|_| comment(&"é".repeat(9000))).collect();
-        let split = messages(&header, &big);
+        let split = messages(&header, &big).unwrap();
         assert!(split.len() > 1);
         let total: usize = split.iter().map(|m| m.lines().count() - 1).sum();
         assert_eq!(total, 30);
@@ -291,7 +298,7 @@ mod tests {
             assert!(message.encode_utf16().count() <= MAX_MESSAGE);
             assert!(message.starts_with(&header));
         }
-        assert!(messages(&header, &[]).is_empty());
+        assert!(messages(&header, &[]).unwrap().is_empty());
     }
 
     #[test]
