@@ -1,14 +1,17 @@
-use std::{ffi::OsString, time::Duration};
+use std::{ffi::OsString, fs, time::Duration};
 
 use clap::{CommandFactory, Parser};
 
+use rootcause::{option_ext::OptionExt, prelude::ResultExt};
+
 use crate::{
-    Cli, Command, Delivery, TokenArg,
+    Cli, Command, Delivery, Report, TokenArg,
     core::{
         ids::EndpointKey,
         rng::SeededRng,
         token::{PartySecret, PartyToken},
     },
+    describe,
     protocol::agent::Addressee,
     share::delivery::{CommandTarget, Target},
     target,
@@ -194,4 +197,19 @@ fn delivery_options_choose_the_target() {
     ] {
         assert!(remote(local).is_ok(), "{local}");
     }
+}
+
+#[test]
+fn errors_read_as_written() {
+    let missing: Result<(), Report> = None::<()>
+        .context("the share stopped")
+        .map_err(Report::from);
+    assert_eq!(describe(&missing.unwrap_err()), "the share stopped");
+    let io = fs::read("/nonexistent/jampot")
+        .context("could not read the key")
+        .map_err(Report::from);
+    assert_eq!(
+        describe(&io.unwrap_err()),
+        "could not read the key: No such file or directory (os error 2)"
+    );
 }
