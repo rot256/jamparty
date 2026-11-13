@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Control panel</title>
+</head>
+<body>
+
+
+<style>
+body{margin:0}
+a{color:#24604e}a:hover{color:#143b30}
+</style>
+
+<div style="width: 1100px; height: 760px; position: relative; background: #fbfaf7; color: #222222; font-family: Georgia, serif; overflow: hidden">
+<div style="max-width: 720px; margin: 0 auto; padding: 48px 20px 0">
+<h1 style="font-size: 38px; line-height: 1.15; margin: 0 0 14px">Short Preimages, Small Fields</h1>
+<p style="font-size: 19px; line-height: 1.6; color: #444444; margin: 0">We fold instances of a lookup relation over a 31-bit field without leaving it for an extension.</p>
+<div style="border: 1px solid #dddddd; border-radius: 6px; padding: 16px 20px; margin: 24px 0; background: #ffffff">
+<h3 style="margin: 4px 0 8px; font-size: 19px">Construction</h3>
+<p style="margin: 0; font-size: 17px; line-height: 1.6">Commit to the witness with an Ajtai commitment, then prove the norm bound with a single sumcheck.</p>
+</div>
+<a href="#" style="display: inline-block; font: 600 15px system-ui, sans-serif; padding: 12px 16px; border-radius: 6px; background: #24604e; color: #ffffff; text-decoration: none">Read the note</a>
+</div>
+<div aria-hidden="true" style="position: absolute; left: 610px; top: 318px; width: 120px; height: 48px">
+<svg width="16" height="18" viewBox="0 0 16 18" style="position: absolute; left: 0; top: 0; filter: drop-shadow(0 1px 2px rgb(0 0 0 / 30%))"><path d="M1.5 1.5 L1.5 14.5 L5.2 11.2 L7.8 16.5 L10.2 15.4 L7.7 10.3 L12.8 10.3 Z" fill="#0b7896" stroke="#ffffff" stroke-width="1.4" stroke-linejoin="round"></path></svg>
+<span style="position: absolute; left: 13px; top: 17px; padding: 3px 8px; border-radius: 0 6px 6px 6px; background: #0b7896; color: #ffffff; box-shadow: 0 1px 3px rgb(0 0 0 / 25%); font: 600 11px/1.3 system-ui, -apple-system, sans-serif; white-space: nowrap">bob</span>
+</div>
+<section aria-label="jampot settings" style="position: absolute; right: 14px; bottom: 58px; width: 232px; border: 1px solid rgb(255 255 255 / 12%); border-radius: 10px; background: #161616; color: #ffffff; box-shadow: 0 6px 20px rgb(0 0 0 / 22%); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 6px">
+<button type="button" role="switch" aria-checked="true" style="display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 0; border-radius: 6px; background: transparent; color: #ffffff; font: inherit; text-align: left">
+<span style="display: flex; align-items: center; gap: 8px; flex-grow: 1">Comment mode<kbd style="margin-left: auto; padding: 1px 5px; border: 1px solid #3a3a3a; border-radius: 4px; color: #b8b2a9; font: 11px/1.3 ui-monospace, Menlo, monospace">C</kbd></span>
+<span aria-hidden="true" style="display: flex; align-items: center; justify-content: flex-end; width: 28px; height: 16px; padding: 2px; box-sizing: border-box; border-radius: 999px; background: #2f9e44"><span style="display: block; width: 12px; height: 12px; border-radius: 50%; background: #ffffff"></span></span>
+</button>
+<button type="button" role="switch" aria-checked="false" style="display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 0; border-radius: 6px; background: transparent; color: #ffffff; font: inherit; text-align: left">
+<span style="display: flex; align-items: center; gap: 8px; flex-grow: 1">Show my cursor<kbd style="margin-left: auto; padding: 1px 6px; border: 1px dashed #66d9e8; border-radius: 4px; white-space: nowrap; color: #66d9e8; font: 11px/1.3 ui-monospace, Menlo, monospace">press a key…</kbd></span>
+<span aria-hidden="true" style="display: flex; align-items: center; justify-content: flex-start; width: 28px; height: 16px; padding: 2px; box-sizing: border-box; border-radius: 999px; background: #3a3a3a"><span style="display: block; width: 12px; height: 12px; border-radius: 50%; background: #b8b2a9"></span></span>
+</button>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; padding: 10px 10px 6px; border-top: 1px solid #262626">
+<span style="color: #8c867e; font-size: 11px">3 here</span>
+<ul aria-label="People here" style="margin: 0; padding: 0; list-style: none; display: flex; align-items: center">
+<li title="alice (you)" style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #ffffff; background: #161616; color: #ffffff; font: 700 10px/1 system-ui, -apple-system, sans-serif">A</li>
+<li title="bob" style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: -6px; border-radius: 50%; border: 2px solid #161616; background: #0b7896; color: #ffffff; font: 700 10px/1 system-ui, -apple-system, sans-serif">B</li>
+<li title="carol" style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: -6px; border-radius: 50%; border: 2px solid #161616; background: #9c4f96; color: #ffffff; font: 700 10px/1 system-ui, -apple-system, sans-serif">C</li>
+</ul>
+</div>
+</section>
+<div style="position: absolute; right: 14px; bottom: 14px; display: flex; align-items: center; gap: 6px">
+<button type="button" style="display: flex; align-items: center; gap: 8px; padding: 7px 12px 7px 9px; border: 1px solid rgb(255 255 255 / 30%); border-radius: 999px; background: #161616; color: #ffffff; box-shadow: 0 3px 12px rgb(0 0 0 / 22%); font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"><span role="img" aria-label="Connected" style="display: block; width: 10px; height: 10px; border-radius: 50%; background: #2f9e44"></span>0 queued</button>
+<button type="button" aria-label="Settings" aria-expanded="true" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 1px solid rgb(255 255 255 / 30%); border-radius: 50%; background: #2a2a2a; color: #ffffff; box-shadow: 0 3px 12px rgb(0 0 0 / 22%)"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button>
+</div>
+</div>
+
+</body>
+</html>

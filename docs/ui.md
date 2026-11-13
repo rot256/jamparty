@@ -2,8 +2,11 @@
 
 The overlay the joiner's page shows on top of the shared site, as settled in
 the design review of 2026-11-12. Mockups: the "jampot UI" Claude Design
-canvas (artboards 1–9; private to the owner, ask for access). This file is
-the source of truth; where it and the mockups differ, this file wins.
+canvas (artboards 1–9; private to the owner), exported here as standalone
+HTML with a rendered PNG each: `docs/ui/1-idle` … `docs/ui/9-cursor-options`
+(`.html`, `.png`). This file is the source of truth; where it and the
+mockups differ, this file wins. The sample page in them stands in for any
+shared site; only the overlay is jampot's.
 
 Everything here lives in the injected client (`assets/client.js`), the
 joiner's local endpoints and the share; nothing in the site itself.

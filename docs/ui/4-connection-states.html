@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Connection states</title>
+</head>
+<body>
+
+
+<style>
+body{margin:0}
+a{color:#24604e}a:hover{color:#143b30}
+</style>
+
+<div style="width: 1100px; height: 760px; box-sizing: border-box; padding: 56px; background: #fbfaf7; color: #222222; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; display: flex; flex-direction: column; gap: 36px">
+<h2 style="margin: 0; font: 700 26px Georgia, serif">Connection indicator</h2>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px">
+<div style="display: flex; flex-direction: column; gap: 14px; padding: 22px; border: 1px solid #dddddd; border-radius: 8px; background: #ffffff">
+<div style="display: flex; align-items: center; gap: 10px">
+<span role="img" aria-label="Green" style="display: block; width: 14px; height: 14px; border: 2px solid #ffffff; border-radius: 50%; background: #2f9e44; box-shadow: 0 1px 6px rgb(0 0 0 / 30%)"></span>
+<span style="font-weight: 700; font-size: 14px">Connected</span>
+</div>
+<p style="margin: 0; font-size: 13px; line-height: 1.5; color: #444444">Browser and share both reachable. Comments go straight through.</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 14px; padding: 22px; border: 1px solid #dddddd; border-radius: 8px; background: #ffffff">
+<div style="display: flex; align-items: center; gap: 10px">
+<span role="img" aria-label="Amber" style="display: block; width: 14px; height: 14px; border: 2px solid #ffffff; border-radius: 50%; background: #e8a33d; box-shadow: 0 1px 6px rgb(0 0 0 / 30%)"></span>
+<span style="font-weight: 700; font-size: 14px">Reconnecting</span>
+</div>
+<p style="margin: 0; font-size: 13px; line-height: 1.5; color: #444444">The page lost its event stream to the local joiner (35 s without a ping).</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 14px; padding: 22px; border: 1px solid #dddddd; border-radius: 8px; background: #ffffff">
+<div style="display: flex; align-items: center; gap: 10px">
+<span role="img" aria-label="Grey" style="display: block; width: 14px; height: 14px; border: 2px solid #ffffff; border-radius: 50%; background: #9a958e; box-shadow: 0 1px 6px rgb(0 0 0 / 30%)"></span>
+<span style="font-weight: 700; font-size: 14px">Share unreachable</span>
+</div>
+<p style="margin: 0; font-size: 13px; line-height: 1.5; color: #444444">The share is down, or a status line is set.</p>
+</div>
+</div>
+<h2 style="margin: 0; font: 700 26px Georgia, serif">Status line and outbox</h2>
+<div style="display: flex; gap: 32px; align-items: flex-start; flex-wrap: wrap">
+<div style="padding: 8px 10px; border-radius: 6px; background: #161616; color: #ffffff; box-shadow: 0 3px 12px rgb(0 0 0 / 22%); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; display: flex; flex-direction: column; gap: 6px; width: 440px">
+<span style="color: #f0c27a">agent unavailable; comments are kept until the share restarts</span>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px">
+<li style="display: flex; gap: 10px; align-items: center"><span>Say which norm (ℓ∞ or ℓ2) the …</span><span style="color: #8ce99a">delivered</span></li>
+<li style="display: flex; gap: 10px; align-items: center"><span>The button label could be …</span><span style="color: #b8b2a9">queued</span></li>
+<li style="display: flex; gap: 10px; align-items: center"><span>Typo in the title?</span><span style="color: #ffa8a8">not sent</span><button type="button" style="padding: 3px 6px; font: 11px ui-monospace, Menlo, monospace; border-radius: 4px; border: 1px solid #555555; background: #2a2a2a; color: #ffffff">send again</button></li>
+</ul>
+</div>
+<button type="button" style="display: flex; align-items: center; gap: 8px; padding: 7px 12px 7px 9px; border: 1px solid rgb(255 255 255 / 30%); border-radius: 999px; background: #161616; color: #ffffff; box-shadow: 0 3px 12px rgb(0 0 0 / 22%); font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"><span role="img" aria-label="Share unreachable" style="display: block; width: 10px; height: 10px; border-radius: 50%; background: #9a958e"></span>2 queued</button>
+</div>
+</div>
+
+</body>
+</html>
