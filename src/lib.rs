@@ -184,12 +184,39 @@ struct Delivery {
     /// File holding the T3 token (t3 target).
     #[arg(long, value_name = "FILE")]
     t3_token_file: Option<PathBuf>,
-    /// Seconds a command may take per batch before it is killed.
-    #[arg(long, value_name = "SECS", default_value_t = 60)]
-    command_timeout: u64,
+    /// How long a command may take per batch before it is killed: seconds,
+    /// or a number with s, m or h.
+    #[arg(long, value_name = "SECS", default_value = "60", value_parser = timeout)]
+    command_timeout: Duration,
     /// Hand each batch of comments to this command, as NDJSON on its stdin.
     #[arg(last = true, value_name = "COMMAND")]
     command: Vec<OsString>,
+}
+
+/// `--command-timeout`: whole seconds, or a number of seconds, minutes or
+/// hours (`90`, `90s`, `2m`, `1h`); at least a second.
+fn timeout(text: &str) -> Result<Duration, String> {
+    let (number, unit) = match text.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+        Some((at, _)) => text.split_at(at),
+        None => (text, "s"),
+    };
+    let scale = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        _ => {
+            return Err(format!(
+                "{text:?}: give seconds, or a number with s, m or h"
+            ));
+        }
+    };
+    let secs = number
+        .parse::<u64>()
+        .ok()
+        .and_then(|number| number.checked_mul(scale))
+        .filter(|secs| *secs > 0)
+        .ok_or_else(|| format!("{text:?}: give a whole number of at least 1"))?;
+    Ok(Duration::from_secs(secs))
 }
 
 /// Where `jampot join` gets its token.
@@ -364,7 +391,7 @@ fn target(
     if !command.is_empty() {
         let command = CommandTarget {
             argv: command,
-            timeout: Duration::from_secs(command_timeout),
+            timeout: command_timeout,
         };
         return Ok((Target::Command(command), None));
     }

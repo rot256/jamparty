@@ -133,8 +133,17 @@ fn delivery_options_choose_the_target() {
         })
     );
     assert!(note.is_none());
-    let (command, _) = choose(&["--command-timeout", "5", "--", "agent"], None).unwrap();
-    assert!(matches!(command, Target::Command(c) if c.timeout == Duration::from_secs(5)));
+    for (given, secs) in [("5", 5), ("90s", 90), ("2m", 120), ("1h", 3600)] {
+        let (command, _) = choose(&["--command-timeout", given, "--", "agent"], None).unwrap();
+        assert!(
+            matches!(&command, Target::Command(c) if c.timeout == Duration::from_secs(secs)),
+            "{given}: {command:?}"
+        );
+    }
+    for bad in ["0", "", "5d", "-1", "1.5"] {
+        let args = ["jampot", "serve", "--command-timeout", bad, "--", "agent"];
+        assert!(Cli::try_parse_from(args).is_err(), "{bad}");
+    }
     let both = choose(
         &["--t3-url", "http://127.0.0.1:3773/mcp", "--", "agent"],
         None,
