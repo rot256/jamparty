@@ -590,7 +590,7 @@ var Panel = class {
       if (normalizeKey(settings.keys[action]) === key) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        this.flip(action);
+        if (!event.repeat) this.flip(action);
         return;
       }
     }

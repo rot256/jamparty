@@ -235,7 +235,8 @@ export class Panel {
       if (normalizeKey(settings.keys[action]) === key) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        this.flip(action);
+        // A held key flips once, not once per auto-repeat.
+        if (!event.repeat) this.flip(action);
         return;
       }
     }

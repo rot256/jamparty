@@ -2,11 +2,13 @@
 //! change goes through [`Session::commit`], which changes the state and
 //! queues the messages that say so to every page before it unlocks: pages
 //! hear of changes in the order they were made, after the `hello` they
-//! attached with.
+//! attached with. Settings are written to their file outside that lock,
+//! one change at a time.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use tokio::sync::watch;
+use rootcause::prelude::report;
+use tokio::{sync, sync::watch, task};
 
 use crate::{
     core::{ids::CommentId, name::JoinerName, settings::Switch, version::Incompatible},
@@ -15,7 +17,7 @@ use crate::{
         api::{Change, Outcome, RequestNumber, Submission, ToPage},
         control::Control,
         pages::{Attached, Full, PageId, Pages},
-        preferences::Preferences,
+        preferences::{self, Preferences},
         state::{Snapshot, State},
         uplink::Uplink,
     },
@@ -42,6 +44,9 @@ pub(crate) struct Session {
     /// Set when the share turned out to speak another protocol.
     incompatible: Mutex<Option<Incompatible>>,
     uplink: Uplink,
+    /// Held from writing a settings change to taking it, so changes are
+    /// written and taken in the order they came.
+    settings_writes: sync::Mutex<()>,
 }
 
 /// A reply to one page's request, queued after a commit's messages.
@@ -64,6 +69,7 @@ impl Session {
             control: Mutex::new(None),
             incompatible: Mutex::new(None),
             uplink: Uplink::default(),
+            settings_writes: sync::Mutex::new(()),
         }
     }
 
@@ -231,25 +237,36 @@ impl Session {
         self.commit(|inner| inner.state.acknowledged(acked), reply(outcome));
     }
 
-    /// Saves a change from a page and tells every page.
-    pub(crate) fn change_settings(&self, page: PageId, change: Change) {
+    /// Saves a change from a page and tells every page. The file is
+    /// written on a blocking thread, outside the session's lock.
+    pub(crate) async fn change_settings(&self, page: PageId, change: Change) {
         let Change { n, change } = change;
-        let mut outcome = Outcome::Saved;
-        self.commit(
-            |inner| match inner.preferences.change(change) {
-                Ok(settings) => inner.state.set_settings(settings),
-                Err(error) => {
-                    tracing::warn!(error = %describe(&error), "could not save the settings");
-                    outcome = Outcome::Refused {
-                        error: format!("could not save the settings: {}", describe(&error)),
-                        retry_after: None,
-                    };
-                    Vec::new()
-                }
-            },
-            None,
-        );
-        self.reply(page, n, outcome);
+        let _turn = self.settings_writes.lock().await;
+        let path = self.lock().preferences.path.clone();
+        let saved = task::spawn_blocking(move || preferences::save(&path, change))
+            .await
+            .unwrap_or_else(|error| Err(report!("the settings write failed: {error}")));
+        match saved {
+            Ok(saved) => self.commit(
+                |inner| {
+                    let settings = inner.preferences.take(saved);
+                    inner.state.set_settings(settings)
+                },
+                Some(Reply {
+                    page,
+                    to: n,
+                    outcome: Outcome::Saved,
+                }),
+            ),
+            Err(error) => {
+                tracing::warn!(error = %describe(&error), "could not save the settings");
+                let outcome = Outcome::Refused {
+                    error: format!("could not save the settings: {}", describe(&error)),
+                    retry_after: None,
+                };
+                self.reply(page, n, outcome);
+            }
+        }
         // A new name or cursor switch is news for the share.
         self.uplink.changed();
     }

@@ -131,7 +131,7 @@ async fn run(socket: Socket, session: &Arc<Session>, attached: Attached) {
             let Some(text) = message.as_text() else {
                 return Ended(CloseCode::UNSUPPORTED_DATA, "text frames only");
             };
-            if let Err(ended) = handle(session, id, text, &mut comments) {
+            if let Err(ended) = handle(session, id, text, &mut comments).await {
                 return ended;
             }
             // Reap finished comments so the set does not grow.
@@ -179,7 +179,7 @@ struct Numbered {
 
 /// Handles one message from the page; an invalid one ends the socket
 /// (unless it is a request, which is answered "refused").
-fn handle(
+async fn handle(
     session: &Arc<Session>,
     page: PageId,
     text: &str,
@@ -207,7 +207,16 @@ fn handle(
             let session = Arc::clone(session);
             comments.spawn(async move { session.comment(page, submission).await });
         }
-        FromPage::Settings(change) => session.change_settings(page, change),
+        FromPage::Settings(change) => {
+            // Awaited, so the page's changes are saved in its order; in a
+            // task, so a socket that closes meanwhile does not stop a
+            // write half way.
+            let session = Arc::clone(session);
+            let saving = tokio::spawn(async move { session.change_settings(page, change).await });
+            if let Err(error) = saving.await {
+                tracing::warn!(%error, "a settings change failed");
+            }
+        }
     }
     Ok(())
 }

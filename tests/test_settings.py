@@ -231,3 +231,17 @@ def test_keys_rebinding_and_text_fields(tmp_path: Path, page: Page) -> None:
         expect(show_cursor).to_have_attribute("aria-checked", "false")
         page.keyboard.press("y")
         expect(show_cursor).to_have_attribute("aria-checked", "true")
+
+        # A held key flips once: its auto-repeats change nothing.
+        _ = page.evaluate(
+            """() => {
+                for (let i = 0; i < 3; i++) {
+                    document.body.dispatchEvent(new KeyboardEvent("keydown", {
+                        key: "y", repeat: true, bubbles: true, cancelable: true,
+                    }));
+                }
+            }"""
+        )
+        page.keyboard.press("c")
+        expect(comment_mode).to_have_attribute("aria-checked", "false")
+        expect(show_cursor).to_have_attribute("aria-checked", "true")

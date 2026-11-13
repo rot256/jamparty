@@ -1,7 +1,7 @@
 //! The joiner's settings: the saved ones, the name for this run, and how
 //! pages see them.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -70,16 +70,48 @@ impl Preferences {
         }
     }
 
-    /// Saves `change`; a name chosen in the page replaces `--name` for the
-    /// rest of the run. The settings file is read, changed and written
-    /// under its lock: another joiner of this home may have changed other
-    /// settings meanwhile.
-    pub(crate) fn change(&mut self, change: SettingsChange) -> Result<PageSettings, Report> {
-        let named = change.name.is_some();
-        self.saved = settings::update(&self.path, change)?;
-        if named {
-            self.given = None;
+    /// Takes settings [`save`] wrote; a name chosen in the page replaces
+    /// `--name` for the rest of the run.
+    pub(crate) fn take(&mut self, saved: Saved) -> PageSettings {
+        let Saved {
+            settings,
+            chose_name,
+        } = saved;
+        self.saved = settings;
+        match chose_name {
+            ChoseName::Yes => self.given = None,
+            ChoseName::No => {}
         }
-        Ok(self.page())
+        self.page()
     }
+}
+
+/// Whether a change chose a name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChoseName {
+    Yes,
+    No,
+}
+
+/// Settings written to the file, for [`Preferences::take`].
+#[derive(Debug)]
+#[must_use = "saved settings are to be taken"]
+pub(crate) struct Saved {
+    settings: Settings,
+    chose_name: ChoseName,
+}
+
+/// Saves `change` to the settings file at `path`: read, changed and
+/// written under its lock, since another joiner of this home may have
+/// changed other settings meanwhile. Blocks on the file.
+pub(crate) fn save(path: &Path, change: SettingsChange) -> Result<Saved, Report> {
+    let chose_name = if change.name.is_some() {
+        ChoseName::Yes
+    } else {
+        ChoseName::No
+    };
+    Ok(Saved {
+        settings: settings::update(path, change)?,
+        chose_name,
+    })
 }
