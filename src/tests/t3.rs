@@ -11,9 +11,11 @@ use std::{
 
 use jiff::{SignedDuration, Timestamp};
 use tempfile::TempDir;
+use tokio::net::UnixStream;
 
 use crate::{
     adapters::t3::{self, T3Delivery, T3Target, Thread},
+    agent,
     core::{clock::ManualClock, queue::DeliveryResult},
     protocol::comment::{Author, Comment, Draft},
     share::{
@@ -162,6 +164,16 @@ async fn deliver_one(sse: bool) {
     assert_eq!(comment.comment, "Bigger, please");
     assert_eq!(comment.author.name.to_string(), "alice");
     assert!(lines.next().is_none());
+
+    // recv is not how this share delivers.
+    let stream = UnixStream::connect(share.socket_path()).await.unwrap();
+    let error = agent::recv(stream, &mut Vec::new()).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("the T3 thread top, not to jampot recv"),
+        "{error}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

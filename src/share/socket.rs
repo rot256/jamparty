@@ -20,7 +20,10 @@ use crate::{
         agent::{AgentReply, AgentRequest},
         control::Envelope,
     },
-    share::{delivery::RecvRequest, hub::Hub},
+    share::{
+        delivery::{RecvAccess, RecvRequest},
+        hub::Hub,
+    },
 };
 
 /// How long `jampot recv` has to confirm it printed a batch; after that
@@ -30,11 +33,7 @@ const PRINTED_TIMEOUT: Duration = Duration::from_secs(30);
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Serves the user's own processes only (checked by their credentials).
-pub(crate) async fn serve(
-    listener: UnixListener,
-    hub: Arc<Hub>,
-    recv: Option<mpsc::Sender<RecvRequest>>,
-) {
+pub(crate) async fn serve(listener: UnixListener, hub: Arc<Hub>, recv: RecvAccess) {
     let mut clients = JoinSet::new();
     loop {
         match listener.accept().await {
@@ -54,7 +53,7 @@ pub(crate) async fn serve(
     }
 }
 
-async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: Option<mpsc::Sender<RecvRequest>>) {
+async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: RecvAccess) {
     let (read, mut write) = stream.into_split();
     let mut read = BufReader::new(read);
     let request = match lines::read::<Envelope<AgentRequest>, _>(&mut read).await {
@@ -76,9 +75,9 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: Option<mpsc::Sender<Rec
     };
     let answer = match request {
         AgentRequest::Recv => match recv {
-            Some(requests) => return serve_recv(read, write, &requests).await,
-            None => AgentReply::Error {
-                error: "this share hands comments to a command, not to jampot recv".to_owned(),
+            RecvAccess::Open(requests) => return serve_recv(read, write, &requests).await,
+            RecvAccess::Elsewhere(target) => AgentReply::Error {
+                error: format!("this share delivers comments to {target}, not to jampot recv"),
             },
         },
         AgentRequest::Send {

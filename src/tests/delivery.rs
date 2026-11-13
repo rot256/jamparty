@@ -117,7 +117,12 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
     // recv is not how this share delivers.
     let stream = UnixStream::connect(share.socket_path()).await.unwrap();
     let error = agent::recv(stream, &mut Vec::new()).await.unwrap_err();
-    assert!(error.to_string().contains("command"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("delivers comments to the command sh, not to jampot recv"),
+        "{error}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

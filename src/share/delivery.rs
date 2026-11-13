@@ -50,26 +50,36 @@ pub(crate) struct RecvRequest {
     pub(crate) printed: oneshot::Receiver<()>,
 }
 
-/// Starts delivery; returns where `jampot recv` clients queue up (`None`
-/// unless the target is `recv`).
-pub(crate) fn start(
-    target: Target,
-    hub: Arc<Hub>,
-    tasks: &mut JoinSet<()>,
-) -> Option<mpsc::Sender<RecvRequest>> {
+/// What a `jampot recv` finds on the runtime socket.
+#[derive(Clone)]
+pub(crate) enum RecvAccess {
+    /// The target is `recv`: where clients queue up.
+    Open(mpsc::Sender<RecvRequest>),
+    /// Comments go elsewhere, to the target named here.
+    Elsewhere(String),
+}
+
+/// Starts delivery; returns what `jampot recv` clients get.
+pub(crate) fn start(target: Target, hub: Arc<Hub>, tasks: &mut JoinSet<()>) -> RecvAccess {
     match target {
         Target::Recv => {
             let (requests, receiver) = mpsc::channel(16);
             tasks.spawn(to_recv(hub, receiver));
-            Some(requests)
+            RecvAccess::Open(requests)
         }
         Target::Command(command) => {
+            let program = command
+                .argv
+                .first()
+                .map(|program| program.to_string_lossy().into_owned())
+                .unwrap_or_default();
             tasks.spawn(to_command(hub, command));
-            None
+            RecvAccess::Elsewhere(format!("the command {program}"))
         }
         Target::T3(target) => {
+            let thread = format!("the T3 thread {}", target.thread);
             tasks.spawn(to_t3(hub, T3Delivery::new(target)));
-            None
+            RecvAccess::Elsewhere(thread)
         }
     }
 }
