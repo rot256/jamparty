@@ -61,8 +61,7 @@ impl From<RequestError> for Response<AppBody> {
 }
 
 #[derive(Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct ErrorBody<'a> {
+struct ErrorBody<'a> {
     error: &'a str,
 }
 

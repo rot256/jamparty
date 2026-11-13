@@ -160,5 +160,3 @@ export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage,
 export type Change = { n: RequestNumber, change: SettingsChange, };
 
 export type FromPage = { "type": "page", url: PagePath | null, } | { "type": "cursor", position: Position | null, } | { "type": "comment" } & Submission | { "type": "settings" } & Change;
-
-export type ErrorBody = { error: string, };

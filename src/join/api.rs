@@ -229,7 +229,6 @@ mod bindings {
                 PagePath, Person, Position,
             },
         },
-        share::body::ErrorBody,
     };
 
     fn generate() -> String {
@@ -273,7 +272,6 @@ mod bindings {
             Submission::decl(&cfg),
             Change::decl(&cfg),
             FromPage::decl(&cfg),
-            ErrorBody::decl(&cfg),
         ];
         let mut out = String::from(
             "// Generated from the Rust types by `cargo test` (src/join/api.rs); do not edit.\n\
