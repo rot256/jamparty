@@ -323,7 +323,7 @@ pub(crate) fn follow(snapshot: &mut Snapshot, message: &ToPage) {
                 snapshot.answers.push(answer.clone());
             }
         }
-        ToPage::Hello(hello) => *snapshot = hello.snapshot.clone(),
+        ToPage::Hello(hello) => hello.clone_into(snapshot),
         ToPage::Cursor { .. } | ToPage::Reply { .. } | ToPage::Ping => {}
     }
 }

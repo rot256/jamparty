@@ -4,9 +4,9 @@
 // request answered by a `reply`. A socket that closes, or stays silent
 // past the watchdog, is opened again and starts over from a new hello.
 
-import { incompatibility, parseMessage } from "./api";
+import { parseMessage } from "./api";
 import { RECONNECT_MAX_MS, RECONNECT_MIN_MS, SOCKET_URL, WATCHDOG_MS } from "./config";
-import type { FromPage, Hello, Outcome, ToPage } from "./generated/api";
+import type { FromPage, Outcome, Snapshot, ToPage } from "./generated/api";
 
 /** A request as the page makes it, without its number. */
 type Request =
@@ -18,13 +18,11 @@ export type Slice = Exclude<ToPage, { type: "hello" } | { type: "reply" } | { ty
 
 export interface SocketHandlers {
   /** The joiner's whole state, first on every socket. */
-  hello(hello: Hello): void;
+  hello(hello: Snapshot): void;
   /** One change, in the joiner's order. */
   slice(slice: Slice): void;
   /** The socket came up (after its hello) or went down. */
   open(open: boolean): void;
-  /** The joiner cannot serve this page; nothing more is tried. */
-  incompatible(reason: string): void;
 }
 
 const LOST: Outcome = { unsent: { error: "jampot join is not reachable" } };
@@ -38,7 +36,6 @@ export class PageSocket {
   private lastHeard = Date.now();
   private wait = RECONNECT_MIN_MS;
   private timer: number | undefined;
-  private stopped = false;
 
   constructor(private readonly handlers: SocketHandlers) {
     // The joiner pings every 15 s; a silent socket is a dead one.
@@ -66,7 +63,7 @@ export class PageSocket {
   }
 
   private connect(): void {
-    if (this.stopped || this.socket !== null) return;
+    if (this.socket !== null) return;
     const socket = new WebSocket(SOCKET_URL);
     this.socket = socket;
     this.lastHeard = Date.now();
@@ -83,11 +80,6 @@ export class PageSocket {
     if (message === null) return;
     switch (message.type) {
       case "hello": {
-        const reason = incompatibility(message.api, message.version);
-        if (reason !== null) {
-          this.refuse(reason);
-          return;
-        }
         this.wait = RECONNECT_MIN_MS;
         this.ready = true;
         this.handlers.hello(message);
@@ -163,16 +155,10 @@ export class PageSocket {
   }
 
   private reconnect(wait: number): void {
-    if (this.stopped || this.timer !== undefined) return;
+    if (this.timer !== undefined) return;
     this.timer = window.setTimeout(() => {
       this.timer = undefined;
       this.connect();
     }, wait);
-  }
-
-  private refuse(reason: string): void {
-    this.stopped = true;
-    this.drop();
-    this.handlers.incompatible(reason);
   }
 }

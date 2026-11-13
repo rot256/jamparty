@@ -1,12 +1,9 @@
-"""Who may use a joiner: the party secret, the page socket from other sites and under a strict CSP, and another page API."""
+"""Who may use a joiner: the party secret, the page socket from other sites and under a strict CSP."""
 
-import json
 from pathlib import Path
-from typing import cast
 
 from playwright.sync_api import (
     Page,
-    WebSocketRoute,
     expect,
 )
 from support import (
@@ -121,37 +118,3 @@ def test_another_site_cannot_open_the_socket(tmp_path: Path, page: Page) -> None
             f"ws://{joined.host}/_jampot/api/socket",
         )
         assert opened == "refused"
-
-
-def test_a_joiner_with_another_page_api_is_not_used(tmp_path: Path, page: Page) -> None:
-    with (
-        share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path, shared) as joined,
-    ):
-        # The page outlived its joiner, which came back as another jampot.
-        sockets: list[WebSocketRoute] = []
-
-        def route(socket: WebSocketRoute) -> None:
-            sockets.append(socket)
-            server = socket.connect_to_server()
-
-            def from_joiner(message: str | bytes) -> None:
-                parsed = cast(dict[str, object], json.loads(message))
-                if parsed["type"] == "hello":
-                    parsed.update(api=999, version="9.9.9")
-                socket.send(json.dumps(parsed))
-
-            server.on_message(from_joiner)
-            socket.on_message(server.send)
-
-        page.route_web_socket("**/_jampot/api/socket", route)
-        _ = page.goto(joined.url)
-        text = page.locator("#jampot #notice")
-        expect(text).to_contain_text("jampot join 9.9.9 (page API 999)")
-        expect(text).to_contain_text("Reload the page.")
-        expect(page.locator("#jampot #connection")).to_have_attribute(
-            "data-state", "grey"
-        )
-        # It gives up: no more sockets.
-        page.wait_for_timeout(1000)
-        assert len(sockets) == 1, sockets

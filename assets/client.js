@@ -1,7 +1,6 @@
 // Generated from client/src by `npm run build`; do not edit.
 
 // client/src/generated/api.ts
-var API_VERSION = 3;
 var MAX_NAME = 40;
 var MAX_COMMENT = 1e4;
 var MAX_SELECTED_TEXT = 2e3;
@@ -353,15 +352,11 @@ var Connection = class {
   changed;
   socketOpen = false;
   link = null;
-  incompatible = null;
   colour = "amber";
   get view() {
     let colour = "green";
     let text = "connected";
-    if (this.incompatible !== null) {
-      colour = "grey";
-      text = this.incompatible;
-    } else if (!this.socketOpen) {
+    if (!this.socketOpen) {
       colour = "amber";
       text = "reconnecting to jampot join…";
     } else if (this.link?.connected !== true) {
@@ -371,7 +366,7 @@ var Connection = class {
       colour = "grey";
       text = this.link.status;
     }
-    return { colour, text, incompatible: this.incompatible };
+    return { colour, text };
   }
   setOpen(open) {
     this.socketOpen = open;
@@ -379,10 +374,6 @@ var Connection = class {
   }
   setLink(link) {
     this.link = link;
-    this.render();
-  }
-  refuse(reason) {
-    this.incompatible = reason;
     this.render();
   }
   render() {
@@ -1586,10 +1577,6 @@ var Outbox = class {
 };
 
 // client/src/api.ts
-function incompatibility(api, version) {
-  if (api === API_VERSION) return null;
-  return `This page's jampot client (page API ${API_VERSION}) does not match jampot join ${version} (page API ${api}). Reload the page.`;
-}
 function parseMessage(data) {
   if (typeof data !== "string") return null;
   try {
@@ -1624,7 +1611,6 @@ var PageSocket = class {
   lastHeard = Date.now();
   wait = RECONNECT_MIN_MS;
   timer;
-  stopped = false;
   /** Whether the socket carries the joiner's state now. */
   get isOpen() {
     return this.ready;
@@ -1634,7 +1620,7 @@ var PageSocket = class {
     this.connect();
   }
   connect() {
-    if (this.stopped || this.socket !== null) return;
+    if (this.socket !== null) return;
     const socket = new WebSocket(SOCKET_URL);
     this.socket = socket;
     this.lastHeard = Date.now();
@@ -1650,11 +1636,6 @@ var PageSocket = class {
     if (message === null) return;
     switch (message.type) {
       case "hello": {
-        const reason = incompatibility(message.api, message.version);
-        if (reason !== null) {
-          this.refuse(reason);
-          return;
-        }
         this.wait = RECONNECT_MIN_MS;
         this.ready = true;
         this.handlers.hello(message);
@@ -1723,16 +1704,11 @@ var PageSocket = class {
     this.wait = Math.min(this.wait * 2, RECONNECT_MAX_MS);
   }
   reconnect(wait) {
-    if (this.stopped || this.timer !== void 0) return;
+    if (this.timer !== void 0) return;
     this.timer = window.setTimeout(() => {
       this.timer = void 0;
       this.connect();
     }, wait);
-  }
-  refuse(reason) {
-    this.stopped = true;
-    this.drop();
-    this.handlers.incompatible(reason);
   }
 };
 
@@ -1970,14 +1946,14 @@ var styles = `
 
   /* The chosen corner (Panel sets data-corner on the host): what sits at
      the bottom right by default moves to that corner. */
-  :host([data-corner$="left"]) :is(#bar, #list, #panel, #notice, #toast, #agent-general) {
+  :host([data-corner$="left"]) :is(#bar, #list, #panel, #toast, #agent-general) {
     right: auto;
     left: 14px;
   }
 
   :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
   :host([data-corner^="top"]) #panel { bottom: auto; top: 58px; }
-  :host([data-corner^="top"]) :is(#notice, #toast, #agent-general) { bottom: auto; top: 52px; }
+  :host([data-corner^="top"]) :is(#toast, #agent-general) { bottom: auto; top: 52px; }
 
   .chip {
     padding: 1px 5px;
@@ -2082,22 +2058,6 @@ var styles = `
 
   .avatar + .avatar { margin-left: -6px; }
   .avatar[data-you="true"] { border-color: #fff; background: #161616; }
-
-  #notice {
-    position: fixed;
-    right: 14px;
-    bottom: 52px;
-    z-index: 2147483644;
-    max-width: min(420px, calc(100vw - 28px));
-    padding: 9px 11px;
-    border-radius: 6px;
-    background: #161616;
-    color: #f0c27a;
-    box-shadow: 0 3px 12px rgb(0 0 0 / 22%);
-    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-
-  #notice[hidden] { display: none; }
 
   #cursors {
     position: fixed;
@@ -2437,7 +2397,6 @@ var MARKUP = `
       <ul id="avatars" aria-label="People here"></ul>
     </div>
   </section>
-  <div id="notice" role="alert" hidden></div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <div id="agent-log" role="log" aria-live="polite" aria-relevant="additions">
     <div id="agent-general"></div>
@@ -2508,7 +2467,6 @@ var Ui = class _Ui {
   panelMessage;
   hereCount;
   avatars;
-  notice;
   toast;
   agentGeneral;
   agentAnchored;
@@ -2575,7 +2533,6 @@ var Ui = class _Ui {
     this.panelMessage = find("#panel-message", HTMLDivElement);
     this.hereCount = find("#here-count", HTMLSpanElement);
     this.avatars = find("#avatars", HTMLUListElement);
-    this.notice = find("#notice", HTMLDivElement);
     this.toast = find("#toast", HTMLDivElement);
     this.agentGeneral = find("#agent-general", HTMLDivElement);
     this.agentAnchored = find("#agent-anchored", HTMLDivElement);
@@ -2620,7 +2577,6 @@ function install() {
   let here = [];
   let pending = 0;
   let reloadRevision = LIVE_REVISION;
-  let connectionView = { colour: "amber", text: "", incompatible: null };
   const socket = new PageSocket({
     hello(hello) {
       applyHello(hello);
@@ -2632,9 +2588,6 @@ function install() {
       connection.setOpen(open);
       if (open) report();
       else sender.setPlaced(false);
-    },
-    incompatible(reason) {
-      connection.refuse(reason);
     }
   });
   const outbox = new Outbox((submission) => socket.request({ type: "comment", ...submission }));
@@ -2651,7 +2604,7 @@ function install() {
   const editMode = new EditMode(
     ui,
     dialog,
-    () => connectionView.incompatible === null && panel.commentMode
+    () => panel.commentMode
   );
   editMode.onPagePress = () => {
     panel.close();
@@ -2673,11 +2626,7 @@ function install() {
     editMode.refresh();
   };
   const connection = new Connection((view, recovered) => {
-    connectionView = view;
     list.showState(view);
-    ui.notice.hidden = view.incompatible === null;
-    ui.notice.textContent = view.incompatible ?? "";
-    editMode.refresh();
     if (view.colour !== "green") layer.clear();
     if (recovered) void outbox.resendAll();
   });
@@ -2756,7 +2705,7 @@ function install() {
   };
   window.addEventListener("focus", activate);
   document.addEventListener("visibilitychange", activate);
-  const commenting = () => connectionView.incompatible === null && panel.commentMode;
+  const commenting = () => panel.commentMode;
   document.addEventListener("contextmenu", (event) => {
     if (!commenting()) return;
     if (event.shiftKey || event.composedPath().includes(ui.host)) return;

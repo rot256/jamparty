@@ -12,7 +12,7 @@ use crate::{
     core::{ids::CommentId, name::JoinerName, settings::Switch, version::Incompatible},
     describe,
     join::{
-        api::{Change, Hello, Outcome, RequestNumber, Submission, ToPage},
+        api::{Change, Outcome, RequestNumber, Submission, ToPage},
         control::Control,
         pages::{Attached, Full, PageId, Pages},
         preferences::Preferences,
@@ -131,7 +131,7 @@ impl Session {
     /// A page attached: `hello` is the first thing in its queue.
     pub(crate) fn attach(&self) -> Result<Attached, Full> {
         let mut inner = self.lock();
-        let hello = ToPage::Hello(Hello::from(inner.state.snapshot()));
+        let hello = ToPage::Hello(inner.state.snapshot());
         inner.pages.attach(&hello)
     }
 

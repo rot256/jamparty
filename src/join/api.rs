@@ -9,7 +9,6 @@ use crate::{
     core::{
         ids::{CommentId, EndpointKey},
         settings::SettingsChange,
-        version::JampotVersion,
     },
     join::{
         preferences::PageSettings,
@@ -21,40 +20,6 @@ use crate::{
         presence::{PagePath, Person, Position},
     },
 };
-
-/// The version of what the page's client and the joiner say to each
-/// other. The joiner serves the client too, so the two match; the client
-/// still compares this number in `hello` with its own and refuses to go
-/// on when they differ. Bump it on any change an older client or joiner
-/// cannot handle; the client ignores message types it does not know, so a
-/// new joiner message alone needs none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-#[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
-pub(crate) struct ApiVersion(u32);
-
-pub(crate) const API_VERSION: ApiVersion = ApiVersion(3);
-
-/// The first message on a socket: the versions, then the whole state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub(crate) struct Hello {
-    pub(crate) api: ApiVersion,
-    pub(crate) version: JampotVersion,
-    #[serde(flatten)]
-    #[cfg_attr(test, ts(flatten))]
-    pub(crate) snapshot: Snapshot,
-}
-
-impl From<Snapshot> for Hello {
-    fn from(snapshot: Snapshot) -> Self {
-        Self {
-            api: API_VERSION,
-            version: JampotVersion::current(),
-            snapshot,
-        }
-    }
-}
 
 /// A page's number for a request, echoed in the reply (the page counts
 /// up from 1 on each socket).
@@ -95,8 +60,8 @@ pub(crate) enum Outcome {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) enum ToPage {
-    /// Always first.
-    Hello(Hello),
+    /// Always first: the whole state.
+    Hello(Snapshot),
     Link(Link),
     People {
         here: Vec<Person>,
@@ -188,13 +153,9 @@ mod bindings {
             settings::{
                 Corner, KeyBinding, Keys, KeysFields, RESERVED_KEYS, SettingsChange, Switch,
             },
-            version::JampotVersion,
         },
         join::{
-            api::{
-                API_VERSION, ApiVersion, Change, FromPage, Hello, Outcome, RequestNumber,
-                Submission, ToPage,
-            },
+            api::{Change, FromPage, Outcome, RequestNumber, Submission, ToPage},
             preferences::PageSettings,
             state::{Answer, Link, Snapshot},
         },
@@ -212,8 +173,6 @@ mod bindings {
         // Numbers in this API (revisions, counts, seconds) stay far below 2^53.
         let cfg = Config::new().with_large_int("number");
         let decls = [
-            ApiVersion::decl(&cfg),
-            JampotVersion::decl(&cfg),
             CommentId::decl(&cfg),
             CommentRef::decl(&cfg),
             CommentPage::decl(&cfg),
@@ -241,7 +200,6 @@ mod bindings {
             Answer::decl(&cfg),
             Link::decl(&cfg),
             Snapshot::decl(&cfg),
-            Hello::decl(&cfg),
             RequestNumber::decl(&cfg),
             Outcome::decl(&cfg),
             ToPage::decl(&cfg),
@@ -253,10 +211,6 @@ mod bindings {
             "// Generated from the Rust types by `cargo test` (src/join/api.rs); do not edit.\n\
              // Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings\n\n",
         );
-        out.push_str(&format!(
-            "export const API_VERSION = {};\n",
-            serde_json::to_string(&API_VERSION).unwrap()
-        ));
         // The limits the share enforces, for the client to stay within.
         let limits = [
             ("MAX_NAME", MAX_NAME),

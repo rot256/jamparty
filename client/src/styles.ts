@@ -232,14 +232,14 @@ export const styles = `
 
   /* The chosen corner (Panel sets data-corner on the host): what sits at
      the bottom right by default moves to that corner. */
-  :host([data-corner$="left"]) :is(#bar, #list, #panel, #notice, #toast, #agent-general) {
+  :host([data-corner$="left"]) :is(#bar, #list, #panel, #toast, #agent-general) {
     right: auto;
     left: 14px;
   }
 
   :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
   :host([data-corner^="top"]) #panel { bottom: auto; top: 58px; }
-  :host([data-corner^="top"]) :is(#notice, #toast, #agent-general) { bottom: auto; top: 52px; }
+  :host([data-corner^="top"]) :is(#toast, #agent-general) { bottom: auto; top: 52px; }
 
   .chip {
     padding: 1px 5px;
@@ -344,22 +344,6 @@ export const styles = `
 
   .avatar + .avatar { margin-left: -6px; }
   .avatar[data-you="true"] { border-color: #fff; background: #161616; }
-
-  #notice {
-    position: fixed;
-    right: 14px;
-    bottom: 52px;
-    z-index: 2147483644;
-    max-width: min(420px, calc(100vw - 28px));
-    padding: 9px 11px;
-    border-radius: 6px;
-    background: #161616;
-    color: #f0c27a;
-    box-shadow: 0 3px 12px rgb(0 0 0 / 22%);
-    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-
-  #notice[hidden] { display: none; }
 
   #cursors {
     position: fixed;

@@ -9,14 +9,11 @@ export interface ConnectionView {
   colour: Colour;
   /** What the state means, for people. */
   text: string;
-  /** Set when the joiner cannot serve this page; nothing is connected then. */
-  incompatible: string | null;
 }
 
 export class Connection {
   private socketOpen = false;
   private link: Link | null = null;
-  private incompatible: string | null = null;
   private colour: Colour = "amber";
 
   constructor(
@@ -27,10 +24,7 @@ export class Connection {
   get view(): ConnectionView {
     let colour: Colour = "green";
     let text = "connected";
-    if (this.incompatible !== null) {
-      colour = "grey";
-      text = this.incompatible;
-    } else if (!this.socketOpen) {
+    if (!this.socketOpen) {
       colour = "amber";
       text = "reconnecting to jampot join…";
     } else if (this.link?.connected !== true) {
@@ -40,7 +34,7 @@ export class Connection {
       colour = "grey";
       text = this.link.status;
     }
-    return { colour, text, incompatible: this.incompatible };
+    return { colour, text };
   }
 
   setOpen(open: boolean): void {
@@ -50,11 +44,6 @@ export class Connection {
 
   setLink(link: Link): void {
     this.link = link;
-    this.render();
-  }
-
-  refuse(reason: string): void {
-    this.incompatible = reason;
     this.render();
   }
 

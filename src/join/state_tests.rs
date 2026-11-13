@@ -6,7 +6,7 @@ use crate::{
         settings::{Corner, Keys, Switch},
     },
     join::{
-        api::{Hello, ToPage},
+        api::ToPage,
         preferences::PageSettings,
         state::{State, follow},
     },
@@ -119,7 +119,7 @@ proptest! {
             run(&mut state, op);
         }
         let mut page = state.snapshot();
-        let hello = ToPage::Hello(Hello::from(state.snapshot()));
+        let hello = ToPage::Hello(state.snapshot());
         follow(&mut page, &hello);
         for op in after {
             for message in run(&mut state, op) {

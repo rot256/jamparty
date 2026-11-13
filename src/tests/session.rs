@@ -77,7 +77,6 @@ async fn comments_are_queued_with_the_author_from_admission() {
     let (_, hello) = PageSocket::hello(&joiner).await;
     assert_eq!(hello["mine"], json!([id]), "{hello}");
     assert_eq!(hello["link"]["connected"], true, "{hello}");
-    assert_eq!(hello["api"], 3, "{hello}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -338,12 +337,6 @@ async fn a_restarted_joiner_takes_what_is_pending_from_the_share() {
     connected(&again).await;
     let (_, hello) = PageSocket::hello(&again).await;
     assert_eq!(hello["mine"], json!([id]), "{hello}");
-    assert_eq!(hello["api"], json!(3), "{hello}");
-    assert_eq!(
-        hello["version"],
-        json!(env!("CARGO_PKG_VERSION")),
-        "{hello}"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

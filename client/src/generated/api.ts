@@ -1,7 +1,6 @@
 // Generated from the Rust types by `cargo test` (src/join/api.rs); do not edit.
 // Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings
 
-export const API_VERSION = 3;
 export const MAX_NAME = 40;
 export const MAX_COMMENT = 10000;
 export const MAX_SELECTED_TEXT = 2000;
@@ -9,10 +8,6 @@ export const MAX_PAGE_PATH = 512;
 export const MAX_CURSOR_SELECTOR = 512;
 export const FRACTION_ONE = 10000;
 export const RESERVED_KEYS: readonly string[] = ["/", "Escape"];
-
-export type ApiVersion = number;
-
-export type JampotVersion = string;
 
 export type CommentId = string;
 
@@ -127,31 +122,11 @@ answers: Array<Answer>,
  */
 revision: Revision | null, };
 
-export type Hello = { api: ApiVersion, version: JampotVersion, link: Link, 
-/**
- * Who is here, this joiner included, with their colour, page and
- * cursor switch.
- */
-people: Array<Person>, 
-/**
- * This joiner's comments the share holds undelivered; none until the
- * share first said (a joiner that restarted does not know yet).
- */
-mine: Array<CommentId> | null, settings: PageSettings, 
-/**
- * Recent answers, oldest first.
- */
-answers: Array<Answer>, 
-/**
- * The live-reload revision (shared directories only).
- */
-revision: Revision | null, };
-
 export type RequestNumber = number;
 
 export type Outcome = { "commented": { id: CommentId, } } | "saved" | { "unsent": { error: string, } } | { "refused": { error: string, retryAfterSecs?: number, } };
 
-export type ToPage = { "type": "hello" } & Hello | { "type": "link" } & Link | { "type": "people", here: Array<Person>, } | { "type": "mine", undelivered: Array<CommentId> | null, } | { "type": "settings" } & PageSettings | { "type": "reload", revision: Revision, } | { "type": "answer" } & Answer | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, } | { "type": "reply", to: RequestNumber, outcome: Outcome, } | { "type": "ping" };
+export type ToPage = { "type": "hello" } & Snapshot | { "type": "link" } & Link | { "type": "people", here: Array<Person>, } | { "type": "mine", undelivered: Array<CommentId> | null, } | { "type": "settings" } & PageSettings | { "type": "reload", revision: Revision, } | { "type": "answer" } & Answer | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, } | { "type": "reply", to: RequestNumber, outcome: Outcome, } | { "type": "ping" };
 
 export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage, selector: CommentSelector, selectedText: string | null, comment: string, };
 

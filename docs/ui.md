@@ -12,9 +12,7 @@ Everything here lives in the client (`assets/client.js`), the joiner's
 local endpoints and the share; nothing in the site itself. The share
 injects the client's script tag into each HTML page; the joiner serves
 the client itself (`/_jampot/client.js`, no-store), so a page always runs
-its own joiner's client. A page that outlived its joiner, restarted as
-another jampot, learns so from the version in the socket's `hello`: grey,
-with a notice to reload.
+its own joiner's client.
 
 ## Pill (bottom right)
 

@@ -4,12 +4,12 @@
 
 import { Answers } from "./answers";
 import { AGENT_TARGET_PREFIX, LIVE_REVISION } from "./config";
-import { Connection, type ConnectionView } from "./connection";
+import { Connection } from "./connection";
 import { CursorLayer, CursorSender } from "./cursors";
 import { CommentDialog } from "./dialog";
 import { loadDraft } from "./draft";
 import { EditMode } from "./edit";
-import type { Hello, Outcome, PageSettings, Person, SettingsChange } from "./generated/api";
+import type { Outcome, PageSettings, Person, SettingsChange, Snapshot } from "./generated/api";
 import { CommentList } from "./list";
 import { pageUrl, watchUrl } from "./location";
 import { NamePrompt } from "./name";
@@ -27,7 +27,6 @@ function install(): void {
   /** How many of this joiner's comments the share holds, as last said. */
   let pending = 0;
   let reloadRevision = LIVE_REVISION;
-  let connectionView: ConnectionView = { colour: "amber", text: "", incompatible: null };
 
   // Everything the page asks of the joiner goes over its one socket.
   const socket = new PageSocket({
@@ -38,7 +37,6 @@ function install(): void {
       if (open) report();
       else sender.setPlaced(false);
     },
-    incompatible(reason) { connection.refuse(reason); },
   });
   const outbox = new Outbox((submission) => socket.request({ type: "comment", ...submission }));
   const changeSettings = (change: SettingsChange): Promise<Outcome> =>
@@ -56,7 +54,7 @@ function install(): void {
   const editMode = new EditMode(
     ui,
     dialog,
-    () => connectionView.incompatible === null && panel.commentMode,
+    () => panel.commentMode,
   );
   editMode.onPagePress = () => {
     panel.close();
@@ -75,12 +73,7 @@ function install(): void {
   };
 
   const connection = new Connection((view, recovered) => {
-    connectionView = view;
     list.showState(view);
-    ui.notice.hidden = view.incompatible === null;
-    ui.notice.textContent = view.incompatible ?? "";
-    // A joiner this page cannot talk to takes no comments.
-    editMode.refresh();
     if (view.colour !== "green") layer.clear();
     if (recovered) void outbox.resendAll();
   });
@@ -115,7 +108,7 @@ function install(): void {
     dialog.restore((selector) => answers.targetFor(selector));
   };
 
-  function applyHello(hello: Hello): void {
+  function applyHello(hello: Snapshot): void {
     you = hello.link.you?.key ?? null;
     showMine(hello.mine);
     for (const answer of hello.answers) answers.add(answer);
@@ -179,7 +172,7 @@ function install(): void {
   window.addEventListener("focus", activate);
   document.addEventListener("visibilitychange", activate);
 
-  const commenting = (): boolean => connectionView.incompatible === null && panel.commentMode;
+  const commenting = (): boolean => panel.commentMode;
 
   document.addEventListener("contextmenu", (event) => {
     if (!commenting()) return;

@@ -66,7 +66,6 @@ const MARKUP = `
       <ul id="avatars" aria-label="People here"></ul>
     </div>
   </section>
-  <div id="notice" role="alert" hidden></div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <div id="agent-log" role="log" aria-live="polite" aria-relevant="additions">
     <div id="agent-general"></div>
@@ -138,7 +137,6 @@ export class Ui {
   readonly panelMessage: HTMLDivElement;
   readonly hereCount: HTMLSpanElement;
   readonly avatars: HTMLUListElement;
-  readonly notice: HTMLDivElement;
   readonly toast: HTMLDivElement;
   readonly agentGeneral: HTMLDivElement;
   readonly agentAnchored: HTMLDivElement;
@@ -207,7 +205,6 @@ export class Ui {
     this.panelMessage = find("#panel-message", HTMLDivElement);
     this.hereCount = find("#here-count", HTMLSpanElement);
     this.avatars = find("#avatars", HTMLUListElement);
-    this.notice = find("#notice", HTMLDivElement);
     this.toast = find("#toast", HTMLDivElement);
     this.agentGeneral = find("#agent-general", HTMLDivElement);
     this.agentAnchored = find("#agent-anchored", HTMLDivElement);
