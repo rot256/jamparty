@@ -202,8 +202,10 @@ async fn joined(
     };
 
     // Reading and writing run side by side so neither cancels the other
-    // mid-line; acknowledgements go to the writer through a channel.
-    let (acks, mut ack_rx) = mpsc::channel(16);
+    // mid-line. Acknowledgements go out with the hub's broadcasts, in the
+    // order the hub sent them: an acknowledgement before the delivery of
+    // its comment.
+    let connection_id = presence.connection();
     let reader = async {
         // Renamed by presence updates; comments are signed with the latest.
         let mut author = author.clone();
@@ -219,11 +221,10 @@ async fn joined(
                     return "invalid control line";
                 }
             };
-            let ack = match message {
-                JoinerMessage::Comment { reference, draft } => ShareMessage::CommentAck {
-                    outcome: shared.hub.comment(&author, reference.clone(), draft),
-                    reference,
-                },
+            match message {
+                JoinerMessage::Comment { reference, draft } => {
+                    presence.comment(&author, reference, draft);
+                }
                 JoinerMessage::Presence { name, url, cursor } => {
                     match presence.update(Whereabouts { name, url, cursor }) {
                         Ok(renamed) => author = renamed,
@@ -232,32 +233,27 @@ async fn joined(
                             tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "presence update ignored");
                         }
                     }
-                    continue;
                 }
                 JoinerMessage::Cursor { position } => {
                     if let Err(ignored) = presence.cursor(position) {
                         tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "cursor ignored");
                     }
-                    continue;
                 }
                 JoinerMessage::Hello { .. } => return "second hello",
-            };
-            if acks.send(ack).await.is_err() {
-                return "control stream closed";
             }
         }
     };
     let writer = async {
         loop {
             let message = tokio::select! {
-                ack = ack_rx.recv() => match ack {
-                    Some(ack) => ack,
-                    None => return "control stream closed",
-                },
                 message = broadcasts.recv() => match message {
-                    // Answers and deliveries for someone else are not this
-                    // joiner's.
-                    Ok(Outgoing { audience, .. }) if !audience.includes(author.key) => continue,
+                    // Answers, deliveries and acknowledgements for someone
+                    // else are not this joiner's.
+                    Ok(Outgoing { audience, .. })
+                        if !audience.includes(author.key, connection_id) =>
+                    {
+                        continue;
+                    }
                     Ok(Outgoing { message, .. }) => presence.redact(message),
                     Err(RecvError::Lagged(_)) => return "fell behind",
                     Err(RecvError::Closed) => return "share stopped",

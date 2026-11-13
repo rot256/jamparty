@@ -12,7 +12,7 @@ use crate::{
         control::{AckOutcome, CommentRef, ShareMessage},
         presence::{Position, Whereabouts},
     },
-    share::hub::{Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, MAX_QUEUED_PER_KEY},
+    share::hub::{Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, MAX_QUEUED_PER_KEY, Outgoing},
 };
 
 fn hub() -> (Arc<Hub>, Arc<ManualClock>) {
@@ -302,4 +302,44 @@ fn cursors_go_only_to_other_people_on_the_same_page() {
     assert_eq!(forwarded, 25);
     clock.advance(SignedDuration::from_secs(1));
     assert!(bob.cursor(Some(position("p"))).is_ok());
+}
+
+#[tokio::test]
+async fn the_ack_goes_out_before_the_delivery() {
+    let (hub, _) = hub();
+    let alice = author("alice", 1);
+    let mut heard = hub.subscribe();
+    let (presence, _cursors) = hub.join(alice.clone()).unwrap();
+    let mine = presence.connection();
+    let (other, _other_cursors) = hub.join(alice.clone()).unwrap();
+    let reference = fresh();
+    // Delivered at once: the delivery task may finish before the
+    // connection's writer runs; the ack is still ahead of it.
+    let AckOutcome::Queued { id } = presence.comment(&alice, reference.clone(), draft()) else {
+        panic!("not queued");
+    };
+    hub.next_batch().await;
+    hub.finish(DeliveryResult::Ok, "");
+    let mut order = Vec::new();
+    while let Ok(Outgoing { audience, message }) = heard.try_recv() {
+        match message {
+            ShareMessage::CommentAck { .. } => {
+                assert!(audience.includes(alice.key, mine));
+                assert!(!audience.includes(alice.key, other.connection()));
+                order.push("ack");
+            }
+            ShareMessage::Delivered { ids } => {
+                assert_eq!(ids, [id]);
+                order.push("delivered");
+            }
+            ShareMessage::Admitted { .. }
+            | ShareMessage::Refused { .. }
+            | ShareMessage::Answer { .. }
+            | ShareMessage::Reload { .. }
+            | ShareMessage::Status { .. }
+            | ShareMessage::Presence { .. }
+            | ShareMessage::Cursor { .. } => {}
+        }
+    }
+    assert_eq!(order, ["ack", "delivered"]);
 }

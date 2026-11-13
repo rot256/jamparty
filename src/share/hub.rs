@@ -85,7 +85,7 @@ struct Inner {
     changes: u64,
     /// Recently queued comments by joiner key and the page's ref.
     refs: VecDeque<(EndpointKey, CommentRef, CommentId)>,
-    next_connection: u64,
+    next_connection: ConnectionId,
     status: Option<StatusLine>,
     /// Recent comments' anchors and authors.
     anchors: VecDeque<(Anchor, Author)>,
@@ -102,7 +102,7 @@ impl Hub {
                 joiners: Vec::new(),
                 changes: 0,
                 refs: VecDeque::new(),
-                next_connection: 0,
+                next_connection: ConnectionId(0),
                 status: None,
                 anchors: VecDeque::new(),
                 answers: VecDeque::new(),
@@ -160,7 +160,7 @@ impl Hub {
                 return None;
             }
             let connection = inner.next_connection;
-            inner.next_connection = connection.wrapping_add(1);
+            inner.next_connection = connection.next();
             inner.changes = inner.changes.wrapping_add(1);
             let changed = inner.changes;
             inner.joiners.push(Seat {
@@ -244,7 +244,11 @@ impl Hub {
         let mut messages: Vec<ShareMessage> = inner
             .answers
             .iter()
-            .filter(|answer| answer.audience.includes(key))
+            .filter(|answer| match answer.audience {
+                Audience::Everyone => true,
+                Audience::Key(only) => only == key,
+                Audience::Connection(_) => false,
+            })
             .map(|answer| answer.message.clone())
             .collect();
         if let Some(line) = &inner.status {
@@ -267,15 +271,37 @@ impl Hub {
     }
 
     /// Rate-limits and queues a comment from `author`. A `reference` this
-    /// joiner sent before gets the comment it queued then.
+    /// joiner sent before gets the comment it queued then. Joiners'
+    /// comments go through [`Presence::comment`].
+    #[cfg(test)]
     pub(crate) fn comment(
         &self,
         author: &Author,
         reference: CommentRef,
         draft: Draft,
     ) -> AckOutcome {
-        let mut guard = self.lock();
-        let inner = &mut *guard;
+        let outcome = self.queue_comment(&mut self.lock(), author, reference, draft);
+        self.wake_for(outcome);
+        outcome
+    }
+
+    /// Wakes the delivery task for a newly queued comment.
+    fn wake_for(&self, outcome: AckOutcome) {
+        match outcome {
+            AckOutcome::Queued { .. } => self.wakeup.notify_one(),
+            AckOutcome::Delivered { .. }
+            | AckOutcome::RateLimited { .. }
+            | AckOutcome::QueueFull => {}
+        }
+    }
+
+    fn queue_comment(
+        &self,
+        inner: &mut Inner,
+        author: &Author,
+        reference: CommentRef,
+        draft: Draft,
+    ) -> AckOutcome {
         let earlier = inner
             .refs
             .iter()
@@ -327,8 +353,6 @@ impl Hub {
                     inner.refs.pop_front();
                 }
                 inner.refs.push_back((author.key, reference, id));
-                drop(guard);
-                self.wakeup.notify_one();
                 tracing::info!(%id, author = %author.name, fingerprint = %author.fingerprint, "comment queued");
                 AckOutcome::Queued { id }
             }
@@ -549,14 +573,18 @@ pub(crate) enum Audience {
     /// The connections of one joiner key: its delivered comments, answers
     /// addressed to it.
     Key(EndpointKey),
+    /// One connection: the acknowledgement of a comment it sent.
+    Connection(ConnectionId),
 }
 
 impl Audience {
+    /// Whether connection `connection` of joiner `key` is in it.
     #[must_use]
-    pub(crate) fn includes(self, key: EndpointKey) -> bool {
+    pub(crate) fn includes(self, key: EndpointKey, connection: ConnectionId) -> bool {
         match self {
             Self::Everyone => true,
             Self::Key(only) => only == key,
+            Self::Connection(only) => only == connection,
         }
     }
 }
@@ -582,9 +610,19 @@ fn status_line(text: &str) -> Option<StatusLine> {
     StatusLine::try_from(text.to_owned()).ok()
 }
 
+/// One admitted connection's number, unique while the share runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConnectionId(u64);
+
+impl ConnectionId {
+    fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+}
+
 /// One admitted connection.
 struct Seat {
-    connection: u64,
+    connection: ConnectionId,
     author: Author,
     url: Option<PagePath>,
     cursor: Switch,
@@ -631,7 +669,7 @@ impl Ignored {
 /// A joiner's place in presence; leaving is announced on drop.
 pub(crate) struct Presence {
     hub: Arc<Hub>,
-    connection: u64,
+    connection: ConnectionId,
 }
 
 impl Presence {
@@ -672,6 +710,37 @@ impl Presence {
 }
 
 impl Presence {
+    /// Queues a comment from this connection's `author` (see
+    /// [`Hub::comment`]) and sends its acknowledgement to this connection
+    /// under the hub's lock: before anything the comment leads to, its
+    /// delivery included, is sent.
+    pub(crate) fn comment(
+        &self,
+        author: &Author,
+        reference: CommentRef,
+        draft: Draft,
+    ) -> AckOutcome {
+        let outcome = {
+            let mut inner = self.hub.lock();
+            let outcome = self
+                .hub
+                .queue_comment(&mut inner, author, reference.clone(), draft);
+            self.hub.send(
+                Audience::Connection(self.connection),
+                ShareMessage::CommentAck { reference, outcome },
+            );
+            outcome
+        };
+        self.hub.wake_for(outcome);
+        outcome
+    }
+
+    /// This connection's number.
+    #[must_use]
+    pub(crate) fn connection(&self) -> ConnectionId {
+        self.connection
+    }
+
     /// Forwards this joiner's cursor to the other people on its page (not
     /// to its own key's other connections); returns to how many
     /// connections.
