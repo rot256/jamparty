@@ -17,10 +17,11 @@ its own joiner's client.
 ## Pill (bottom right)
 
 - One dark pill: the connection dot inside it, left of the text
-  `N queued` (`N` = the joiner's own undelivered comments). The separate
-  dot is gone.
-- Dot colours as today: green `#2f9e44` connected, amber `#e8a33d`
-  reconnecting, grey `#9a958e` share unreachable or a status line set.
+  `N queued` (`N` = the joiner's own undelivered comments).
+- Dot colours: green `#2f9e44` connected, amber `#e8a33d` reconnecting,
+  grey `#9a958e` share unreachable or a status line set. Comments not sent
+  go out again whenever the joiner is connected to the share, status line
+  or not.
 - Clicking the pill expands it upward into the comment list (below);
   clicking again, `▾`, or anywhere outside the list collapses it.
 - A gear button sits next to the pill and opens the control panel (below);
@@ -86,8 +87,8 @@ text. Rows:
 - Show my cursor off: the page sends **no pointer data at all** (not
   "sent and hidden by others"). On: see Cursors.
 - Keys work only when no text field, textarea or contenteditable has
-  focus (as `/` today). `/` still opens a page comment when comment mode is
-  on.
+  focus, as `/` does. `/` opens a page comment when comment mode is on. A
+  held key flips its switch once.
 - Rebinding: each key is shown as a chip; clicking a chip puts it in a
   listening state (`press a key…`, dashed outline); the next key press
   becomes the binding. Escape cancels. A key already bound to another
@@ -135,7 +136,7 @@ text. Rows:
 - Stored by the joiner process on disk, not in a cookie (each session is a
   different `<sid>.localhost` origin, so a cookie would be lost per share):
   `~/.config/jampot/settings.json` next to the key, mode 0600, holding the
-  name and the key bindings (and the two switch states).
+  name, the key bindings, the two switch states and the corner.
   `jampot join --name` still overrides the name for one run.
 - A name change mid-session is sent to the share and updates presence for
   everyone.
@@ -148,33 +149,34 @@ text. Rows:
   candidates listed).
 - `jampot send --anchor <comment id> "…"` without `--to` addresses the
   comment's author by default; `--to all` (or no anchor and no `--to`)
-  broadcasts as today.
+  sends it to everyone.
 - The recipient's answer bubble shows a small `to you` line above the text
-  (in the existing answer-meta style, `#7b3221`, 11 px, bold).
-- Update `jampot agent` guides to describe `--to`.
+  (in the answer-meta style, `#7b3221`, 11 px, bold).
+- The `jampot agent` guides describe `--to`.
 
-## Protocol and share changes (summary)
+## Protocol (summary)
+
+All of this is part of the version-1 wire format.
 
 - Joiner → share: `presence` updates (name change, current URL, cursor on
   or off), `cursor` messages (selector, fractional offset; only while on),
   both rate-limited at the share as well.
 - Share → joiner: presence carries name, key fingerprint, colour index and
   current URL per joiner; `cursor` messages forwarded only to joiners on
-  the same URL; answers gain an optional recipient key and are sent only
+  the same URL; answers carry an optional recipient key and are sent only
   to that key's connections.
-- Bump the wire `version` if the changes are not purely additive.
 
-## Tests to add
+## Tests
 
 - Rust: cursor and presence messages are forwarded only to joiners on the
   same URL; nothing is forwarded for a joiner whose cursor is off (and the
   client sends none); addressed answers reach only the recipient;
-  `--anchor` defaults to the author; ambiguous `--to` is refused; settings
-  file written 0600 and read back.
+  `--anchor` defaults to the author; an ambiguous `--to` is refused; the
+  settings file is written 0600 and read back.
 - Browser: **every feature in this file is covered by Playwright**, in
   Chromium and Firefox, against the real binaries (one share, several
   `jampot join` processes, each with its own home directory and its own
-  browser context). A feature is not done until its Playwright test passes.
+  browser context). A feature is done once its Playwright test passes.
   Single-joiner cases:
   - pill with the dot inside; colour follows the state (stop the share:
     grey; cut the joiner's socket: amber; back: green);

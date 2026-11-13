@@ -28,7 +28,7 @@ export class EditMode {
   constructor(
     private readonly ui: Ui,
     private readonly dialog: CommentDialog,
-    /** Whether edit mode may be on: comment mode on, a compatible joiner. */
+    /** Whether edit mode may be on: while comment mode is on. */
     private readonly allowed: () => boolean,
   ) {
     ui.edit.addEventListener("click", () => {

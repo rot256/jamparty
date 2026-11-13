@@ -38,11 +38,14 @@ pub(crate) enum Outcome {
     /// The settings are saved; the `settings` message before this reply
     /// has them.
     Saved,
-    /// The comment may not have reached the share: the page keeps it and
-    /// sends it again, under the same ref, once connected.
+    /// The comment may not have reached the share, or the share's queue
+    /// is full: the page keeps it and sends it again, under the same ref,
+    /// once connected.
     Unsent { error: String },
-    /// Refused for good (too many comments, a full queue, invalid
-    /// settings); with a rate limit, how long to wait.
+    /// Refused: the comment goes back to the dialog, the settings stay as
+    /// they were (over the rate limit, too many comments on their way, an
+    /// invalid comment or settings change, a settings file that could not
+    /// be written); with a rate limit, how long to wait.
     Refused {
         error: String,
         #[serde(

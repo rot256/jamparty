@@ -1,6 +1,7 @@
 //! The joiner's settings (docs/ui.md): its saved name, the overlay's key
-//! bindings, its two switches and the corner it sits in. Kept by the joiner process on disk (see
-//! `adapters::settings`), changed from the page.
+//! bindings, its two switches and the corner it sits in. The joiner
+//! process keeps them on disk (see `adapters::settings`); pages change
+//! them.
 
 use serde::{Deserialize, Serialize};
 
