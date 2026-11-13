@@ -771,6 +771,10 @@ var Panel = class {
     document.addEventListener("keydown", (event) => {
       this.onKey(event);
     }, true);
+    document.addEventListener("pointerdown", (event) => {
+      const path = event.composedPath();
+      if (this.isOpen && !path.includes(ui.panel) && !path.includes(ui.gear)) this.close();
+    }, true);
   }
   ui;
   settings = null;
@@ -1401,6 +1405,9 @@ var CommentList = class {
     ui.listHeader.addEventListener("click", () => {
       this.close();
     });
+    document.addEventListener("pointerdown", (event) => {
+      if (this.isOpen && !event.composedPath().includes(ui.list)) this.close();
+    }, true);
   }
   ui;
   outbox;

@@ -47,6 +47,11 @@ export class CommentList {
   ) {
     ui.pill.addEventListener("click", () => { this.toggle(); });
     ui.listHeader.addEventListener("click", () => { this.close(); });
+    // A press anywhere outside the open list closes it; the press itself
+    // still does what it does.
+    document.addEventListener("pointerdown", (event) => {
+      if (this.isOpen && !event.composedPath().includes(ui.list)) this.close();
+    }, true);
   }
 
   get isOpen(): boolean {

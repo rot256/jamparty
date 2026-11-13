@@ -69,6 +69,12 @@ export class Panel {
     ui.nameField.addEventListener("change", () => { this.saveName(); });
     // Keys are handled before the page sees them, and only outside text fields.
     document.addEventListener("keydown", (event) => { this.onKey(event); }, true);
+    // A press anywhere outside the open panel closes it (the gear toggles
+    // it itself); the press still does what it does.
+    document.addEventListener("pointerdown", (event) => {
+      const path = event.composedPath();
+      if (this.isOpen && !path.includes(ui.panel) && !path.includes(ui.gear)) this.close();
+    }, true);
   }
 
   private chips(): [Action, HTMLButtonElement][] {

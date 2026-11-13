@@ -19,8 +19,9 @@ joiner's local endpoints and the share; nothing in the site itself.
 - Dot colours as today: green `#2f9e44` connected, amber `#e8a33d`
   reconnecting, grey `#9a958e` share unreachable or a status line set.
 - Clicking the pill expands it upward into the comment list (below);
-  clicking again or `▾` collapses it.
-- A gear button sits next to the pill and opens the control panel (below).
+  clicking again, `▾`, or anywhere outside the list collapses it.
+- A gear button sits next to the pill and opens the control panel (below);
+  clicking the gear again, or anywhere outside the panel, closes it.
   Only one of the two panels is open at a time.
 
 ## Comment list (expanded pill)

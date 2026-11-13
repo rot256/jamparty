@@ -790,6 +790,52 @@ def switch(page: Page, name: str) -> Locator:
     return overlay(page, f"#{name}")
 
 
+def test_outside_clicks_close_the_panel_and_the_list(
+    tmp_path: Path, page: Page
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = page.evaluate(
+            """() => {
+                window.clicks = 0;
+                document.querySelector("h1").addEventListener("click", () => {
+                    window.clicks += 1;
+                });
+            }"""
+        )
+        panel = overlay(page, "#panel")
+        gear = overlay(page, "#gear")
+
+        # The gear still toggles; a press inside the panel keeps it open.
+        gear.click()
+        expect(panel).to_be_visible()
+        overlay(page, "#here-count").click()
+        expect(panel).to_be_visible()
+        gear.click()
+        expect(panel).to_be_hidden()
+
+        # A click on the page closes the panel, and the page still gets it.
+        gear.click()
+        expect(panel).to_be_visible()
+        page.locator("h1").click()
+        expect(panel).to_be_hidden()
+        assert page.evaluate("() => window.clicks") == 1
+
+        # The same for the comment list, which has no hint text when empty.
+        overlay(page, "#pill").click()
+        listed = overlay(page, "#list")
+        expect(listed).to_be_visible()
+        expect(overlay(page, "#outbox-list li")).to_have_count(0)
+        page.locator("h1").click()
+        expect(listed).to_be_hidden()
+        expect(overlay(page, "#bar")).to_be_visible()
+        assert page.evaluate("() => window.clicks") == 2
+
+
 def test_the_control_panel(tmp_path: Path, page: Page) -> None:
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
@@ -860,7 +906,9 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         expect(show_cursor).to_have_attribute("aria-checked", "false")
         page.locator("h1").click()
 
-        # Rebinding: the new key works, the old one does not.
+        # Rebinding: the new key works, the old one does not. (The clicks on
+        # the page closed the panel.)
+        overlay(page, "#gear").click()
         chip = overlay(page, "#comment-mode-key")
         chip.click()
         expect(chip).to_have_text("press a key…")
