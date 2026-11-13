@@ -72,9 +72,10 @@ async fn first_line(first: &[u8]) -> (Option<ShareMessage>, Vec<u8>, ConnectionE
 fn assert_refused(reply: Option<ShareMessage>, closed: &ConnectionError, reason: RefusedReason) {
     assert_eq!(
         reply,
+        // Which jampot this is goes only to a joiner of another protocol.
         Some(ShareMessage::Refused {
             reason,
-            jampot: Some(JampotVersion::current())
+            jampot: None
         })
     );
     let ConnectionError::ApplicationClosed(close) = closed else {

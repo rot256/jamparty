@@ -172,10 +172,13 @@ async fn admission(
 }
 
 async fn refuse(connection: &Connection, mut send: SendStream, reason: RefusedReason) {
-    let refused = Envelope::from(ShareMessage::Refused {
-        reason,
-        jampot: Some(JampotVersion::current()),
-    });
+    // Only a joiner of another protocol hears which jampot this is, to
+    // install it; no other peer needs to know before admission.
+    let jampot = match reason {
+        RefusedReason::Incompatible => Some(JampotVersion::current()),
+        RefusedReason::WrongSecret | RefusedReason::BadHello | RefusedReason::Full => None,
+    };
+    let refused = Envelope::from(ShareMessage::Refused { reason, jampot });
     if lines::write(&mut send, &refused).await.is_ok() && send.finish().is_ok() {
         // Let the joiner read it and hang up; the close below carries the
         // reason too in case it does not.
