@@ -1,9 +1,10 @@
-//! The joiner's session: its state and its pages under one lock. Every
-//! change goes through [`Session::commit`], which changes the state and
-//! queues the messages that say so to every page before it unlocks: pages
-//! hear of changes in the order they were made, after the `hello` they
-//! attached with. Settings are written to their file outside that lock,
-//! one change at a time.
+//! The joiner's session: its state, its pages, its settings and its
+//! control stream to the share, under one lock. Every change goes through
+//! [`Session::commit`], which changes the state and queues the messages
+//! that say so to every page, and a reply to the page that asked, before
+//! it unlocks: pages hear of changes in the order they were made, after
+//! the `hello` they attached with. Settings are written to their file
+//! outside that lock, one change at a time.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -34,15 +35,30 @@ struct Inner {
     state: State,
     pages: Pages,
     preferences: Preferences,
+    /// The admitted control stream, and which admission it came with.
+    control: Option<(Admission, Arc<Control>)>,
+    /// The latest admission.
+    admissions: Admission,
+    /// Set when the share turned out to speak another protocol.
+    incompatible: Option<Incompatible>,
+}
+
+/// One admission to the share, counted from the first: tells one control
+/// stream from the next.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Admission(u64);
+
+impl Admission {
+    #[must_use]
+    fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
 }
 
 pub(crate) struct Session {
     inner: Mutex<Inner>,
-    control: Mutex<Option<Arc<Control>>>,
     /// The state after each commit, for the local server and tests.
     snapshot: watch::Sender<Snapshot>,
-    /// Set when the share turned out to speak another protocol.
-    incompatible: Mutex<Option<Incompatible>>,
     uplink: Uplink,
     /// Held from writing a settings change to taking it, so changes are
     /// written and taken in the order they came.
@@ -56,6 +72,21 @@ struct Reply {
     outcome: Outcome,
 }
 
+/// What a commit queues: messages for every page, then a reply for one.
+struct Told {
+    messages: Vec<ToPage>,
+    reply: Option<Reply>,
+}
+
+impl From<Vec<ToPage>> for Told {
+    fn from(messages: Vec<ToPage>) -> Self {
+        Self {
+            messages,
+            reply: None,
+        }
+    }
+}
+
 impl Session {
     pub(crate) fn new(preferences: Preferences) -> Self {
         let state = State::new(preferences.page());
@@ -65,9 +96,10 @@ impl Session {
                 state,
                 pages: Pages::default(),
                 preferences,
+                control: None,
+                admissions: Admission::default(),
+                incompatible: None,
             }),
-            control: Mutex::new(None),
-            incompatible: Mutex::new(None),
             uplink: Uplink::default(),
             settings_writes: sync::Mutex::new(()),
         }
@@ -78,10 +110,10 @@ impl Session {
     }
 
     /// Changes the state with `change` and, under the same lock, queues
-    /// the messages it returns to every page, then `reply` to its page.
-    fn commit(&self, change: impl FnOnce(&mut Inner) -> Vec<ToPage>, reply: Option<Reply>) {
+    /// the messages it returns to every page, then its reply to its page.
+    fn commit(&self, change: impl FnOnce(&mut Inner) -> Told) {
         let mut inner = self.lock();
-        let messages = change(&mut inner);
+        let Told { messages, reply } = change(&mut inner);
         let changed = messages.iter().any(|message| match message {
             ToPage::Cursor { .. } | ToPage::Reply { .. } | ToPage::Ping => false,
             ToPage::Hello(_)
@@ -138,11 +170,14 @@ impl Session {
         }
     }
 
+    /// The admitted control stream, if any.
     pub(crate) fn control(&self) -> Option<Arc<Control>> {
-        self.control
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.admitted().map(|(_, control)| control)
+    }
+
+    /// The admitted control stream and its admission, if any.
+    pub(crate) fn admitted(&self) -> Option<(Admission, Arc<Control>)> {
+        self.lock().control.clone()
     }
 
     /// A page attached: `hello` is the first thing in its queue.
@@ -201,13 +236,6 @@ impl Session {
             selected_text,
             comment,
         } = submission;
-        let reply = |outcome| {
-            Some(Reply {
-                page,
-                to: n,
-                outcome,
-            })
-        };
         let draft = match Draft::try_from(DraftFields {
             page: on,
             selector,
@@ -220,7 +248,7 @@ impl Session {
                     error: error.to_string(),
                     retry_after: None,
                 };
-                self.commit(|_| Vec::new(), reply(outcome));
+                self.reply(page, n, outcome);
                 return;
             }
         };
@@ -228,15 +256,12 @@ impl Session {
             error: NOT_SENT.to_owned(),
         };
         let Some(control) = self.control() else {
-            self.commit(|_| Vec::new(), reply(unsent()));
+            self.reply(page, n, unsent());
             return;
         };
-        let acked = match control.comment(reference, draft).await {
-            Ok(outcome) => outcome,
-            Err(_) => {
-                self.commit(|_| Vec::new(), reply(unsent()));
-                return;
-            }
+        let Ok(acked) = control.comment(reference, draft).await else {
+            self.reply(page, n, unsent());
+            return;
         };
         let outcome = match acked {
             AckOutcome::Queued { id } | AckOutcome::Delivered { id } => Outcome::Commented { id },
@@ -250,7 +275,7 @@ impl Session {
             },
         };
         // The acknowledgement changed the state when it arrived.
-        self.commit(|_| Vec::new(), reply(outcome));
+        self.reply(page, n, outcome);
     }
 
     /// Saves a change from a page and tells every page. The file is
@@ -263,17 +288,17 @@ impl Session {
             .await
             .unwrap_or_else(|error| Err(report!("the settings write failed: {error}")));
         match saved {
-            Ok(saved) => self.commit(
-                |inner| {
-                    let settings = inner.preferences.take(saved);
-                    inner.state.set_settings(settings)
-                },
-                Some(Reply {
-                    page,
-                    to: n,
-                    outcome: Outcome::Saved,
-                }),
-            ),
+            Ok(saved) => self.commit(|inner| {
+                let settings = inner.preferences.take(saved);
+                Told {
+                    messages: inner.state.set_settings(settings),
+                    reply: Some(Reply {
+                        page,
+                        to: n,
+                        outcome: Outcome::Saved,
+                    }),
+                }
+            }),
             Err(error) => {
                 tracing::warn!(error = %describe(&error), "could not save the settings");
                 let outcome = Outcome::Refused {
@@ -289,44 +314,41 @@ impl Session {
 
     /// Answers request `to` of `page` without changing anything.
     pub(crate) fn reply(&self, page: PageId, to: RequestNumber, outcome: Outcome) {
-        self.commit(|_| Vec::new(), Some(Reply { page, to, outcome }));
+        self.commit(|_| Told {
+            messages: Vec::new(),
+            reply: Some(Reply { page, to, outcome }),
+        });
     }
 
     /// The share admitted us on `control`; of our comments it still holds
     /// `undelivered`.
     pub(crate) fn connected(&self, control: Arc<Control>, you: Author, undelivered: &[CommentId]) {
-        *self.control.lock().unwrap_or_else(PoisonError::into_inner) = Some(control);
-        self.commit(|inner| inner.state.admitted(you, undelivered), None);
+        self.commit(|inner| {
+            inner.admissions = inner.admissions.next();
+            inner.control = Some((inner.admissions, control));
+            inner.state.admitted(you, undelivered).into()
+        });
         self.uplink.changed();
     }
 
     /// The share speaks another protocol: the joiner gives up.
     pub(crate) fn incompatible(&self, incompatible: Incompatible) {
-        *self
-            .incompatible
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(incompatible);
+        self.lock().incompatible = Some(incompatible);
     }
 
     /// Why the share's protocol is not this joiner's, if it is not.
     pub(crate) fn incompatibility(&self) -> Option<Incompatible> {
-        self.incompatible
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.lock().incompatible.clone()
     }
 
     /// The connection is gone (or never came up).
     pub(crate) fn disconnected(&self, refused: Option<RefusedReason>) {
-        let control = self
-            .control
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(control) = control {
-            control.abandon();
-        }
-        self.commit(|inner| inner.state.disconnected(refused), None);
+        self.commit(|inner| {
+            if let Some((_, control)) = inner.control.take() {
+                control.abandon();
+            }
+            inner.state.disconnected(refused).into()
+        });
     }
 
     /// Applies a message from the share after admission.
@@ -336,7 +358,7 @@ impl Session {
                 // Applied here, in the share's order (an acknowledgement
                 // before its comment's delivery), before the comment's
                 // reply.
-                self.commit(|inner| inner.state.acknowledged(outcome), None);
+                self.commit(|inner| inner.state.acknowledged(outcome).into());
                 control.acknowledge(&reference, outcome);
             }
             other @ (ShareMessage::Admitted { .. }
@@ -347,7 +369,7 @@ impl Session {
             | ShareMessage::Status { .. }
             | ShareMessage::Presence { .. }
             | ShareMessage::Cursor { .. }) => {
-                self.commit(|inner| inner.state.apply(other), None);
+                self.commit(|inner| inner.state.apply(other).into());
             }
         }
     }
@@ -419,7 +441,7 @@ pub(crate) mod tests {
         assert!(session.uplink().woken());
         assert!(!session.uplink().woken());
         for _ in 0..PAGE_QUEUE {
-            session.commit(|_| vec![ToPage::Ping], None);
+            session.commit(|_| vec![ToPage::Ping].into());
             while quick.queue.try_recv().is_ok() {}
         }
         // The slow page, in front, is gone: the share is to hear the

@@ -14,7 +14,7 @@ use tokio::{
 };
 
 use crate::{
-    join::{control::Control, session::Session},
+    join::session::{Admission, Session},
     protocol::presence::{PagePath, Position, Whereabouts},
 };
 
@@ -65,15 +65,15 @@ impl Uplink {
     }
 }
 
-/// What the share was told, and on which connection.
+/// What the share was told, and on which admission's connection.
 struct Told {
-    control: Arc<Control>,
+    admission: Admission,
     whereabouts: Whereabouts,
 }
 
 impl Told {
-    fn is(&self, control: &Arc<Control>, whereabouts: &Whereabouts) -> bool {
-        Arc::ptr_eq(&self.control, control) && self.whereabouts == *whereabouts
+    fn is(&self, admission: Admission, whereabouts: &Whereabouts) -> bool {
+        self.admission == admission && self.whereabouts == *whereabouts
     }
 }
 
@@ -85,11 +85,11 @@ pub(crate) async fn run(session: Arc<Session>) {
     loop {
         session.uplink().wake.notified().await;
         loop {
-            let Some(control) = session.control() else {
+            let Some((admission, control)) = session.admitted() else {
                 break;
             };
             let now = session.whereabouts();
-            if !told.as_ref().is_some_and(|told| told.is(&control, &now)) {
+            if !told.as_ref().is_some_and(|told| told.is(admission, &now)) {
                 if let Some(next) = last.map(|last| last + REPORT_GAP)
                     && Instant::now() < next
                 {
@@ -103,7 +103,7 @@ pub(crate) async fn run(session: Arc<Session>) {
                     break;
                 }
                 told = Some(Told {
-                    control: Arc::clone(&control),
+                    admission,
                     whereabouts: now.clone(),
                 });
             }
@@ -116,7 +116,7 @@ pub(crate) async fn run(session: Arc<Session>) {
             }
             if told
                 .as_ref()
-                .is_some_and(|told| told.is(&control, &session.whereabouts()))
+                .is_some_and(|told| told.is(admission, &session.whereabouts()))
             {
                 break;
             }
