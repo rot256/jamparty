@@ -21,10 +21,6 @@ use crate::{
 
 /// Answers kept for pages that load later.
 pub(crate) const MAX_ANSWERS: usize = 100;
-/// Delivered comments the share told of before this joiner heard they
-/// were queued, at most this many (an older share's delivery can overtake
-/// its own acknowledgement).
-const MAX_EARLY: usize = 100;
 
 /// The joiner's link to the share.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -88,13 +84,13 @@ impl Snapshot {
     }
 }
 
-/// This joiner's comments the share holds undelivered.
+/// This joiner's comments the share holds undelivered. The share sends a
+/// comment's acknowledgement before its delivery, and the joiner applies
+/// both in that order.
 #[derive(Debug, Default)]
 pub(crate) struct Mine {
     /// None until the share first admitted this joiner.
     undelivered: Option<BTreeSet<CommentId>>,
-    /// Ids the share delivered before their acknowledgement arrived.
-    early: VecDeque<CommentId>,
 }
 
 impl Mine {
@@ -109,31 +105,16 @@ impl Mine {
     /// comments; any others were delivered meanwhile.
     fn admitted(&mut self, undelivered: &[CommentId]) {
         self.undelivered = Some(undelivered.iter().copied().collect());
-        self.early.clear();
     }
 
     fn queued(&mut self, id: CommentId) {
-        match self.early.iter().position(|early| *early == id) {
-            Some(index) => {
-                self.early.remove(index);
-            }
-            None => {
-                self.undelivered.get_or_insert_default().insert(id);
-            }
-        }
+        self.undelivered.get_or_insert_default().insert(id);
     }
 
     fn delivered(&mut self, ids: &[CommentId]) {
-        for id in ids {
-            let known = self
-                .undelivered
-                .as_mut()
-                .is_some_and(|undelivered| undelivered.remove(id));
-            if !known {
-                if self.early.len() == MAX_EARLY {
-                    self.early.pop_front();
-                }
-                self.early.push_back(*id);
+        if let Some(undelivered) = &mut self.undelivered {
+            for id in ids {
+                undelivered.remove(id);
             }
         }
     }
@@ -241,7 +222,7 @@ impl State {
     }
 
     /// Applies a message from the share after admission (acknowledgements
-    /// go to [`State::acknowledged`] through the comment's request).
+    /// go to [`State::acknowledged`]).
     pub(crate) fn apply(&mut self, message: ShareMessage) -> Vec<ToPage> {
         match message {
             ShareMessage::Reload { revision } => {

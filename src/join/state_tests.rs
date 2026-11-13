@@ -151,17 +151,15 @@ fn a_restarted_joiner_waits_for_the_share_before_saying_what_is_pending() {
 }
 
 #[test]
-fn a_delivery_that_overtakes_its_acknowledgement_is_kept() {
+fn a_comment_is_pending_from_its_acknowledgement_to_its_delivery() {
     let mut state = State::new(settings(Switch::Off));
     state.admitted(author(1), &[]);
-    // Delivered before the joiner heard it was queued: never pending.
-    state.apply(ShareMessage::Delivered { ids: vec![id(1)] });
-    state.acknowledged(AckOutcome::Queued { id: id(1) });
-    assert_eq!(state.snapshot().mine, Some(Vec::new()));
-    // The usual order.
     state.acknowledged(AckOutcome::Queued { id: id(2) });
     assert_eq!(state.snapshot().mine, Some(vec![id(2)]));
     state.apply(ShareMessage::Delivered { ids: vec![id(2)] });
+    assert_eq!(state.snapshot().mine, Some(Vec::new()));
+    // Sent again after its delivery: nothing pending.
+    state.acknowledged(AckOutcome::Delivered { id: id(2) });
     assert_eq!(state.snapshot().mine, Some(Vec::new()));
 }
 

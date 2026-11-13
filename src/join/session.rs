@@ -249,7 +249,8 @@ impl Session {
                 error: "the share's queue is full".to_owned(),
             },
         };
-        self.commit(|inner| inner.state.acknowledged(acked), reply(outcome));
+        // The acknowledgement changed the state when it arrived.
+        self.commit(|_| Vec::new(), reply(outcome));
     }
 
     /// Saves a change from a page and tells every page. The file is
@@ -332,6 +333,10 @@ impl Session {
     pub(crate) fn apply(&self, control: &Control, message: ShareMessage) {
         match message {
             ShareMessage::CommentAck { reference, outcome } => {
+                // Applied here, in the share's order (an acknowledgement
+                // before its comment's delivery), before the comment's
+                // reply.
+                self.commit(|inner| inner.state.acknowledged(outcome), None);
                 control.acknowledge(&reference, outcome);
             }
             other @ (ShareMessage::Admitted { .. }
