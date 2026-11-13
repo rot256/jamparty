@@ -14,6 +14,10 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The framework tests run real dev servers (slow, and they need tools of
+# their own; see tests/test_frameworks.py): `uv run pytest -m frameworks`.
+addopts = ["-m", "not frameworks"]
+markers = ["frameworks: real dev servers through jampot (uv run pytest -m frameworks)"]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
