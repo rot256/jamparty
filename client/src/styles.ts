@@ -175,8 +175,6 @@ export const styles = `
     font: 11px ui-monospace, Menlo, monospace;
   }
 
-  #outbox-empty { padding: 10px 14px; color: #8c867e; }
-  #outbox-empty[hidden] { display: none; }
 
   #panel {
     position: fixed;

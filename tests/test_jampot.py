@@ -829,6 +829,7 @@ def test_outside_clicks_close_the_panel_and_the_list(
         overlay(page, "#pill").click()
         listed = overlay(page, "#list")
         expect(listed).to_be_visible()
+        expect(listed).not_to_contain_text("No comments yet")
         expect(overlay(page, "#outbox-list li")).to_have_count(0)
         page.locator("h1").click()
         expect(listed).to_be_hidden()

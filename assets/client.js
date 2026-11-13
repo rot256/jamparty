@@ -1452,7 +1452,7 @@ var CommentList = class {
     connectionText.textContent = `· ${view.text}`;
   }
   render() {
-    const { outboxList, outboxEmpty } = this.ui;
+    const { outboxList } = this.ui;
     const now = Date.now();
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
     outboxList.replaceChildren(...entries.map((entry) => {
@@ -1484,7 +1484,6 @@ var CommentList = class {
       }
       return item;
     }));
-    outboxEmpty.hidden = entries.length > 0;
   }
 };
 
@@ -1832,8 +1831,6 @@ var styles = `
     font: 11px ui-monospace, Menlo, monospace;
   }
 
-  #outbox-empty { padding: 10px 14px; color: #8c867e; }
-  #outbox-empty[hidden] { display: none; }
 
   #panel {
     position: fixed;
@@ -2286,7 +2283,6 @@ var MARKUP = `
       <button id="collapse" type="button" aria-label="Collapse">▾</button>
     </header>
     <ol id="outbox-list"></ol>
-    <div id="outbox-empty">No comments yet: right-click an element, or press / for the page.</div>
   </section>
   <section id="panel" aria-label="jampot settings" hidden>
     <div class="control" id="comment-mode-row">
@@ -2367,7 +2363,6 @@ var Ui = class _Ui {
   connectionText;
   collapse;
   outboxList;
-  outboxEmpty;
   panel;
   commentModeKey;
   commentMode;
@@ -2430,7 +2425,6 @@ var Ui = class _Ui {
     this.connectionText = find("#connection-text", HTMLSpanElement);
     this.collapse = find("#collapse", HTMLButtonElement);
     this.outboxList = find("#outbox-list", HTMLOListElement);
-    this.outboxEmpty = find("#outbox-empty", HTMLDivElement);
     this.panel = find("#panel", HTMLElement);
     this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
     this.commentMode = find("#comment-mode", HTMLButtonElement);

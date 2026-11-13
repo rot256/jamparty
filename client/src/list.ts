@@ -96,7 +96,7 @@ export class CommentList {
   }
 
   render(): void {
-    const { outboxList, outboxEmpty } = this.ui;
+    const { outboxList } = this.ui;
     const now = Date.now();
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
     outboxList.replaceChildren(...entries.map((entry) => {
@@ -126,6 +126,5 @@ export class CommentList {
       }
       return item;
     }));
-    outboxEmpty.hidden = entries.length > 0;
   }
 }

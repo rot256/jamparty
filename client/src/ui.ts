@@ -30,7 +30,6 @@ const MARKUP = `
       <button id="collapse" type="button" aria-label="Collapse">▾</button>
     </header>
     <ol id="outbox-list"></ol>
-    <div id="outbox-empty">No comments yet: right-click an element, or press / for the page.</div>
   </section>
   <section id="panel" aria-label="jampot settings" hidden>
     <div class="control" id="comment-mode-row">
@@ -112,7 +111,6 @@ export class Ui {
   readonly connectionText: HTMLSpanElement;
   readonly collapse: HTMLButtonElement;
   readonly outboxList: HTMLOListElement;
-  readonly outboxEmpty: HTMLDivElement;
   readonly panel: HTMLElement;
   readonly commentModeKey: HTMLButtonElement;
   readonly commentMode: HTMLButtonElement;
@@ -177,7 +175,6 @@ export class Ui {
     this.connectionText = find("#connection-text", HTMLSpanElement);
     this.collapse = find("#collapse", HTMLButtonElement);
     this.outboxList = find("#outbox-list", HTMLOListElement);
-    this.outboxEmpty = find("#outbox-empty", HTMLDivElement);
     this.panel = find("#panel", HTMLElement);
     this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
     this.commentMode = find("#comment-mode", HTMLButtonElement);
