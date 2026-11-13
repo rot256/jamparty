@@ -1,6 +1,6 @@
 //! The share's state: the comment queue and its delivery state, the rate
 //! limiter, who is connected (and where), the status line and recent
-//! answers; broadcasts to every joiner's control stream.
+//! answers; sends to every joiner's control stream, or one joiner's.
 
 use std::{
     collections::VecDeque,
@@ -56,7 +56,7 @@ const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct Hub {
     inner: Mutex<Inner>,
-    broadcast: broadcast::Sender<ShareMessage>,
+    broadcast: broadcast::Sender<Outgoing>,
     /// Poked when a comment is queued (or by tests after moving the clock).
     wakeup: Notify,
     /// Poked when a joiner's whereabouts changed; see [`flush_presence`].
@@ -82,7 +82,7 @@ struct Inner {
     status: Option<StatusLine>,
     /// Recent comments' anchors and authors.
     anchors: VecDeque<(Anchor, Author)>,
-    answers: VecDeque<ShareMessage>,
+    answers: VecDeque<Outgoing>,
 }
 
 impl Hub {
@@ -112,13 +112,18 @@ impl Hub {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<ShareMessage> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Outgoing> {
         self.broadcast.subscribe()
     }
 
+    /// Sends `message` to every joiner.
     pub(crate) fn broadcast(&self, message: ShareMessage) {
+        self.send(Audience::Everyone, message);
+    }
+
+    fn send(&self, audience: Audience, message: ShareMessage) {
         // No receivers means no joiners: nothing to tell.
-        let _ = self.broadcast.send(message);
+        let _ = self.broadcast.send(Outgoing { audience, message });
     }
 
     /// Adds an admitted joiner to presence until the returned guard drops;
@@ -224,8 +229,8 @@ impl Hub {
         let mut messages: Vec<ShareMessage> = inner
             .answers
             .iter()
-            .filter(|answer| for_key(answer, key))
-            .cloned()
+            .filter(|answer| answer.audience.includes(key))
+            .map(|answer| answer.message.clone())
             .collect();
         if let Some(line) = &inner.status {
             messages.push(ShareMessage::Status {
@@ -344,8 +349,8 @@ impl Hub {
     }
 
     /// Records the in-flight batch's result; `detail` says what went wrong
-    /// and goes only to the share's log. Delivered ids go to every joiner;
-    /// the status line follows the state.
+    /// and goes only to the share's log. Delivered ids go to each comment's
+    /// author only; the status line follows the state.
     pub(crate) fn finish(&self, result: DeliveryResult, detail: &str) {
         let now = self.clock.now();
         let (delivered, status) = {
@@ -371,9 +376,17 @@ impl Hub {
             DeliveryResult::Gone => tracing::warn!(%detail, "the target is gone; holding comments"),
             DeliveryResult::Returned => tracing::info!("comments returned undelivered"),
         }
-        if !delivered.is_empty() {
-            let ids = delivered.iter().map(|comment| comment.id).collect();
-            self.broadcast(ShareMessage::Delivered { ids });
+        // Each author hears of its own comments only.
+        let mut authors: Vec<(EndpointKey, Vec<CommentId>)> = Vec::new();
+        for comment in &delivered {
+            let key = comment.author.key;
+            match authors.iter_mut().find(|(author, _)| *author == key) {
+                Some((_, ids)) => ids.push(comment.id),
+                None => authors.push((key, vec![comment.id])),
+            }
+        }
+        for (key, ids) in authors {
+            self.send(Audience::Key(key), ShareMessage::Delivered { ids });
         }
         if let Some(line) = status {
             self.broadcast(ShareMessage::Status { line });
@@ -425,8 +438,12 @@ impl Hub {
             if inner.answers.len() == MAX_ANSWERS {
                 inner.answers.pop_front();
             }
-            inner.answers.push_back(message.clone());
-            (message, recipient)
+            let audience = Audience::from(recipient.as_ref().map(|author| author.key));
+            inner.answers.push_back(Outgoing {
+                audience,
+                message: message.clone(),
+            });
+            (Outgoing { audience, message }, recipient)
         };
         match &recipient {
             Some(author) => {
@@ -434,7 +451,8 @@ impl Hub {
             }
             None => tracing::info!("answer sent to everyone"),
         }
-        self.broadcast(message);
+        let Outgoing { audience, message } = message;
+        self.send(audience, message);
         Ok(recipient)
     }
 
@@ -509,22 +527,36 @@ impl Hub {
     }
 }
 
-/// Whether the joiner with `key` gets `message`: answers addressed to
-/// someone else are not sent to it.
-#[must_use]
-pub(crate) fn for_key(message: &ShareMessage, key: EndpointKey) -> bool {
-    match message {
-        ShareMessage::Answer { to: Some(to), .. } => *to == key,
-        ShareMessage::Answer { to: None, .. }
-        | ShareMessage::Admitted { .. }
-        | ShareMessage::Refused { .. }
-        | ShareMessage::CommentAck { .. }
-        | ShareMessage::Delivered { .. }
-        | ShareMessage::Reload { .. }
-        | ShareMessage::Status { .. }
-        | ShareMessage::Presence { .. }
-        | ShareMessage::Cursor { .. } => true,
+/// Who a message from the hub is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Audience {
+    Everyone,
+    /// The connections of one joiner key: its delivered comments, answers
+    /// addressed to it.
+    Key(EndpointKey),
+}
+
+impl Audience {
+    #[must_use]
+    pub(crate) fn includes(self, key: EndpointKey) -> bool {
+        match self {
+            Self::Everyone => true,
+            Self::Key(only) => only == key,
+        }
     }
+}
+
+impl From<Option<EndpointKey>> for Audience {
+    fn from(to: Option<EndpointKey>) -> Self {
+        to.map_or(Self::Everyone, Self::Key)
+    }
+}
+
+/// A message from the hub to the joiners' control streams.
+#[derive(Clone, Debug)]
+pub(crate) struct Outgoing {
+    pub(crate) audience: Audience,
+    pub(crate) message: ShareMessage,
 }
 
 /// The status lines joiners see; what went wrong is in the share's log.

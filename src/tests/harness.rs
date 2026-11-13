@@ -276,6 +276,24 @@ async fn open_events(joiner: &Joiner, path: &str) -> Incoming {
     response.into_body()
 }
 
+/// Every event on `body` up to and including the next of type `kind`.
+pub(crate) async fn events_until(body: &mut Incoming, kind: &str) -> Vec<String> {
+    let needle = format!("\"type\":\"{kind}\"");
+    within(&format!("a {kind} event"), async {
+        let mut seen = Vec::new();
+        loop {
+            let frame = body.frame().await.unwrap().unwrap();
+            let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+            let done = text.contains(&needle);
+            seen.push(text);
+            if done {
+                return seen;
+            }
+        }
+    })
+    .await
+}
+
 /// The next event of type `kind` on `body`, as its JSON text.
 pub(crate) async fn next_event(body: &mut Incoming, kind: &str) -> String {
     let needle = format!("\"type\":\"{kind}\"");

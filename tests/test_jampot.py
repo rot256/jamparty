@@ -1446,11 +1446,37 @@ def test_comments_stay_with_their_author(tmp_path: Path, browser: Browser) -> No
         join(tmp_path / "bob", shared, "bob") as bob,
         pages(browser, alice, bob) as (alice_page, bob_page),
     ):
+        # What each page's event stream carries, as the page would see it.
+        for page in (alice_page, bob_page):
+            _ = page.evaluate(
+                """() => {
+                    window.seen = [];
+                    const stream = new EventSource("/_jampot/api/events");
+                    stream.onmessage = (event) => window.seen.push(event.data);
+                }"""
+            )
         comment_on_intro(alice_page, "Alice's comment.")
         expect(overlay(alice_page, "#badge")).to_have_text("1 queued")
         [line] = jampot(tmp_path, "recv").splitlines()
-        assert (
-            cast(dict[str, object], json.loads(line))["comment"] == "Alice's comment."
+        record = cast(dict[str, object], json.loads(line))
+        assert record["comment"] == "Alice's comment."
+        _ = jampot(tmp_path, "send", "Marker.", "--to", "all")
+
+        def seen(page: Page) -> list[str]:
+            return cast(list[str], page.evaluate("window.seen"))
+
+        # Events arrive in order: once the marker is in, so is any delivery.
+        def marked(page: Page) -> Callable[[], bool]:
+            return lambda: any("Marker." in event for event in seen(page))
+
+        for page in (alice_page, bob_page):
+            waiting(page, "the marker", marked(page))
+        assert any(
+            '"type":"delivered"' in event and str(record["id"]) in event
+            for event in seen(alice_page)
+        ), seen(alice_page)
+        assert not any('"type":"delivered"' in event for event in seen(bob_page)), seen(
+            bob_page
         )
         comment_on_intro(bob_page, "Bob's comment.")
         expect(overlay(bob_page, "#badge")).to_have_text("1 queued")

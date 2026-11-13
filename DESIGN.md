@@ -265,10 +265,10 @@ documented.
   not post it twice.
 - The share delivers in batches: one delivery in flight; comments arriving
   meanwhile form the next batch. On success it marks them delivered and
-  tells the joiners (shown in the page). On failure it retries the same
-  batch, unchanged, with backoff; if the target reports itself gone, it
-  sets the status line and keeps the comments queued (restart the share
-  to deliver elsewhere).
+  tells each comment's author, on that author's connections only (shown
+  in their page). On failure it retries the same batch, unchanged, with
+  backoff; if the target reports itself gone, it sets the status line and
+  keeps the comments queued (restart the share to deliver elsewhere).
 - If the joiner loses its connection, comments it could not hand to the
   share stay in the page as "not sent", with "send again".
 - A batch is one JSON object per comment, with length caps: `id`,
@@ -449,7 +449,8 @@ Kept out of the first version on purpose; the protocol leaves room:
   (`wrong_secret`, `bad_hello`, `full`), `comment_ack{ref,outcome}`
   (`queued{id}`, `delivered{id}` for a `ref` sent again after its comment
   was delivered, `rate_limited`, `queue_full`), `answer`,
-  `delivered{ids}`, `reload{revision}`, `status{line}`,
+  `delivered{ids}` (to the authors' connections only, each with its own
+  ids), `reload{revision}`, `status{line}`,
   `presence{joiners}` (and, for docs/ui.md, `presence` and `cursor`
   both ways; see Joiner UI as built). Joiner messages are parsed strictly; unknown fields
   in share messages are ignored. The joiner writes its control stream

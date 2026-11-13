@@ -21,8 +21,8 @@ use crate::{
     join::Joiner,
     protocol::{agent::Addressee, comment::Comment},
     tests::harness::{
-        DRAFT, connected, events, fixture_dir, join, joiner_with_key, next_event, post_comment,
-        share_files, until, within,
+        DRAFT, connected, events, events_until, fixture_dir, join, joiner_with_key, next_event,
+        post_comment, share_files, until, within,
     },
 };
 
@@ -71,11 +71,12 @@ async fn the_socket_is_private_and_goes_away_with_the_share() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn recv_waits_for_comments_and_delivery_reaches_every_joiner() {
+async fn recv_waits_for_comments_and_delivery_reaches_only_the_author() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let alice = join(&share, "alice").await;
     let bob = join(&share, "bob").await;
+    let mut alice_events = events(&alice).await;
     let mut bob_events = events(&bob).await;
 
     let path = share.socket_path().to_owned();
@@ -97,8 +98,16 @@ async fn recv_waits_for_comments_and_delivery_reaches_every_joiner() {
     assert_eq!(comment.comment, "Bigger, please");
     assert!(reply.body.contains(&comment.id.to_string()));
 
-    let delivered = next_event(&mut bob_events, "delivered").await;
+    let delivered = next_event(&mut alice_events, "delivered").await;
     assert!(delivered.contains(&comment.id.to_string()), "{delivered}");
+    // Bob's connection hears nothing of alice's delivery: an answer sent
+    // to everyone afterwards arrives first.
+    send(share.socket_path(), "after", None).await.unwrap();
+    let seen = events_until(&mut bob_events, "answer").await;
+    assert!(
+        seen.iter().all(|event| !event.contains("\"delivered\"")),
+        "{seen:?}"
+    );
     let mut view = alice.watch();
     within(
         "alice's pending to clear",
