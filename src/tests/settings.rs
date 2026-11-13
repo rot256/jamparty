@@ -3,17 +3,15 @@
 
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
+use serde_json::{Value, json};
+
 use crate::{
     adapters::{endpoint::generate_key, settings},
     core::{rng::SystemRng, settings::Switch},
     join::{JoinConfig, Joiner},
     share::Share,
-    tests::harness::{
-        CONNECT_WAIT, connected, events, fixture_dir, get, net, next_event, post_json, share_files,
-    },
+    tests::harness::{CONNECT_WAIT, PageSocket, about, connected, fixture_dir, net, share_files},
 };
-
-const SETTINGS: &str = "/_jampot/api/settings";
 
 async fn joiner(share: &Share, name: Option<&str>, settings: &Path) -> Joiner {
     let joiner = Joiner::start(JoinConfig {
@@ -33,6 +31,16 @@ async fn joiner(share: &Share, name: Option<&str>, settings: &Path) -> Joiner {
     joiner
 }
 
+/// The settings a page of `joiner` is told when it connects.
+async fn settings_of(joiner: &Joiner) -> Value {
+    let (_, hello) = PageSocket::hello(joiner).await;
+    hello["settings"].clone()
+}
+
+fn saved(outcome: &Value) -> bool {
+    *outcome == json!("saved")
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn settings_are_saved_read_back_and_sent_to_pages() {
     let dir = fixture_dir();
@@ -41,27 +49,30 @@ async fn settings_are_saved_read_back_and_sent_to_pages() {
     let path = home.path().join("jampot/settings.json");
 
     let first = joiner(&share, None, &path).await;
-    let status = get(&first, "/_jampot/api/status").await.body;
-    assert!(
-        status.contains(r#""name":"carol@box","askName":true"#),
-        "{status}"
-    );
-    assert!(
-        status.contains(r#""commentMode":"on","showCursor":"off""#),
-        "{status}"
-    );
+    let settings = settings_of(&first).await;
+    assert_eq!(settings["name"], "carol@box", "{settings}");
+    assert_eq!(settings["askName"], true, "{settings}");
+    assert_eq!(settings["commentMode"], "on", "{settings}");
+    assert_eq!(settings["showCursor"], "off", "{settings}");
     assert!(!path.exists(), "nothing written before a change");
 
-    let mut page = events(&first).await;
-    let changed = post_json(&first, SETTINGS, r#"{"name":"dora","showCursor":"on"}"#).await;
-    assert_eq!(changed.status, 200, "{}", changed.body);
-    assert!(
-        changed.body.contains(r#""name":"dora","askName":false"#),
-        "{}",
-        changed.body
+    let (mut page, _) = PageSocket::hello(&first).await;
+    let (mut other, _) = PageSocket::hello(&first).await;
+    let seen = about(
+        page.request(json!({"type": "settings", "change": {"name": "dora", "showCursor": "on"}}))
+            .await,
     );
-    let event = next_event(&mut page, "settings").await;
-    assert!(event.contains(r#""showCursor":"on""#), "{event}");
+    // The settings message comes first, then the reply.
+    let [settings, reply] = seen.as_slice() else {
+        panic!("{seen:?}");
+    };
+    assert_eq!(settings["type"], "settings", "{settings}");
+    assert_eq!(settings["name"], "dora", "{settings}");
+    assert_eq!(settings["askName"], false, "{settings}");
+    assert!(saved(&reply["outcome"]), "{reply}");
+    // Every page hears of it.
+    let told = other.next_of("settings").await;
+    assert_eq!(told["showCursor"], "on", "{told}");
     let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
     assert!(fs::read_to_string(&path).unwrap().contains("dora"));
@@ -75,36 +86,34 @@ async fn settings_are_saved_read_back_and_sent_to_pages() {
         r#"{"name":"a b"}"#,
         r#"{"admin":true}"#,
     ] {
-        assert_eq!(post_json(&first, SETTINGS, bad).await.status, 400, "{bad}");
+        let outcome = page.settings(bad).await;
+        assert!(outcome["refused"]["error"].is_string(), "{bad}: {outcome}");
     }
-    let keys = post_json(
-        &first,
-        SETTINGS,
-        r#"{"keys":{"commentMode":"k","showCursor":"F2"},"commentMode":"off"}"#,
-    )
-    .await;
-    assert_eq!(keys.status, 200, "{}", keys.body);
+    let keys = page
+        .settings(r#"{"keys":{"commentMode":"k","showCursor":"F2"},"commentMode":"off"}"#)
+        .await;
+    assert!(saved(&keys), "{keys}");
     first.stop().await;
 
     // A new run reads them back.
     let again = joiner(&share, None, &path).await;
-    let status = get(&again, "/_jampot/api/status").await.body;
-    for needle in [
-        r#""name":"dora","askName":false"#,
-        r#""keys":{"commentMode":"k","showCursor":"F2"}"#,
-        r#""commentMode":"off","showCursor":"on""#,
-    ] {
-        assert!(status.contains(needle), "{needle} in {status}");
-    }
+    let settings = settings_of(&again).await;
+    assert_eq!(settings["name"], "dora", "{settings}");
+    assert_eq!(settings["askName"], false, "{settings}");
+    assert_eq!(
+        settings["keys"],
+        json!({"commentMode": "k", "showCursor": "F2"}),
+        "{settings}"
+    );
+    assert_eq!(settings["commentMode"], "off", "{settings}");
+    assert_eq!(settings["showCursor"], "on", "{settings}");
     again.stop().await;
 
     // --name wins for the run, without asking, and is not saved.
     let named = joiner(&share, Some("erin"), &path).await;
-    let status = get(&named, "/_jampot/api/status").await.body;
-    assert!(
-        status.contains(r#""name":"erin","askName":false"#),
-        "{status}"
-    );
+    let settings = settings_of(&named).await;
+    assert_eq!(settings["name"], "erin", "{settings}");
+    assert_eq!(settings["askName"], false, "{settings}");
     assert!(fs::read_to_string(&path).unwrap().contains("dora"));
 }
 
@@ -117,12 +126,17 @@ async fn two_joiners_with_one_home_keep_each_others_changes() {
     let first = joiner(&share, None, &path).await;
     let second = joiner(&share, None, &path).await;
 
-    let named = post_json(&first, SETTINGS, r#"{"name":"dora"}"#).await;
-    assert_eq!(named.status, 200, "{}", named.body);
-    let cursor = post_json(&second, SETTINGS, r#"{"showCursor":"on"}"#).await;
-    assert_eq!(cursor.status, 200, "{}", cursor.body);
+    let (mut first_page, _) = PageSocket::hello(&first).await;
+    let (mut second_page, _) = PageSocket::hello(&second).await;
+    assert!(saved(&first_page.settings(r#"{"name":"dora"}"#).await));
+    let seen = about(
+        second_page
+            .request(json!({"type": "settings", "change": {"showCursor": "on"}}))
+            .await,
+    );
     // The second joiner saw the first one's name on disk.
-    assert!(cursor.body.contains(r#""name":"dora""#), "{}", cursor.body);
+    let settings = seen.first().unwrap();
+    assert_eq!(settings["name"], "dora", "{settings}");
 
     let saved = settings::load(&path).unwrap();
     assert_eq!(saved.name.map(String::from).as_deref(), Some("dora"));

@@ -25,12 +25,10 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import (
-    APIResponse,
     Browser,
     Locator,
     Page,
-    Request,
-    Route,
+    WebSocketRoute,
     expect,
 )
 from support import (
@@ -38,7 +36,9 @@ from support import (
     ROOT,
     TIMEOUT,
     Joined,
+    PageSocket,
     environment,
+    hello,
     jampot,
     join,
     join_process,
@@ -166,7 +166,7 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         assert b"Fixture page" in body
         assert b"/_jampot/client.js?live=0" in body
         status, body = request(joined, "/_jampot/client.js")
-        assert status == 200 and b"api/events" in body
+        assert status == 200 and b"api/socket" in body
         assert request(joined, "/missing")[0] == 404
 
         # Wrong Host (DNS rebinding) and cross-site reads are refused.
@@ -175,29 +175,30 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         )
         cross = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}
         assert request(joined, "/", headers=cross)[0] == 403
-        comment = json.dumps(
-            {"ref": "test-1", "page": "/", "selector": "h1", "comment": "Hi"}
-        ).encode()
-        posted = request(
-            joined,
-            "/_jampot/api/comments",
-            method="POST",
-            headers={"Content-Type": "application/json", "Origin": "http://evil.test"},
-            body=comment,
-        )
-        assert posted[0] == 403
-        status, body = request(
-            joined,
-            "/_jampot/api/comments",
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Origin": f"http://{joined.host}",
-            },
-            body=comment,
-        )
-        assert status == 202, body
-        assert cast(dict[str, object], json.loads(body))["pending"] == 1
+        # The page's socket opens only for the joiner's own origin.
+        evil = PageSocket(joined, origin="http://evil.test")
+        assert evil.status == 403
+        evil.close()
+        page = PageSocket(joined)
+        try:
+            assert page.status == 101
+            assert page.next()["type"] == "hello"
+            reply = page.request(
+                {
+                    "type": "comment",
+                    "ref": "test-1",
+                    "page": "/",
+                    "selector": "h1",
+                    "comment": "Hi",
+                }
+            )
+            outcome = cast(dict[str, dict[str, str]], reply["outcome"])
+            assert outcome["commented"]["id"]
+        finally:
+            page.close()
+        assert hello(joined)["mine"] == [outcome["commented"]["id"]]
+        # The rest of the API is reserved: nothing there reaches the site.
+        assert request(joined, "/_jampot/api/status")[0] == 200
 
 
 BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -386,6 +387,8 @@ def comment_on_intro(page: Page, text: str) -> None:
     expect(textarea).to_be_focused()
     textarea.fill(text)
     textarea.press("Enter")
+    # Closed once the joiner answered.
+    expect(page.locator("#jampot #jampot-dialog")).not_to_be_visible()
 
 
 def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> None:
@@ -597,21 +600,22 @@ def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> No
         assert record["selector"] == ""
 
 
-# Holds the page's comment requests until `window.jampotRelease()`; then
-# answers with the joiner's response, or with `refusal` (status 429) if
-# given.
-HOLD_COMMENTS = """(refusal) => {
-    const original = window.fetch;
+# Holds the comments the page sends its joiner until
+# `window.jampotRelease()`; then sends them, or answers them with `outcome`
+# (as the joiner's reply would) if given. `window.jampotRestore()` stops.
+HOLD_COMMENTS = """(outcome) => {
+    const original = WebSocket.prototype.send;
     let release;
     const released = new Promise((resolve) => { release = resolve; });
     window.jampotRelease = () => release();
-    window.fetch = async (...args) => {
-        if (!String(args[0]).includes("/api/comments")) return original(...args);
-        await released;
-        if (refusal === null) return original(...args);
-        return new Response(JSON.stringify({ error: refusal }), {
-            status: 429,
-            headers: { "Content-Type": "application/json" },
+    window.jampotRestore = () => { WebSocket.prototype.send = original; };
+    WebSocket.prototype.send = function (data) {
+        const message = JSON.parse(data);
+        if (message.type !== "comment") return original.call(this, data);
+        void released.then(() => {
+            if (outcome === null) return original.call(this, data);
+            const reply = { type: "reply", to: message.n, outcome };
+            this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(reply) }));
         });
     };
 }"""
@@ -664,7 +668,7 @@ def test_a_refused_comment_is_a_draft_again(tmp_path: Path, page: Page) -> None:
     ):
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        _ = page.evaluate(HOLD_COMMENTS, "too many comments")
+        _ = page.evaluate(HOLD_COMMENTS, {"refused": {"error": "too many comments"}})
         page.locator("#intro").click(button="right")
         textarea = overlay(page, "textarea")
         textarea.press_sequentially("Refused")
@@ -689,27 +693,18 @@ def test_a_reload_during_sending_does_not_send_twice(
         share(tmp_path, "serve", str(SITE)) as shared,
         join(tmp_path, shared) as joined,
     ):
+        tap = SocketTap(page)
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         page.locator("#intro").click(button="right")
         textarea = overlay(page, "textarea")
         textarea.press_sequentially("Exactly once")
         # The joiner's answer arrives, but the page never sees it.
-        _ = page.evaluate(
-            """() => {
-                const original = window.fetch;
-                window.fetch = async (...args) => {
-                    const response = await original(...args);
-                    if (String(args[0]).includes("/api/comments")) {
-                        window.jampotAccepted = response.status;
-                        await new Promise(() => {});
-                    }
-                    return response;
-                };
-            }"""
-        )
+        tap.hold.add("reply")
         textarea.press("Enter")
-        _ = page.wait_for_function("window.jampotAccepted === 202")
+        waiting(page, "the joiner's answer", lambda: len(tap.held) > 0)
+        tap.held.clear()
+        tap.hold.clear()
         _ = page.reload()
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
@@ -734,8 +729,8 @@ def test_a_joiner_with_another_page_api_is_not_used(tmp_path: Path, page: Page) 
                 status=200, content_type="application/json", body=json.dumps(status)
             ),
         )
-        requested: list[str] = []
-        page.on("request", lambda request: requested.append(request.url))
+        sockets: list[str] = []
+        page.on("websocket", lambda socket: sockets.append(socket.url))
         _ = page.goto(joined.url)
         text = page.locator("#jampot #notice")
         expect(text).to_contain_text("your jampot join runs 9.9.9 (page API 999)")
@@ -744,7 +739,7 @@ def test_a_joiner_with_another_page_api_is_not_used(tmp_path: Path, page: Page) 
             "data-state", "grey"
         )
         page.wait_for_timeout(500)
-        assert not any("/_jampot/api/events" in url for url in requested), requested
+        assert sockets == [], sockets
 
 
 @contextmanager
@@ -771,11 +766,8 @@ def test_addressing_by_key(tmp_path: Path, browser: Browser) -> None:
         join(tmp_path / "alice", shared, "alice") as alice,
         join(tmp_path / "alice2", shared, "alice") as alice2,
     ):
-        status = cast(
-            dict[str, dict[str, str]],
-            json.loads(request(alice, "/_jampot/api/status")[1]),
-        )
-        fingerprint = status["you"]["fingerprint"]
+        link = cast(dict[str, dict[str, str]], hello(alice)["link"])
+        fingerprint = link["you"]["fingerprint"]
         # Mallory names herself after alice's fingerprint.
         with (
             join(tmp_path / "mallory", shared, fingerprint) as mallory,
@@ -862,6 +854,37 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
 # The overlay (docs/ui.md), one joiner at a time.
 
 
+class SocketTap:
+    """Routes a page's sockets to its joiner through the test, so messages
+    from the joiner of the types in `hold` can be held back."""
+
+    def __init__(self, page: Page) -> None:
+        self.hold: set[str] = set()
+        self.held: list[tuple[WebSocketRoute, str]] = []
+        self.sockets: list[WebSocketRoute] = []
+        page.route_web_socket("**/_jampot/api/socket", self._route)
+
+    def _route(self, route: WebSocketRoute) -> None:
+        self.sockets.append(route)
+        server = route.connect_to_server()
+
+        def from_joiner(message: str | bytes) -> None:
+            kind = cast(dict[str, object], json.loads(message))["type"]
+            if kind in self.hold:
+                self.held.append((route, str(message)))
+            else:
+                route.send(message)
+
+        server.on_message(from_joiner)
+        route.on_message(server.send)
+
+    def release(self) -> None:
+        self.hold.clear()
+        for route, message in self.held:
+            route.send(message)
+        self.held.clear()
+
+
 def overlay(page: Page, selector: str) -> Locator:
     return page.locator(f"#jampot {selector}")
 
@@ -946,14 +969,15 @@ def test_the_comment_list(tmp_path: Path, page: Page) -> None:
         expect(listed).to_be_hidden()
 
         # Not sent (the joiner did not take it), then sent again.
-        page.route("**/_jampot/api/comments", lambda route: route.abort())
+        _ = page.evaluate(HOLD_COMMENTS, {"unsent": {"error": "not reachable"}})
+        _ = page.evaluate("() => window.jampotRelease()")
         comment_on_intro(page, "Third, kept for later.")
         overlay(page, "#pill").click()
         unsent = rows.nth(0)
         expect(unsent).to_have_attribute("data-state", "unsent")
         expect(unsent.locator(".state")).to_have_text("not sent")
         expect(unsent.locator(".state")).to_have_css("color", "rgb(255, 168, 168)")
-        page.unroute("**/_jampot/api/comments")
+        _ = page.evaluate("() => window.jampotRestore()")
         unsent.locator("button.again").click()
         expect(unsent).to_have_attribute("data-state", "queued")
         expect(overlay(page, "#list-count")).to_have_text("1 queued")
@@ -1448,16 +1472,21 @@ def waiting(page: Page, what: str, check: Callable[[], bool]) -> None:
     pytest.fail(f"timed out waiting for {what}")
 
 
-def cursor_posts(page: Page) -> list[dict[str, object]]:
-    """The cursor messages `page` posts to its joiner, as they are made."""
-    posts: list[dict[str, object]] = []
+RECORD_SENT = """() => {
+    window.jampotSent = [];
+    const original = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (data) {
+        window.jampotSent.push(JSON.parse(data));
+        return original.call(this, data);
+    };
+}"""
 
-    def record(request: Request) -> None:
-        if request.url.endswith("/_jampot/api/cursor"):
-            posts.append(cast(dict[str, object], request.post_data_json))
 
-    page.on("request", record)
-    return posts
+def sent(page: Page, kind: str) -> list[dict[str, object]]:
+    """The messages of type `kind` `page` sent its joiner since
+    `RECORD_SENT`."""
+    messages = cast(list[dict[str, object]], page.evaluate("window.jampotSent"))
+    return [message for message in messages if message["type"] == kind]
 
 
 def test_an_unrepresentable_url_is_nowhere(tmp_path: Path, browser: Browser) -> None:
@@ -1479,15 +1508,14 @@ def test_an_unrepresentable_url_is_nowhere(tmp_path: Path, browser: Browser) -> 
         expect(cursors(alice_page)).to_have_count(1)
 
         # Too long to say: bob is nowhere, and his page sends nothing.
-        bob_posts = cursor_posts(bob_page)
         _ = bob_page.evaluate("history.pushState({}, '', '/?' + 'q'.repeat(600))")
         expect(cursors(alice_page)).to_have_count(0)
         bob_page.wait_for_timeout(500)
-        bob_posts.clear()
+        _ = bob_page.evaluate(RECORD_SENT)
         for step in range(10):
             bob_page.mouse.move(300 + step * 5, 260)
         bob_page.wait_for_timeout(500)
-        assert bob_posts == []
+        assert sent(bob_page, "cursor") == []
         expect(cursors(alice_page)).to_have_count(0)
 
         # Back on a page it can name: there again.
@@ -1495,75 +1523,6 @@ def test_an_unrepresentable_url_is_nowhere(tmp_path: Path, browser: Browser) -> 
         time.sleep(0.3)
         bob_page.mouse.move(320, 270)
         expect(cursors(alice_page)).to_have_count(1)
-
-
-def test_cursor_messages_coalesce_behind_a_slow_one(
-    tmp_path: Path, browser: Browser
-) -> None:
-    with (
-        share(tmp_path, "serve", str(SPA)) as shared,
-        join(tmp_path / "alice", shared, "alice") as alice,
-        join(tmp_path / "bob", shared, "bob") as bob,
-        pages(browser, alice, bob) as (alice_page, bob_page),
-    ):
-        overlay(alice_page, "#gear").click()
-        expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
-        bob_page.locator("#title").click()
-        bob_page.keyboard.press("x")
-        expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
-            "aria-checked", "true"
-        )
-        time.sleep(0.3)
-        held: list[Route] = []
-        bob_page.route("**/_jampot/api/cursor", lambda route: held.append(route))
-        posts = cursor_posts(bob_page)
-
-        def release() -> None:
-            while held:
-                held.pop(0).continue_()
-
-        def burst(start: int) -> None:
-            for step in range(12):
-                bob_page.mouse.move(start + step * 10, 250)
-                bob_page.wait_for_timeout(30)
-
-        # One request in flight: the moves behind it wait as one, the last.
-        burst(200)
-        waiting(bob_page, "the first request", lambda: len(posts) == 1)
-        bob_page.wait_for_timeout(500)
-        assert len(posts) == 1
-        release()
-        waiting(bob_page, "the coalesced one", lambda: len(posts) == 2)
-        release()
-        bob_page.wait_for_timeout(500)
-        assert len(posts) == 2, posts
-        eventually("bob's last position", lambda: near(alice_page, 310, 250))
-
-        # A leave replaces the positions waiting behind a slow request.
-        burst(200)
-        waiting(bob_page, "a held request", lambda: len(posts) == 3)
-        burst(400)
-        _ = bob_page.evaluate("window.dispatchEvent(new Event('blur'))")
-        release()
-        waiting(bob_page, "the leave", lambda: len(posts) == 4)
-        release()
-        bob_page.wait_for_timeout(500)
-        assert len(posts) == 4, posts
-        assert "position" not in posts[3]
-        expect(cursors(alice_page)).to_have_count(0)
-
-        # Switched off behind a slow request: nothing more goes out.
-        burst(200)
-        waiting(bob_page, "a held request", lambda: len(posts) == 5)
-        burst(400)
-        bob_page.keyboard.press("x")
-        expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
-            "aria-checked", "false"
-        )
-        release()
-        bob_page.wait_for_timeout(500)
-        release()
-        assert len(posts) == 5, posts
 
 
 def cursor_on(page: Page) -> None:
@@ -1575,13 +1534,9 @@ def cursor_on(page: Page) -> None:
 
 def bob_is_at(bob: Joined, url: str) -> Callable[[], bool]:
     def check() -> bool:
-        status = cast(
-            dict[str, list[dict[str, object]]],
-            json.loads(request(bob, "/_jampot/api/status")[1]),
-        )
+        people = cast(list[dict[str, object]], hello(bob)["people"])
         return any(
-            person["name"] == "bob" and person["url"] == url
-            for person in status["here"]
+            person["name"] == "bob" and person["url"] == url for person in people
         )
 
     return check
@@ -1602,16 +1557,14 @@ def test_a_burst_of_page_changes_ends_on_the_last(
         # Straight at the joiner: 65 reports as fast as they go.
         _ = bob_page.evaluate(
             """async () => {
-                const stream = new EventSource("/_jampot/api/events?tab=burst&url=/");
-                await new Promise((resolve) => { stream.onopen = resolve; });
+                const url = new URL("/_jampot/api/socket", location.href);
+                url.protocol = "ws:";
+                const socket = new WebSocket(url);
+                await new Promise((resolve) => { socket.onmessage = resolve; });
                 for (let seq = 1; seq <= 65; seq++) {
-                    await fetch("/_jampot/api/page", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ tab: "burst", seq, url: `/q${seq}` }),
-                    });
+                    socket.send(JSON.stringify({ type: "page", url: `/q${seq}` }));
                 }
-                window.burst = stream;
+                window.burst = socket;
             }"""
         )
         eventually("the share at /q65", bob_is_at(bob, "/q65"))
@@ -1633,39 +1586,7 @@ def test_a_burst_of_page_changes_ends_on_the_last(
         expect(cursors(alice_page)).to_have_count(1)
 
 
-def test_page_reports_out_of_order(tmp_path: Path, browser: Browser) -> None:
-    with (
-        share(tmp_path, "serve", str(SPA)) as shared,
-        join(tmp_path / "alice", shared, "alice") as alice,
-        join(tmp_path / "bob", shared, "bob") as bob,
-        pages(browser, alice, bob) as (alice_page, bob_page),
-    ):
-        _ = alice_page.evaluate("history.pushState({}, '', '/b')")
-        cursor_on(bob_page)
-        held: list[Route] = []
-
-        def hold_a(route: Route) -> None:
-            body = cast(dict[str, object], route.request.post_data_json)
-            if body["url"] == "/a":
-                held.append(route)
-            else:
-                route.continue_()
-
-        bob_page.route("**/_jampot/api/page", hold_a)
-        _ = bob_page.evaluate("history.pushState({}, '', '/a')")
-        waiting(bob_page, "the report of /a", lambda: len(held) > 0)
-        _ = bob_page.evaluate("history.pushState({}, '', '/b')")
-        bob_page.wait_for_timeout(300)
-        held.pop().continue_()
-        waiting(bob_page, "the share at /b", bob_is_at(bob, "/b"))
-        bob_page.wait_for_timeout(500)
-        assert bob_is_at(bob, "/b")()
-        bob_page.mouse.move(300, 250)
-        bob_page.mouse.move(310, 255)
-        expect(cursors(alice_page)).to_have_count(1)
-
-
-def test_movement_during_a_page_report_is_sent(
+def test_movement_right_after_a_page_change_is_sent(
     tmp_path: Path, browser: Browser
 ) -> None:
     with (
@@ -1676,15 +1597,10 @@ def test_movement_during_a_page_report_is_sent(
     ):
         _ = alice_page.evaluate("history.pushState({}, '', '/other')")
         cursor_on(bob_page)
-        held: list[Route] = []
-        bob_page.route("**/_jampot/api/page", lambda route: held.append(route))
+        # The page changes, and the pointer moves and stops at once: the
+        # pointer follows the report on the socket, so it is on /other.
         _ = bob_page.evaluate("history.pushState({}, '', '/other')")
-        waiting(bob_page, "the report", lambda: len(held) > 0)
-        # The pointer moves and stops while the page is being reported.
         bob_page.mouse.move(320, 260)
-        bob_page.wait_for_timeout(200)
-        for route in held:
-            route.continue_()
         expect(cursors(alice_page)).to_have_count(1)
         eventually("the cursor where bob stopped", lambda: near(alice_page, 320, 260))
 
@@ -1743,11 +1659,11 @@ def test_cursors_follow_pointers_on_the_same_page(
         expect(carol_page.locator("#title")).to_have_text("Other")
 
         # Off by default: bob's page sends nothing.
-        bob_posts = cursor_posts(bob_page)
+        _ = bob_page.evaluate(RECORD_SENT)
         for step in range(10):
             bob_page.mouse.move(200 + step * 10, 250)
         bob_page.wait_for_timeout(500)
-        assert bob_posts == []
+        assert sent(bob_page, "cursor") == []
 
         # Bob turns his on: alice sees it, named, following his pointer.
         bob_page.keyboard.press("x")
@@ -1776,16 +1692,16 @@ def test_cursors_follow_pointers_on_the_same_page(
 
         # Held still, nothing is sent.
         bob_page.wait_for_timeout(300)
-        bob_posts.clear()
+        _ = bob_page.evaluate("window.jampotSent = []")
         bob_page.wait_for_timeout(3000)
-        assert bob_posts == []
+        assert sent(bob_page, "cursor") == []
         # Without updates it fades (on the receiver's own timer).
         expect(cursors(alice_page)).to_have_attribute("data-faded", "true")
         expect(cursors(alice_page)).to_have_css("opacity", "0")
 
         # A burst of movement: at most about 15 per second, ending on the
         # last position.
-        bob_posts.clear()
+        _ = bob_page.evaluate("window.jampotSent = []")
         started = time.monotonic()
         for step in range(60):
             bob_page.mouse.move(200 + step * 5, 260)
@@ -1793,8 +1709,8 @@ def test_cursors_follow_pointers_on_the_same_page(
         elapsed = time.monotonic() - started
         eventually("the final position", lambda: near(alice_page, 495, 260))
         bob_page.wait_for_timeout(300)
-        sent = len(bob_posts)
-        assert 3 <= sent <= 15 * elapsed + 2, (sent, elapsed)
+        count = len(sent(bob_page, "cursor"))
+        assert 3 <= count <= 15 * elapsed + 2, (count, elapsed)
 
         # Leaving the page takes the cursor away at once.
         _ = bob_page.evaluate("window.dispatchEvent(new Event('blur'))")
@@ -1830,11 +1746,11 @@ def test_cursors_follow_pointers_on_the_same_page(
         bob_page.keyboard.press("x")
         expect(cursors(carol_page)).to_have_count(0)
         bob_page.wait_for_timeout(300)
-        bob_posts.clear()
+        _ = bob_page.evaluate("window.jampotSent = []")
         for step in range(30):
             bob_page.mouse.move(250 + step * 5, 280)
         bob_page.wait_for_timeout(1000)
-        assert bob_posts == []
+        assert sent(bob_page, "cursor") == []
         expect(cursors(alice_page)).to_have_count(0)
 
 
@@ -1902,13 +1818,15 @@ def test_comments_stay_with_their_author(tmp_path: Path, browser: Browser) -> No
         join(tmp_path / "bob", shared, "bob") as bob,
         pages(browser, alice, bob) as (alice_page, bob_page),
     ):
-        # What each page's event stream carries, as the page would see it.
+        # What a socket of each page's joiner carries, as a page would see it.
         for page in (alice_page, bob_page):
             _ = page.evaluate(
                 """() => {
                     window.seen = [];
-                    const stream = new EventSource("/_jampot/api/events");
-                    stream.onmessage = (event) => window.seen.push(event.data);
+                    const url = new URL("/_jampot/api/socket", location.href);
+                    url.protocol = "ws:";
+                    const socket = new WebSocket(url);
+                    socket.onmessage = (event) => window.seen.push(event.data);
                 }"""
             )
         comment_on_intro(alice_page, "Alice's comment.")
@@ -1921,17 +1839,20 @@ def test_comments_stay_with_their_author(tmp_path: Path, browser: Browser) -> No
         def seen(page: Page) -> list[str]:
             return cast(list[str], page.evaluate("window.seen"))
 
-        # Events arrive in order: once the marker is in, so is any delivery.
+        # Messages arrive in order: once the marker is in, so is any delivery.
         def marked(page: Page) -> Callable[[], bool]:
             return lambda: any("Marker." in event for event in seen(page))
 
         for page in (alice_page, bob_page):
             waiting(page, "the marker", marked(page))
-        assert any(
-            '"type":"delivered"' in event and str(record["id"]) in event
+        mine = [
+            cast(dict[str, object], json.loads(event))["undelivered"]
             for event in seen(alice_page)
-        ), seen(alice_page)
-        assert not any('"type":"delivered"' in event for event in seen(bob_page)), seen(
+            if '"type":"mine"' in event
+        ]
+        # Queued, then delivered.
+        assert mine[-2:] == [[record["id"]], []], seen(alice_page)
+        assert not any('"type":"mine"' in event for event in seen(bob_page)), seen(
             bob_page
         )
         comment_on_intro(bob_page, "Bob's comment.")
@@ -2045,7 +1966,7 @@ def test_reconnecting_after_a_client_side_move(
                 )
                 bob_page.locator("#to-other").click()
                 expect(bob_page.locator("#title")).to_have_text("Other")
-            # The event stream reconnects by itself, to a URL naming "/".
+            # The socket reconnects by itself and says where the page is now.
             with join(tmp_path / "bob", shared, "bob", port=port):
                 expect(overlay(bob_page, "#connection")).to_have_attribute(
                     "data-state", "green", timeout=RECONNECT
@@ -2260,207 +2181,6 @@ def test_cursors_are_placed_on_the_element(tmp_path: Path, browser: Browser) -> 
             bob_context.close()
 
 
-def post_settings(joined: Joined, body: str) -> None:
-    status, answer = request(
-        joined,
-        "/_jampot/api/settings",
-        "POST",
-        {"Origin": f"http://{joined.host}", "Content-Type": "application/json"},
-        body.encode(),
-    )
-    assert status == 200, answer
-
-
-def hold_status_reads(page: Page, after: int = 0) -> list[tuple[Route, APIResponse]]:
-    """Holds the page's api/status answers (after the first `after`)."""
-    held: list[tuple[Route, APIResponse]] = []
-    seen: list[int] = []
-
-    def hold(route: Route) -> None:
-        response = route.fetch()
-        seen.append(1)
-        if len(seen) <= after:
-            route.fulfill(response=response)
-        else:
-            held.append((route, response))
-
-    page.route("**/_jampot/api/status", hold)
-    return held
-
-
-def release(held: list[tuple[Route, APIResponse]]) -> None:
-    for route, response in held:
-        route.fulfill(response=response)
-    held.clear()
-
-
-def test_a_snapshot_is_not_lost_to_someone_elses_rename(
-    tmp_path: Path, page: Page
-) -> None:
-    with (
-        share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path / "bob", shared, "bob") as bob,
-        join(tmp_path / "alice", shared, "alice") as alice,
-    ):
-        post_settings(bob, '{"commentMode":"off"}')
-        # The version check passes; the page's first real read is held.
-        held = hold_status_reads(page, after=1)
-        _ = page.goto(bob.url)
-        waiting(page, "the first status read", lambda: len(held) > 0)
-        post_settings(alice, '{"name":"changed"}')
-        expect(overlay(page, "#avatars")).to_contain_text("C")
-        page.wait_for_timeout(300)
-        release(held)
-        page.unroute("**/_jampot/api/status")
-        comment_mode = overlay(page, "#comment-mode")
-        expect(comment_mode).to_have_attribute("aria-checked", "false")
-        # The controls work: their settings were loaded.
-        page.locator("h1").click()
-        page.keyboard.press("c")
-        expect(comment_mode).to_have_attribute("aria-checked", "true")
-
-
-def test_a_recovery_snapshot_is_not_lost_to_someone_elses_rename(
-    tmp_path: Path, page: Page
-) -> None:
-    port = free_port()
-    with (
-        share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path / "alice", shared, "alice") as alice,
-    ):
-        with join(tmp_path / "bob", shared, "bob", port=port) as bob:
-            _ = page.goto(bob.url)
-            expect(overlay(page, "#connection")).to_have_attribute(
-                "data-state", "green"
-            )
-            comment_on_intro(page, "Before the restart.")
-            row = overlay(page, "#outbox-list li")
-            expect(row).to_have_attribute("data-state", "queued")
-        _ = jampot(tmp_path, "recv")
-        held = hold_status_reads(page)
-        with join(tmp_path / "bob", shared, "bob", port=port) as bob:
-            expect(overlay(page, "#connection")).to_have_attribute(
-                "data-state", "green", timeout=RECONNECT
-            )
-            waiting(page, "a recovery read", lambda: len(held) > 0)
-            post_settings(alice, '{"name":"changed"}')
-            expect(overlay(page, "#avatars")).to_contain_text("C")
-            page.wait_for_timeout(300)
-            release(held)
-            page.unroute("**/_jampot/api/status")
-            status = cast(
-                dict[str, object], json.loads(request(bob, "/_jampot/api/status")[1])
-            )
-            assert status["pending"] == 0
-            expect(row).to_have_attribute("data-state", "delivered")
-            expect(overlay(page, "#badge")).to_have_text("0 queued")
-
-
-def test_a_snapshot_converges_through_moving_cursors(
-    tmp_path: Path, browser: Browser
-) -> None:
-    with (
-        share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path / "alice", shared, "alice") as alice,
-        join(tmp_path / "bob", shared, "bob") as bob,
-    ):
-        post_settings(bob, '{"commentMode":"off"}')
-        with pages(browser, alice) as (alice_page,):
-            alice_page.locator("h1").click()
-            alice_page.keyboard.press("x")
-            expect(overlay(alice_page, "#show-cursor")).to_have_attribute(
-                "aria-checked", "true"
-            )
-            context = browser.new_context(viewport={"width": 1280, "height": 720})
-            try:
-                bob_page = context.new_page()
-                held = hold_status_reads(bob_page, after=1)
-                _ = bob_page.goto(bob.url)
-                waiting(bob_page, "the first status read", lambda: len(held) > 0)
-                # Alice's pointer keeps moving on the same page meanwhile.
-                for step in range(40):
-                    alice_page.mouse.move(200 + (step % 20) * 10, 250)
-                    alice_page.wait_for_timeout(30)
-                expect(cursors(bob_page)).to_have_count(1)
-                release(held)
-                for step in range(40):
-                    alice_page.mouse.move(200 + (step % 20) * 10, 260)
-                    alice_page.wait_for_timeout(30)
-                expect(overlay(bob_page, "#comment-mode")).to_have_attribute(
-                    "aria-checked", "false"
-                )
-            finally:
-                context.close()
-
-
-def test_a_stale_status_does_not_undo_an_event(tmp_path: Path, page: Page) -> None:
-    with (
-        share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path, shared) as joined,
-    ):
-        _ = page.goto(joined.url)
-        dot = overlay(page, "#connection")
-        expect(dot).to_have_attribute("data-state", "green")
-        # What api/status said while the share was there.
-        stale = request(joined, "/_jampot/api/status")[1]
-        held: list[Route] = []
-        page.route("**/_jampot/api/status", lambda route: held.append(route))
-        # A delivery makes the page read api/status again; that answer is
-        # held while the share goes away.
-        comment_on_intro(page, "Any comment.")
-        expect(overlay(page, "#badge")).to_have_text("1 queued")
-        _ = jampot(tmp_path, "recv")
-        waiting(page, "a status read", lambda: len(held) > 0)
-        shared.process.stop()
-        expect(dot).to_have_attribute("data-state", "grey")
-        for route in held:
-            route.fulfill(status=200, content_type="application/json", body=stale)
-        page.wait_for_timeout(500)
-        expect(dot).to_have_attribute("data-state", "grey")
-
-
-def test_a_stale_status_does_not_undo_newer_state(tmp_path: Path, page: Page) -> None:
-    with (
-        share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path, shared) as joined,
-    ):
-        _ = page.goto(joined.url)
-        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        page.wait_for_timeout(300)
-        stale = request(joined, "/_jampot/api/status")[1]
-        held: list[Route] = []
-        page.route("**/_jampot/api/status", lambda route: held.append(route))
-        # A delivery makes the page read api/status; that read is held.
-        comment_on_intro(page, "First.")
-        expect(overlay(page, "#badge")).to_have_text("1 queued")
-        _ = jampot(tmp_path, "recv")
-        waiting(page, "a status read", lambda: len(held) > 0)
-        # Meanwhile: a new comment, and comment mode turned off.
-        comment_on_intro(page, "Still pending.")
-        expect(overlay(page, "#badge")).to_have_text("1 queued")
-        page.locator("h1").click()
-        page.keyboard.press("c")
-        expect(overlay(page, "#comment-mode")).to_have_attribute(
-            "aria-checked", "false"
-        )
-        # The old answer arrives last.
-        for route in held:
-            route.fulfill(status=200, content_type="application/json", body=stale)
-        page.wait_for_timeout(500)
-        page.unroute("**/_jampot/api/status")
-        actual = cast(
-            dict[str, object], json.loads(request(joined, "/_jampot/api/status")[1])
-        )
-        assert actual["pending"] == 1
-        rows = overlay(page, "#outbox-list li")
-        expect(rows.first).to_have_attribute("data-state", "queued")
-        expect(rows.nth(1)).to_have_attribute("data-state", "delivered")
-        expect(overlay(page, "#badge")).to_have_text("1 queued")
-        expect(overlay(page, "#comment-mode")).to_have_attribute(
-            "aria-checked", "false"
-        )
-
-
 def test_a_restarted_joiner_is_believed(tmp_path: Path, page: Page) -> None:
     port = free_port()
     with share(tmp_path, "serve", str(SITE)) as shared:
@@ -2468,24 +2188,14 @@ def test_a_restarted_joiner_is_believed(tmp_path: Path, page: Page) -> None:
             _ = page.goto(bob.url)
             dot = overlay(page, "#connection")
             expect(dot).to_have_attribute("data-state", "green")
-            # Move the joiner's view revision well past where a new joiner
-            # starts.
-            _ = page.evaluate(
-                """async () => {
-                    for (let index = 0; index < 60; index++) {
-                        await fetch("/_jampot/api/settings", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ commentMode: "on" }),
-                        });
-                    }
-                }"""
-            )
             comment_on_intro(page, "Before the restart.")
             row = overlay(page, "#outbox-list li")
             expect(row).to_have_attribute("data-state", "queued")
-        # Delivered while the joiner is away; a new joiner, same page.
+        # Delivered while the joiner is away; the page cannot know yet.
         _ = jampot(tmp_path, "recv")
+        page.wait_for_timeout(500)
+        expect(row).to_have_attribute("data-state", "queued")
+        # A new joiner, same page: it says what the share holds.
         with join(tmp_path / "bob", shared, "bob", port=port):
             expect(dot).to_have_attribute("data-state", "green", timeout=RECONNECT)
             expect(row).to_have_attribute("data-state", "delivered")
@@ -2497,42 +2207,27 @@ def test_a_restarted_joiner_is_believed(tmp_path: Path, page: Page) -> None:
             )
 
 
-def test_a_late_settings_answer_does_not_undo_newer_settings(
+def test_a_restarted_joiner_keeps_what_is_still_pending(
     tmp_path: Path, page: Page
 ) -> None:
-    with (
-        share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path, shared) as joined,
-    ):
-        _ = page.goto(joined.url)
-        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        held: list[tuple[Route, APIResponse]] = []
-
-        def hold(route: Route) -> None:
-            held.append((route, route.fetch()))
-
-        page.route("**/_jampot/api/settings", hold)
-        page.locator("h1").click()
-        page.keyboard.press("c")
-        waiting(page, "the held answer", lambda: len(held) > 0)
-        comment_mode = overlay(page, "#comment-mode")
-        expect(comment_mode).to_have_attribute("aria-checked", "false")
-        # Turned on again elsewhere (another page of the same joiner).
-        _ = request(
-            joined,
-            "/_jampot/api/settings",
-            "POST",
-            {"Origin": f"http://{joined.host}", "Content-Type": "application/json"},
-            json.dumps({"commentMode": "on"}).encode(),
-        )
-        expect(comment_mode).to_have_attribute("aria-checked", "true")
-        for route, response in held:
-            route.fulfill(response=response)
-        page.wait_for_timeout(300)
-        expect(comment_mode).to_have_attribute("aria-checked", "true")
-        # And it behaves on: right-click comments.
-        page.locator("#intro").click(button="right")
-        expect(overlay(page, "textarea")).to_be_focused()
+    port = free_port()
+    with share(tmp_path, "serve", str(SITE)) as shared:
+        with join(tmp_path / "bob", shared, "bob", port=port) as bob:
+            _ = page.goto(bob.url)
+            comment_on_intro(page, "Still waiting.")
+            row = overlay(page, "#outbox-list li")
+            expect(row).to_have_attribute("data-state", "queued")
+        # Not delivered: the new joiner learns it from the share, and the
+        # page keeps it queued.
+        with join(tmp_path / "bob", shared, "bob", port=port):
+            expect(overlay(page, "#connection")).to_have_attribute(
+                "data-state", "green", timeout=RECONNECT
+            )
+            expect(overlay(page, "#badge")).to_have_text("1 queued")
+            expect(row).to_have_attribute("data-state", "queued")
+            [record] = recv_all(tmp_path)
+            assert record["comment"] == "Still waiting."
+            expect(row).to_have_attribute("data-state", "delivered")
 
 
 def test_a_delivery_before_the_queued_answer(tmp_path: Path, page: Page) -> None:
@@ -2540,25 +2235,95 @@ def test_a_delivery_before_the_queued_answer(tmp_path: Path, page: Page) -> None
         share(tmp_path, "serve", str(SITE)) as shared,
         join(tmp_path, shared) as joined,
     ):
+        tap = SocketTap(page)
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        held: list[tuple[Route, APIResponse]] = []
-
-        def hold(route: Route) -> None:
-            held.append((route, route.fetch()))
-
-        page.route("**/_jampot/api/comments", hold)
+        tap.hold.update({"reply", "mine"})
         page.locator("#intro").click(button="right")
         overlay(page, "textarea").fill("Fast agent.")
         overlay(page, "textarea").press("Enter")
-        waiting(page, "the queued answer", lambda: len(held) > 0)
+        waiting(page, "the queued answer", lambda: len(tap.held) > 0)
         # The agent takes it before the page hears it was queued.
         _ = jampot(tmp_path, "recv")
         page.wait_for_timeout(300)
-        for route, response in held:
-            route.fulfill(response=response)
+        tap.release()
         overlay(page, "#pill").click()
         expect(overlay(page, "#outbox-list li")).to_have_attribute(
             "data-state", "delivered"
         )
         expect(overlay(page, "#badge")).to_have_text("0 queued")
+
+
+def test_a_second_tab_of_the_same_joiner(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        context = browser.new_context(viewport={"width": 1280, "height": 720})
+        try:
+            first, second = context.new_page(), context.new_page()
+            for page in (first, second):
+                _ = page.goto(joined.url)
+                expect(overlay(page, "#connection")).to_have_attribute(
+                    "data-state", "green"
+                )
+            # A comment from one tab counts in the other.
+            comment_on_intro(first, "From the first tab.")
+            expect(overlay(second, "#badge")).to_have_text("1 queued")
+            # A setting changed in one is the other's too.
+            overlay(second, "#gear").click()
+            overlay(second, "#name-field").fill("robin")
+            overlay(second, "#name-field").press("Enter")
+            overlay(first, "#gear").click()
+            expect(overlay(first, "#name-field")).to_have_value("robin")
+            # Delivered: both tabs hear it.
+            _ = jampot(tmp_path, "recv")
+            for page in (first, second):
+                expect(overlay(page, "#badge")).to_have_text("0 queued")
+        finally:
+            context.close()
+
+
+def test_a_socket_the_joiner_closes_comes_back(tmp_path: Path, page: Page) -> None:
+    """A page that fell behind (a frozen tab) is closed by its joiner; it
+    connects again and starts from a fresh hello."""
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        dot = overlay(page, "#connection")
+        expect(dot).to_have_attribute("data-state", "green")
+        waiting(page, "the socket", lambda: len(tap.sockets) == 1)
+        # Meanwhile the name changed elsewhere, and the joiner gives up.
+        settings = PageSocket(joined)
+        try:
+            _ = settings.request({"type": "settings", "change": {"name": "robin"}})
+        finally:
+            settings.close()
+        tap.hold.add("settings")
+        tap.sockets[0].close(code=1013, reason="fell behind")
+        tap.hold.clear()
+        waiting(page, "a new socket", lambda: len(tap.sockets) == 2)
+        expect(dot).to_have_attribute("data-state", "green", timeout=RECONNECT)
+        overlay(page, "#gear").click()
+        expect(overlay(page, "#name-field")).to_have_value("robin")
+        comment_on_intro(page, "After the reconnect.")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+
+
+def test_back_and_forward_reconnect(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        dot = overlay(page, "#connection")
+        expect(dot).to_have_attribute("data-state", "green")
+        _ = page.goto(f"{joined.url}?elsewhere")
+        expect(dot).to_have_attribute("data-state", "green")
+        _ = page.go_back()
+        expect(dot).to_have_attribute("data-state", "green", timeout=RECONNECT)
+        comment_on_intro(page, "After coming back.")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")

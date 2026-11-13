@@ -4,16 +4,24 @@
 use std::{env, fs, future::Future, net::SocketAddr, ops::Deref, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper::{
-    HeaderMap, Request, Response, StatusCode, body::Incoming, client::conn::http1, header,
+    HeaderMap, Request, Response, StatusCode,
+    body::Incoming,
+    client::conn::http1,
+    header::{self, HeaderValue},
     http::request::Builder as RequestBuilder,
 };
 use hyper_util::rt::TokioIo;
 use iroh::{Endpoint, SecretKey, endpoint::Connection};
+use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::{net::TcpStream, time};
-use url::form_urlencoded;
+use tokio::{
+    net::{TcpSocket, TcpStream},
+    time,
+};
+use tokio_websockets::{ClientBuilder, Message, WebSocketStream};
 
 use crate::{
     Report,
@@ -219,10 +227,13 @@ pub(crate) async fn join(share: &Share, name: &str) -> Joiner {
 }
 
 pub(crate) async fn connected(joiner: &Joiner) {
-    let mut view = joiner.watch();
-    within("admission", view.wait_for(|view| view.connected))
-        .await
-        .unwrap();
+    let mut snapshot = joiner.watch();
+    within(
+        "admission",
+        snapshot.wait_for(|snapshot| snapshot.link.connected),
+    )
+    .await
+    .unwrap();
 }
 
 /// A raw iroh endpoint connected to `share`, for speaking the protocol by
@@ -288,89 +299,226 @@ pub(crate) async fn get(joiner: &Joiner, path: &str) -> Reply {
 /// A comment draft on the fixture's title.
 pub(crate) const DRAFT: &str = r##"{"page":"http://x.localhost/","selector":"#title","selectedText":"Fixture","comment":"Bigger, please"}"##;
 
-/// Posts JSON to a joiner endpoint the way the page does.
-pub(crate) async fn post_json(joiner: &Joiner, path: &str, body: &str) -> Reply {
-    let request = local(joiner, "POST", path)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ORIGIN, joiner.origin().origin())
-        .header("sec-fetch-site", "same-origin")
-        .body(Full::new(Bytes::from(body.to_owned())))
-        .unwrap();
-    fetch(joiner, request).await
+/// A page's socket to the joiner, spoken by hand.
+pub(crate) struct PageSocket {
+    socket: WebSocketStream<TcpStream>,
+    /// The last request number used.
+    n: u64,
 }
 
-/// Posts a comment the way the page does, with a fresh `ref` unless
-/// `body` (a JSON object) has one.
-pub(crate) async fn post_comment(joiner: &Joiner, body: &str) -> Reply {
-    let mut json: serde_json::Value = serde_json::from_str(body).unwrap();
-    if let Some(object) = json.as_object_mut() {
-        object
-            .entry("ref")
-            .or_insert_with(|| uuid::Uuid::new_v4().to_string().into());
+/// The `type` of a page message.
+fn kind(message: &Value) -> &str {
+    message.get("type").and_then(Value::as_str).unwrap_or("")
+}
+
+impl PageSocket {
+    /// Opens the joiner's socket as a page on its origin does; the `hello`
+    /// is the first message waiting.
+    pub(crate) async fn open(joiner: &Joiner) -> Self {
+        let stream = TcpStream::connect(joiner.local_addr()).await.unwrap();
+        Self::open_on(joiner, stream).await
     }
-    let body = json.to_string();
-    let request = local(joiner, "POST", "/_jampot/api/comments")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ORIGIN, joiner.origin().origin())
-        .header("sec-fetch-site", "same-origin")
-        .body(Full::new(Bytes::from(body)))
+
+    /// Opens the socket with a small receive buffer, as a page that reads
+    /// slowly.
+    pub(crate) async fn open_slow(joiner: &Joiner) -> Self {
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(4096).unwrap();
+        let stream = socket.connect(joiner.local_addr()).await.unwrap();
+        Self::open_on(joiner, stream).await
+    }
+
+    async fn open_on(joiner: &Joiner, stream: TcpStream) -> Self {
+        let uri = format!("ws://{}{SOCKET}", joiner.origin().host());
+        let (socket, _) = within(
+            "the socket to open",
+            ClientBuilder::new()
+                .uri(&uri)
+                .unwrap()
+                .add_header(
+                    header::ORIGIN,
+                    HeaderValue::from_str(joiner.origin().origin()).unwrap(),
+                )
+                .unwrap()
+                .connect_on(stream),
+        )
+        .await
         .unwrap();
-    fetch(joiner, request).await
-}
+        Self { socket, n: 0 }
+    }
 
-/// Opens the joiner's event stream.
-pub(crate) async fn events(joiner: &Joiner) -> Incoming {
-    open_events(joiner, "/_jampot/api/events").await
-}
+    /// Opens the socket and reads its `hello`.
+    pub(crate) async fn hello(joiner: &Joiner) -> (Self, Value) {
+        let mut page = Self::open(joiner).await;
+        let hello = page.next().await;
+        assert_eq!(kind(&hello), "hello", "{hello}");
+        (page, hello)
+    }
 
-/// Opens the joiner's event stream as tab `tab` on page `url`, as a page
-/// does.
-pub(crate) async fn tab_events(joiner: &Joiner, tab: &str, url: &str) -> Incoming {
-    let query: String = form_urlencoded::Serializer::new(String::new())
-        .append_pair("tab", tab)
-        .append_pair("url", url)
-        .finish();
-    open_events(joiner, &format!("/_jampot/api/events?{query}")).await
-}
+    /// Opens the socket and says the page is on `url`.
+    pub(crate) async fn on(joiner: &Joiner, url: &str) -> Self {
+        let (mut page, _) = Self::hello(joiner).await;
+        page.visit(Some(url)).await;
+        page
+    }
 
-async fn open_events(joiner: &Joiner, path: &str) -> Incoming {
-    let request = local(joiner, "GET", path).body(Full::default()).unwrap();
-    let response = send(joiner.local_addr(), request).await;
-    assert_eq!(response.status(), 200);
-    response.into_body()
-}
+    pub(crate) async fn send(&mut self, message: Value) {
+        self.socket
+            .send(Message::text(message.to_string()))
+            .await
+            .unwrap();
+    }
 
-/// Every event on `body` up to and including the next of type `kind`.
-pub(crate) async fn events_until(body: &mut Incoming, kind: &str) -> Vec<String> {
-    let needle = format!("\"type\":\"{kind}\"");
-    within(&format!("a {kind} event"), async {
+    /// The next message, pings included.
+    pub(crate) async fn next(&mut self) -> Value {
+        let message = within("a page message", self.socket.next())
+            .await
+            .expect("the socket closed")
+            .unwrap();
+        let text = message.as_text().expect("a text frame");
+        serde_json::from_str(text).unwrap()
+    }
+
+    /// Every message up to and including the next of type `wanted`.
+    pub(crate) async fn until(&mut self, wanted: &str) -> Vec<Value> {
         let mut seen = Vec::new();
         loop {
-            let frame = body.frame().await.unwrap().unwrap();
-            let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
-            let done = text.contains(&needle);
-            seen.push(text);
+            let message = self.next().await;
+            let done = kind(&message) == wanted;
+            seen.push(message);
             if done {
                 return seen;
             }
         }
-    })
-    .await
-}
+    }
 
-/// The next event of type `kind` on `body`, as its JSON text.
-pub(crate) async fn next_event(body: &mut Incoming, kind: &str) -> String {
-    let needle = format!("\"type\":\"{kind}\"");
-    within(&format!("a {kind} event"), async {
+    /// The next message of type `wanted`.
+    pub(crate) async fn next_of(&mut self, wanted: &str) -> Value {
+        self.until(wanted).await.pop().unwrap()
+    }
+
+    /// Whether the socket carries a message of type `wanted` within
+    /// `wait`.
+    pub(crate) async fn hears(&mut self, wanted: &str, wait: Duration) -> bool {
+        time::timeout(wait, async {
+            while let Some(Ok(message)) = self.socket.next().await {
+                if let Some(text) = message.as_text()
+                    && kind(&serde_json::from_str(text).unwrap()) == wanted
+                {
+                    return;
+                }
+            }
+            std::future::pending::<()>().await;
+        })
+        .await
+        .is_ok()
+    }
+
+    /// How the socket ended: its close frame's code, once the joiner
+    /// closes it.
+    pub(crate) async fn closed(&mut self) -> Option<u16> {
+        within("the socket to close", async {
+            while let Some(message) = self.socket.next().await {
+                match message {
+                    Ok(message) => {
+                        if let Some((code, _)) = message.as_close() {
+                            return Some(u16::from(code));
+                        }
+                    }
+                    Err(_) => return None,
+                }
+            }
+            None
+        })
+        .await
+    }
+
+    /// Says the page is on `url` (none: it cannot say).
+    pub(crate) async fn visit(&mut self, url: Option<&str>) {
+        self.send(json!({"type": "page", "url": url})).await;
+    }
+
+    /// Moves the pointer (`position` none: it left).
+    pub(crate) async fn cursor(&mut self, position: Option<Value>) {
+        self.send(json!({"type": "cursor", "position": position}))
+            .await;
+    }
+
+    /// Sends request `body` (its `n` filled in) and returns the messages
+    /// up to its reply, the reply last.
+    pub(crate) async fn request(&mut self, mut body: Value) -> Vec<Value> {
+        self.n += 1;
+        let n = self.n;
+        body.as_object_mut()
+            .unwrap()
+            .insert("n".to_owned(), n.into());
+        self.send(body).await;
+        let mut seen = Vec::new();
         loop {
-            let frame = body.frame().await.unwrap().unwrap();
-            let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
-            if let Some(data) = text.strip_prefix("data: ")
-                && data.contains(&needle)
-            {
-                return data.trim_end().to_owned();
+            let message = self.next().await;
+            let reply = kind(&message) == "reply" && message["to"] == n;
+            seen.push(message);
+            if reply {
+                return seen;
             }
         }
-    })
-    .await
+    }
+
+    /// Sends a comment (a JSON draft, with a fresh `ref` unless it has
+    /// one); the reply's outcome.
+    pub(crate) async fn comment(&mut self, draft: &str) -> Value {
+        let mut body: Value = serde_json::from_str(draft).unwrap();
+        let object = body.as_object_mut().unwrap();
+        object.insert("type".to_owned(), "comment".into());
+        object
+            .entry("ref")
+            .or_insert_with(|| uuid::Uuid::new_v4().to_string().into());
+        let mut seen = self.request(body).await;
+        seen.pop().unwrap()["outcome"].take()
+    }
+
+    /// Changes the settings (a JSON change); the reply's outcome.
+    pub(crate) async fn settings(&mut self, change: &str) -> Value {
+        let change: Value = serde_json::from_str(change).unwrap();
+        let mut seen = self
+            .request(json!({"type": "settings", "change": change}))
+            .await;
+        seen.pop().unwrap()["outcome"].take()
+    }
+}
+
+/// Sends a comment from a page of `joiner`, as [`PageSocket::comment`].
+pub(crate) async fn post_comment(joiner: &Joiner, draft: &str) -> Value {
+    let (mut page, _) = PageSocket::hello(joiner).await;
+    page.comment(draft).await
+}
+
+/// The id of the comment an outcome says was queued, if it was.
+pub(crate) fn commented(outcome: &Value) -> Option<String> {
+    outcome["commented"]["id"].as_str().map(str::to_owned)
+}
+
+/// `messages` without presence and pings, which come at any time.
+pub(crate) fn about(messages: Vec<Value>) -> Vec<Value> {
+    messages
+        .into_iter()
+        .filter(|message| !matches!(kind(message), "people" | "ping"))
+        .collect()
+}
+
+/// The joiner's page socket.
+pub(crate) const SOCKET: &str = "/_jampot/api/socket";
+
+/// A WebSocket handshake for the joiner's socket, `origin` as given; for
+/// checking refusals.
+pub(crate) fn handshake(joiner: &Joiner, origin: Option<&str>) -> RequestBuilder {
+    let request = local(joiner, "GET", SOCKET)
+        .header(header::UPGRADE, "websocket")
+        .header(header::CONNECTION, "upgrade")
+        .header(header::SEC_WEBSOCKET_VERSION, "13")
+        .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==");
+    match origin {
+        Some(origin) => request.header(header::ORIGIN, origin),
+        None => request,
+    }
 }

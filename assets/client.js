@@ -1,7 +1,7 @@
 // Generated from client/src by `npm run build`; do not edit.
 
 // client/src/generated/api.ts
-var API_VERSION = 2;
+var API_VERSION = 3;
 var MAX_NAME = 40;
 var MAX_COMMENT = 1e4;
 var MAX_SELECTED_TEXT = 2e3;
@@ -85,12 +85,12 @@ function samePage(page) {
 // client/src/config.ts
 var SCRIPT_URL = new URL(import.meta.url);
 var BASE = new URL("./", SCRIPT_URL);
-var COMMENTS_URL = new URL("api/comments", BASE);
 var STATUS_URL = new URL("api/status", BASE);
-var EVENTS_URL = new URL("api/events", BASE);
-var SETTINGS_URL = new URL("api/settings", BASE);
-var PAGE_URL = new URL("api/page", BASE);
-var CURSOR_URL = new URL("api/cursor", BASE);
+var SOCKET_URL = (() => {
+  const url = new URL("api/socket", BASE);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url;
+})();
 var LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
 var SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
 var HOST_ID = "jampot";
@@ -99,6 +99,8 @@ var OUTBOX_KEY = "jampot-outbox-v1";
 var DRAFT_KEY = "jampot-draft-v1";
 var MAX_OUTBOX = 20;
 var WATCHDOG_MS = 35e3;
+var RECONNECT_MIN_MS = 250;
+var RECONNECT_MAX_MS = 5e3;
 var AGENT_TARGET_PREFIX = "jampot-agent:";
 var CURSOR_RATE = 15;
 var CURSOR_FADE_MS = 4e3;
@@ -345,377 +347,51 @@ var Answers = class {
   }
 };
 
-// client/src/api.ts
-var SubmitError = class extends Error {
-  constructor(message, unsent) {
-    super(message);
-    this.unsent = unsent;
-  }
-  unsent;
-};
-function isObject(value) {
-  return typeof value === "object" && value !== null;
-}
-function errorMessage(body, fallback) {
-  return isObject(body) && typeof body.error === "string" ? body.error : fallback;
-}
-async function submit(submission) {
-  let response;
-  try {
-    response = await fetch(COMMENTS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(submission)
-    });
-  } catch {
-    throw new SubmitError("jampot join is not reachable", true);
-  }
-  const body = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new SubmitError(
-      errorMessage(body, `request failed (${response.status})`),
-      response.status === 503
-    );
-  }
-  return body;
-}
-async function fetchStatus() {
-  try {
-    const response = await fetch(STATUS_URL);
-    if (!response.ok) return null;
-    return checkVersion(await response.json());
-  } catch {
-    return null;
-  }
-}
-function checkVersion(body) {
-  const api = isObject(body) ? body.api : void 0;
-  if (api === API_VERSION) return { status: body };
-  const share = SHARE_VERSION ?? "unknown";
-  const joiner = isObject(body) && typeof body.version === "string" ? body.version : "another";
-  const incompatible = typeof api === "number" ? `jampot versions do not match: the share runs ${share} (page API ${API_VERSION}), your jampot join runs ${joiner} (page API ${api}). Use the same jampot version on both sides and join again.` : `Your jampot join is older than the share's jampot ${share} and cannot serve this page. Use the same jampot version on both sides and join again.`;
-  return { incompatible };
-}
-function openEvents(tab, page, seq) {
-  const url = new URL(EVENTS_URL);
-  url.searchParams.set("tab", tab);
-  if (page !== null) url.searchParams.set("url", page);
-  url.searchParams.set("seq", String(seq));
-  return new EventSource(url);
-}
-async function post(url, body) {
-  return fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-}
-async function changeSettings(change) {
-  let response;
-  try {
-    response = await post(SETTINGS_URL, change);
-  } catch {
-    throw new Error("jampot join is not reachable");
-  }
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(errorMessage(body, `request failed (${response.status})`));
-  return body;
-}
-async function reportPage(visit) {
-  try {
-    return (await post(PAGE_URL, visit)).ok;
-  } catch {
-    return false;
-  }
-}
-async function sendCursor(pointer) {
-  try {
-    await post(CURSOR_URL, pointer);
-  } catch {
-  }
-}
-function parseEvent(data) {
-  try {
-    const event = JSON.parse(data);
-    return isObject(event) && typeof event.type === "string" ? event : null;
-  } catch {
-    return null;
-  }
-}
-
 // client/src/connection.ts
-var PARTS = ["connection", "presence", "mine", "settings", "reload"];
-function unapplied() {
-  return { connection: 0, presence: 0, mine: 0, settings: 0, reload: 0 };
-}
-function partOf(event) {
-  switch (event.type) {
-    case "share":
-    case "status":
-      return "connection";
-    case "presence":
-      return "presence";
-    case "delivered":
-      return "mine";
-    case "settings":
-      return "settings";
-    case "reload":
-      return "reload";
-    case "answer":
-    case "cursor":
-      return null;
-  }
-}
 var Connection = class {
-  constructor(handlers, tab) {
-    this.handlers = handlers;
-    this.tab = tab;
+  constructor(changed) {
+    this.changed = changed;
   }
-  handlers;
-  tab;
-  events = null;
-  lastEvent = Date.now();
-  streamOpen = false;
-  shareConnected = false;
-  statusLine = null;
+  changed;
+  socketOpen = false;
+  link = null;
   incompatible = null;
   colour = "amber";
-  /**
-   * The joiner process the event stream comes from (its epoch), and per
-   * part of the joiner's view the newest revision in it this page has
-   * applied (from events, comments it queued, settings it saved). An
-   * `api/status` is applied part by part: each part unless the page has
-   * already applied something newer for that same part, so an unrelated
-   * event (someone's rename, a cursor) never costs a snapshot. Revisions
-   * count per joiner process: one restarted on the same port starts
-   * again, so a new epoch starts afresh, and answers from another epoch
-   * are not applied.
-   */
-  epoch = null;
-  applied = unapplied();
-  /** A status read is wanted again once the current one is in. */
-  rereadQueued = false;
-  reading = false;
-  watchdog;
-  /** Checks the joiner's page API, then connects the event stream. */
-  async start() {
-    const checked = await fetchStatus();
-    if (checked !== null && "incompatible" in checked) {
-      this.refuse(checked.incompatible);
-      return;
-    }
-    this.connect();
-    this.watchdog = window.setInterval(() => {
-      if (Date.now() - this.lastEvent < WATCHDOG_MS) return;
-      this.events?.close();
-      this.streamOpen = false;
-      this.render();
-      this.lastEvent = Date.now();
-      this.connect();
-    }, 5e3);
-  }
   get view() {
     let colour = "green";
     let text = "connected";
     if (this.incompatible !== null) {
       colour = "grey";
       text = this.incompatible;
-    } else if (!this.streamOpen) {
+    } else if (!this.socketOpen) {
       colour = "amber";
       text = "reconnecting to jampot join…";
-    } else if (!this.shareConnected) {
+    } else if (this.link?.connected !== true) {
       colour = "grey";
       text = "share unreachable";
-    } else if (this.statusLine !== null) {
+    } else if (this.link.status !== null) {
       colour = "grey";
-      text = this.statusLine;
+      text = this.link.status;
     }
     return { colour, text, incompatible: this.incompatible };
   }
-  /** Whether the page has its event stream (so it is one of the joiner's tabs). */
-  get streaming() {
-    return this.streamOpen;
+  setOpen(open) {
+    this.socketOpen = open;
+    this.render();
+  }
+  setLink(link) {
+    this.link = link;
+    this.render();
   }
   refuse(reason) {
     this.incompatible = reason;
-    this.events?.close();
-    this.events = null;
-    if (this.watchdog !== void 0) clearInterval(this.watchdog);
     this.render();
   }
   render() {
     const view = this.view;
     const recovered = view.colour === "green" && this.colour !== "green";
     this.colour = view.colour;
-    this.handlers.state(view, recovered);
-  }
-  /**
-   * Whether an answer about `part`, stamped `epoch` and `rev`, is still
-   * news (nothing newer applied for that part since); if so it counts as
-   * applied.
-   */
-  fresh(epoch, rev, part) {
-    if (epoch !== this.epoch || rev < this.applied[part]) return false;
-    this.applied[part] = rev;
-    return true;
-  }
-  /**
-   * Reads `api/status` again (on every reconnection and after deliveries);
-   * one read at a time, and one more queued behind it at most.
-   */
-  async refresh() {
-    if (this.reading) {
-      this.rereadQueued = true;
-      return;
-    }
-    this.reading = true;
-    try {
-      do {
-        this.rereadQueued = false;
-        await this.read();
-      } while (this.wantsReread());
-    } finally {
-      this.reading = false;
-    }
-  }
-  /** Whether another read was asked for while one was out. */
-  wantsReread() {
-    return this.rereadQueued;
-  }
-  async read() {
-    const checked = await fetchStatus();
-    if (checked === null) return;
-    if ("incompatible" in checked) {
-      this.refuse(checked.incompatible);
-      return;
-    }
-    const status = checked.status;
-    if (this.epoch === null) this.epoch = status.epoch;
-    if (status.epoch !== this.epoch) return;
-    const parts = /* @__PURE__ */ new Set();
-    for (const part of PARTS) {
-      if (this.fresh(status.epoch, status.rev, part)) parts.add(part);
-    }
-    if (parts.has("connection")) {
-      this.shareConnected = status.connected;
-      this.statusLine = status.status;
-    }
-    this.handlers.status(status, parts);
-    this.render();
-    if (!parts.has("mine")) this.rereadQueued = true;
-  }
-  connect() {
-    if (this.incompatible !== null) return;
-    const { tab, url, seq } = this.tab();
-    const events = openEvents(tab, url, seq);
-    this.events = events;
-    events.addEventListener("open", () => {
-      this.streamOpen = true;
-      this.lastEvent = Date.now();
-      this.render();
-      this.handlers.opened();
-      void this.refresh();
-    });
-    events.addEventListener("error", () => {
-      this.streamOpen = false;
-      this.render();
-    });
-    events.addEventListener("message", (message) => {
-      this.lastEvent = Date.now();
-      const event = parseEvent(message.data);
-      if (event === null) return;
-      if (event.type !== "ping") {
-        if (event.epoch !== this.epoch) {
-          const known = this.epoch !== null;
-          this.epoch = event.epoch;
-          this.applied = unapplied();
-          if (known) void this.refresh();
-        }
-        const part = partOf(event);
-        if (part !== null) this.applied[part] = Math.max(this.applied[part], event.rev);
-      }
-      switch (event.type) {
-        case "share":
-          this.shareConnected = event.connected;
-          this.render();
-          if (event.connected) void this.refresh();
-          break;
-        case "status":
-          this.statusLine = event.line;
-          this.render();
-          break;
-        case "delivered":
-          void this.refresh();
-          break;
-        case "answer":
-        case "reload":
-        case "presence":
-        case "settings":
-        case "cursor":
-        case "ping":
-          break;
-      }
-      this.handlers.event(event);
-    });
-  }
-};
-
-// client/src/location.ts
-var TAB_ID = crypto.randomUUID();
-function pageUrl() {
-  const url = new URL(window.location.href);
-  const raw = `${url.pathname}${url.search}${url.hash}`;
-  const encoded = raw.replace(/[^\x21-\x7e]|["\\]/gu, (character) => encodeURIComponent(character));
-  return encoded.startsWith("/") && encoded.length <= MAX_PAGE_PATH ? encoded : null;
-}
-function watchUrl(listener) {
-  let last = pageUrl();
-  const check = () => {
-    const now = pageUrl();
-    if (now === last) return;
-    last = now;
-    listener(now);
-  };
-  for (const method of ["pushState", "replaceState"]) {
-    const original = history[method].bind(history);
-    history[method] = (...args) => {
-      original(...args);
-      check();
-    };
-  }
-  window.addEventListener("popstate", check);
-  window.addEventListener("hashchange", check);
-}
-var Registration = class {
-  seq = 0;
-  sending = false;
-  /** The page waiting to be reported (undefined: none). */
-  wanted;
-  /** Called when the joiner took the latest report. */
-  onConfirmed = () => void 0;
-  /** The number of the latest report made. */
-  get latest() {
-    return this.seq;
-  }
-  request(url) {
-    this.wanted = { url };
-    void this.pump();
-  }
-  /** Whether a page came in while a report was out. */
-  newerWaiting() {
-    return this.wanted !== void 0;
-  }
-  async pump() {
-    if (this.sending) return;
-    this.sending = true;
-    for (let next = this.wanted; next !== void 0; next = this.wanted) {
-      this.wanted = void 0;
-      this.seq += 1;
-      const seq = this.seq;
-      const taken = await reportPage({ tab: TAB_ID, seq, url: next.url });
-      if (taken && !this.newerWaiting()) this.onConfirmed(next.url, seq);
-    }
-    this.sending = false;
+    this.changed(view, recovered);
   }
 };
 
@@ -744,12 +420,17 @@ function initials(name) {
   const letters = parts.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join("");
   return letters === "" ? "?" : letters;
 }
+function failure(outcome) {
+  if (outcome === "saved" || "commented" in outcome) return null;
+  return "unsent" in outcome ? outcome.unsent.error : outcome.refused.error;
+}
 function colourOf(person) {
   return PALETTE[person.colour % PALETTE.length] ?? "#555";
 }
 var Panel = class {
-  constructor(ui) {
+  constructor(ui, changeSettings) {
     this.ui = ui;
+    this.changeSettings = changeSettings;
     ui.gear.addEventListener("click", () => {
       this.toggle();
     });
@@ -790,14 +471,13 @@ var Panel = class {
     }, true);
   }
   ui;
+  changeSettings;
   settings = null;
   listening = null;
   /** Called when the panel opens (the comment list closes then). */
   onOpen = () => void 0;
   /** Called with the settings whenever they change. */
   onSettings = () => void 0;
-  /** Whether a saved answer is newer than what the page has applied. */
-  fresh = () => true;
   chips() {
     return [["commentMode", this.ui.commentModeKey], ["showCursor", this.ui.showCursorKey]];
   }
@@ -825,7 +505,7 @@ var Panel = class {
   message(text) {
     this.ui.panelMessage.textContent = text;
   }
-  /** The settings from the joiner (status or a settings event). */
+  /** The settings from the joiner (its hello or a settings message). */
   show(settings) {
     this.settings = settings;
     const { ui } = this;
@@ -841,13 +521,13 @@ var Panel = class {
     ui.host.dataset.corner = settings.corner;
     this.onSettings(settings);
   }
+  /**
+   * Asks the joiner for a change. What it saved comes as a settings
+   * message, in order with everyone else's; only a failure is shown here.
+   */
   async change(change) {
-    try {
-      const saved = await changeSettings(change);
-      if (this.fresh(saved)) this.show(saved);
-    } catch (error) {
-      this.message(error instanceof Error ? error.message : "could not save");
-    }
+    const failed = failure(await this.changeSettings(change));
+    if (failed !== null) this.message(failed);
   }
   flip(action) {
     const settings = this.settings;
@@ -949,8 +629,9 @@ function fraction(offset, size) {
   return Math.round(Math.min(1, Math.max(0, offset / size)) * FRACTION_ONE);
 }
 var CursorSender = class {
-  constructor(ui) {
+  constructor(ui, send) {
     this.ui = ui;
+    this.send = send;
     document.addEventListener("pointermove", (event) => {
       this.moved(event);
     }, {
@@ -968,36 +649,27 @@ var CursorSender = class {
     });
   }
   ui;
+  send;
   on = false;
   /**
-   * The page the joiner confirmed for this tab, and the number of that
-   * report; null while it has none (not yet confirmed, being changed, or
-   * not representable). Nothing is sent then.
+   * The socket is up and has been told this page's URL: pointers go out
+   * on it, after that report, so the joiner reads them on that page.
    */
-  page = null;
-  /**
-   * A representable page awaits the joiner's confirmation: movement meanwhile
-   * is kept (the latest) and sent once it is confirmed.
-   */
-  awaiting = false;
+  placed = false;
   /** The latest pointer position not yet sent. */
   latest = null;
   lastSent = 0;
   timer;
   /** Whether others currently see this pointer (a position went out). */
   present = false;
-  /** At most one request in flight, and one waiting: only the latest. */
-  pending = null;
-  sending = false;
   get active() {
-    return this.on && this.page !== null;
+    return this.on && this.placed;
   }
   /** Forgets everything not sent yet. */
   reset() {
     if (this.timer !== void 0) clearTimeout(this.timer);
     this.timer = void 0;
     this.latest = null;
-    this.pending = null;
     this.present = false;
   }
   /** The cursor switch; nothing at all is sent while it is off. */
@@ -1006,33 +678,17 @@ var CursorSender = class {
     if (!on) this.reset();
   }
   /**
-   * The page is being registered with the joiner: nothing is sent until it
-   * is confirmed, but the latest movement is kept for then.
+   * Whether the joiner has this page's URL: true right after telling it,
+   * false while the socket is down or the page cannot say where it is.
    */
-  registering() {
-    const latest = this.latest;
-    this.page = null;
-    this.reset();
-    this.awaiting = true;
-    this.latest = latest;
-  }
-  /** The joiner took `url` for this tab, with report number `seq`. */
-  confirmed(url, seq) {
-    this.page = { url, seq };
-    this.awaiting = false;
-    if (this.latest !== null) this.schedule();
-  }
-  /** No page (not representable, or no event stream): nothing is kept or sent. */
-  suspend() {
-    this.page = null;
-    this.awaiting = false;
-    this.reset();
+  setPlaced(placed) {
+    this.placed = placed;
+    if (!placed) this.reset();
   }
   moved(event) {
-    if (!this.on || event.pointerType === "touch") return;
-    if (this.page === null && !this.awaiting) return;
+    if (!this.active || event.pointerType === "touch") return;
     this.latest = { x: event.clientX, y: event.clientY };
-    if (this.page !== null) this.schedule();
+    this.schedule();
   }
   /** Sends the latest movement now, or at the end of the rate window. */
   schedule() {
@@ -1054,8 +710,7 @@ var CursorSender = class {
     const position = this.position(latest.x, latest.y);
     if (position === null) return;
     this.lastSent = performance.now();
-    this.present = true;
-    this.enqueue(position);
+    this.present = this.send(position);
   }
   /** The pointer left the page: one message without a position. */
   left() {
@@ -1064,7 +719,7 @@ var CursorSender = class {
     this.latest = null;
     if (!this.active || !this.present) return;
     this.present = false;
-    this.enqueue(null);
+    this.send(null);
   }
   /** The element under the point (not jampot's own overlay) and the offset in its box. */
   position(x, y) {
@@ -1078,24 +733,6 @@ var CursorSender = class {
       x: fraction(x - rect.left, rect.width),
       y: fraction(y - rect.top, rect.height)
     };
-  }
-  /** Replaces whatever waits (a leave replaces positions too). */
-  enqueue(position) {
-    this.pending = { position };
-    void this.pump();
-  }
-  async pump() {
-    if (this.sending) return;
-    this.sending = true;
-    for (let next = this.pending; next !== null; next = this.pending) {
-      this.pending = null;
-      const page = this.page;
-      if (!this.on || page === null) break;
-      const { url, seq } = page;
-      const pointer = next.position === null ? { tab: TAB_ID, seq, url } : { tab: TAB_ID, seq, url, position: next.position };
-      await sendCursor(pointer);
-    }
-    this.sending = false;
   }
 };
 var SVG_NS = "http://www.w3.org/2000/svg";
@@ -1299,9 +936,10 @@ function labelFor(kind) {
   }
 }
 var CommentDialog = class {
-  constructor(ui, outbox) {
+  constructor(ui, outbox, pending) {
     this.ui = ui;
     this.outbox = outbox;
+    this.pending = pending;
     const { dialog, form, textarea, cancel } = ui;
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1335,6 +973,7 @@ var CommentDialog = class {
   }
   ui;
   outbox;
+  pending;
   captured = null;
   /** What the dialog was opened on, which a draft keeps. */
   target = { kind: "page", selector: "" };
@@ -1503,30 +1142,23 @@ var CommentDialog = class {
       comment
     };
     const ref = crypto.randomUUID();
-    const entry = this.outbox.sending(draft, ref);
     this.sending = true;
     clearDraft();
-    submit({ ref, ...draft }).then((queued) => {
-      this.outbox.accepted(entry, queued);
-      this.outbox.onQueued(queued);
-      this.close();
-      ui.showToast(`Comment queued · ${queued.pending} pending`);
-    }).catch((error) => {
-      if (error instanceof SubmitError && error.unsent) {
-        this.outbox.unsent(entry);
-        this.close();
-        ui.showToast("Not sent: kept in the page, sent when the connection is back");
-        return;
-      }
-      this.outbox.withdraw(entry);
-      this.sending = false;
-      this.keep();
-      ui.status.textContent = error instanceof Error ? error.message : "Could not queue comment";
-      ui.textarea.focus();
-    }).finally(() => {
+    void this.outbox.submit(draft, ref).then((outcome) => {
       this.sending = false;
       ui.send.disabled = false;
       ui.cancel.disabled = false;
+      if (outcome === "saved" || "commented" in outcome) {
+        this.close();
+        ui.showToast(`Comment queued · ${this.pending()} pending`);
+      } else if ("unsent" in outcome) {
+        this.close();
+        ui.showToast("Not sent: kept in the page, sent when the connection is back");
+      } else {
+        this.keep();
+        ui.status.textContent = outcome.refused.error;
+        ui.textarea.focus();
+      }
     });
   }
 };
@@ -1757,11 +1389,37 @@ var CommentList = class {
   }
 };
 
+// client/src/location.ts
+function pageUrl() {
+  const url = new URL(window.location.href);
+  const raw = `${url.pathname}${url.search}${url.hash}`;
+  const encoded = raw.replace(/[^\x21-\x7e]|["\\]/gu, (character) => encodeURIComponent(character));
+  return encoded.startsWith("/") && encoded.length <= MAX_PAGE_PATH ? encoded : null;
+}
+function watchUrl(listener) {
+  let last = pageUrl();
+  const check = () => {
+    const now = pageUrl();
+    if (now === last) return;
+    last = now;
+    listener(now);
+  };
+  for (const method of ["pushState", "replaceState"]) {
+    const original = history[method].bind(history);
+    history[method] = (...args) => {
+      original(...args);
+      check();
+    };
+  }
+  window.addEventListener("popstate", check);
+  window.addEventListener("hashchange", check);
+}
+
 // client/src/name.ts
 var NamePrompt = class {
-  constructor(ui, saved) {
+  constructor(ui, changeSettings) {
     this.ui = ui;
-    this.saved = saved;
+    this.changeSettings = changeSettings;
     ui.nameForm.addEventListener("submit", (event) => {
       event.preventDefault();
       void this.join();
@@ -1771,7 +1429,7 @@ var NamePrompt = class {
     });
   }
   ui;
-  saved;
+  changeSettings;
   /** Shows or hides the prompt as the settings say. */
   show(settings) {
     const { nameDialog, nameInput, nameError } = this.ui;
@@ -1789,19 +1447,16 @@ var NamePrompt = class {
   async join() {
     const { nameInput, nameError, nameJoin } = this.ui;
     nameJoin.disabled = true;
-    try {
-      this.saved(await changeSettings({ name: nameInput.value.trim() }));
-    } catch (error) {
-      nameError.textContent = error instanceof Error ? error.message : "could not save the name";
+    const failed = failure(await this.changeSettings({ name: nameInput.value.trim() }));
+    nameJoin.disabled = false;
+    if (failed !== null) {
+      nameError.textContent = failed;
       nameInput.focus();
-    } finally {
-      nameJoin.disabled = false;
     }
   }
 };
 
 // client/src/outbox.ts
-var MAX_EARLY = 100;
 function isRecord2(value) {
   return typeof value === "object" && value !== null;
 }
@@ -1849,24 +1504,19 @@ function load() {
   }
 }
 var Outbox = class {
+  constructor(send) {
+    this.send = send;
+  }
+  send;
   entries = load();
   /** Called after every change, to redraw. */
   onChange = () => void 0;
-  /** Called with the joiner's reply after a comment was queued. */
-  onQueued = () => void 0;
   /**
-   * Ids delivered before this page heard they were queued (the delivery
-   * can overtake the joiner's answer to the page); the latest few.
+   * The ids of this joiner's comments the share holds, as the joiner last
+   * said; null while it does not know (a restarted joiner before the
+   * share admitted it).
    */
-  early = [];
-  /** A queued entry whose delivery came first is delivered. */
-  settle(entry) {
-    if (entry.state !== "queued" || entry.id === null) return;
-    const index = this.early.indexOf(entry.id);
-    if (index === -1) return;
-    this.early.splice(index, 1);
-    entry.state = "delivered";
-  }
+  undelivered = null;
   /** Persists the list (bounded) and redraws. */
   changed() {
     while (this.entries.length > MAX_OUTBOX) {
@@ -1879,71 +1529,241 @@ var Outbox = class {
     }
     this.onChange();
   }
+  /** A queued entry the share no longer holds was delivered. */
+  settle(entry) {
+    if (entry.state !== "queued" || entry.id === null || this.undelivered === null) return;
+    if (!this.undelivered.has(entry.id)) entry.state = "delivered";
+  }
   /**
-   * A comment about to be sent, kept first: a reload before the joiner's
-   * answer sends it again under the same ref, so it is queued once.
+   * The joiner's word on which of its comments the share holds (null: it
+   * does not know yet, and nothing changes).
    */
-  sending(draft, ref) {
+  sync(undelivered) {
+    this.undelivered = undelivered === null ? null : new Set(undelivered);
+    for (const entry of this.entries) this.settle(entry);
+    this.changed();
+  }
+  /**
+   * Sends `draft` under `ref`, kept first: a reload before the joiner's
+   * answer sends it again under the same ref, so it is queued once.
+   * Resolves with the outcome once the entry reflects it; a refused
+   * comment is taken out again (it goes back to the dialog).
+   */
+  async submit(draft, ref) {
     const entry = { draft, ref, id: null, state: "sending", at: Date.now() };
     this.entries.push(entry);
     this.changed();
-    return entry;
+    const outcome = await this.send({ ref, ...draft });
+    if (typeof outcome !== "string" && "refused" in outcome) {
+      const index = this.entries.indexOf(entry);
+      if (index !== -1) this.entries.splice(index, 1);
+      this.changed();
+    } else {
+      this.take(entry, outcome);
+    }
+    return outcome;
   }
-  /** The joiner queued `entry`. */
-  accepted(entry, queued) {
-    entry.id = queued.id;
-    entry.state = "queued";
-    this.settle(entry);
-    this.changed();
-  }
-  /** `entry` did not reach the joiner: kept, sent again later. */
-  unsent(entry) {
-    entry.state = "unsent";
-    this.changed();
-  }
-  /** `entry` was refused (rate limit, full queue): back to the dialog. */
-  withdraw(entry) {
-    const index = this.entries.indexOf(entry);
-    if (index !== -1) this.entries.splice(index, 1);
+  /** Records what became of `entry`. */
+  take(entry, outcome) {
+    if (typeof outcome !== "string" && "commented" in outcome) {
+      entry.id = outcome.commented.id;
+      entry.state = "queued";
+      this.settle(entry);
+    } else {
+      entry.state = "unsent";
+    }
     this.changed();
   }
   async resend(entry) {
     if (entry.state !== "unsent") return;
     entry.state = "sending";
     this.changed();
-    try {
-      const queued = await submit({ ref: entry.ref, ...entry.draft });
-      entry.id = queued.id;
-      entry.state = "queued";
-      this.settle(entry);
-      this.onQueued(queued);
-    } catch {
-      entry.state = "unsent";
-    }
-    this.changed();
+    const outcome = await this.send({ ref: entry.ref, ...entry.draft });
+    this.take(entry, outcome);
   }
   async resendAll() {
     for (const entry of this.entries.filter((candidate) => candidate.state === "unsent")) {
       await this.resend(entry);
     }
   }
-  markDelivered(ids) {
-    const delivered = new Set(ids);
-    for (const entry of this.entries) {
-      if (entry.id !== null && delivered.delete(entry.id) && entry.state === "queued") {
-        entry.state = "delivered";
-      }
-    }
-    this.early.push(...delivered);
-    this.early.splice(0, Math.max(0, this.early.length - MAX_EARLY));
-    this.changed();
+};
+
+// client/src/api.ts
+function isObject(value) {
+  return typeof value === "object" && value !== null;
+}
+function incompatibility(api, version) {
+  if (api === API_VERSION) return null;
+  const share = SHARE_VERSION ?? "unknown";
+  const joiner = typeof version === "string" ? version : "another";
+  return typeof api === "number" ? `jampot versions do not match: the share runs ${share} (page API ${API_VERSION}), your jampot join runs ${joiner} (page API ${api}). Use the same jampot version on both sides and join again.` : `Your jampot join is older than the share's jampot ${share} and cannot serve this page. Use the same jampot version on both sides and join again.`;
+}
+async function probe() {
+  try {
+    const response = await fetch(STATUS_URL, { cache: "no-store" });
+    if (!response.ok) return null;
+    const body = await response.json();
+    return incompatibility(
+      isObject(body) ? body.api : void 0,
+      isObject(body) ? body.version : void 0
+    ) ?? "";
+  } catch {
+    return null;
   }
-  /** Every queued comment not in `undelivered` was delivered meanwhile. */
-  markDeliveredExcept(undelivered) {
-    const held = new Set(undelivered);
-    this.markDelivered(
-      this.entries.filter((entry) => entry.state === "queued" && entry.id !== null && !held.has(entry.id)).map((entry) => entry.id ?? "")
-    );
+}
+function parseMessage(data) {
+  if (typeof data !== "string") return null;
+  try {
+    const message = JSON.parse(data);
+    return isObject(message) && typeof message.type === "string" ? message : null;
+  } catch {
+    return null;
+  }
+}
+
+// client/src/socket.ts
+var LOST = { unsent: { error: "jampot join is not reachable" } };
+var PageSocket = class {
+  constructor(handlers) {
+    this.handlers = handlers;
+    window.setInterval(() => {
+      if (this.socket !== null && Date.now() - this.lastHeard > WATCHDOG_MS) this.lost();
+    }, 5e3);
+    window.addEventListener("pagehide", () => {
+      this.drop();
+    });
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) this.reconnect(0);
+    });
+  }
+  handlers;
+  socket = null;
+  /** The hello came: the socket carries the joiner's state. */
+  ready = false;
+  n = 0;
+  waiting = /* @__PURE__ */ new Map();
+  lastHeard = Date.now();
+  wait = RECONNECT_MIN_MS;
+  timer;
+  stopped = false;
+  /** A version check is out: one connection attempt at a time. */
+  probing = false;
+  /** Whether the socket carries the joiner's state now. */
+  get isOpen() {
+    return this.ready;
+  }
+  /** Checks the joiner's page API, then opens the socket. */
+  start() {
+    void this.connect();
+  }
+  async connect() {
+    if (this.stopped || this.socket !== null || this.probing) return;
+    this.probing = true;
+    const checked = await probe();
+    this.probing = false;
+    if (checked === null) {
+      this.reconnect(this.wait);
+      this.wait = Math.min(this.wait * 2, RECONNECT_MAX_MS);
+      return;
+    }
+    if (checked !== "") {
+      this.refuse(checked);
+      return;
+    }
+    const socket = new WebSocket(SOCKET_URL);
+    this.socket = socket;
+    this.lastHeard = Date.now();
+    socket.addEventListener("message", (event) => {
+      if (this.socket === socket) this.receive(parseMessage(event.data));
+    });
+    socket.addEventListener("close", () => {
+      if (this.socket === socket) this.lost();
+    });
+  }
+  receive(message) {
+    this.lastHeard = Date.now();
+    if (message === null) return;
+    switch (message.type) {
+      case "hello": {
+        const reason = incompatibility(message.api, message.version);
+        if (reason !== null) {
+          this.refuse(reason);
+          return;
+        }
+        this.wait = RECONNECT_MIN_MS;
+        this.ready = true;
+        this.handlers.hello(message);
+        this.handlers.open(true);
+        break;
+      }
+      case "reply": {
+        const settle = this.waiting.get(message.to);
+        this.waiting.delete(message.to);
+        settle?.(message.outcome);
+        break;
+      }
+      case "ping":
+        break;
+      case "link":
+      case "people":
+      case "mine":
+      case "settings":
+      case "reload":
+      case "answer":
+      case "cursor":
+        if (this.ready) this.handlers.slice(message);
+        break;
+    }
+  }
+  /** Sends `message` if the socket is up; false if it is not. */
+  send(message) {
+    const socket = this.socket;
+    if (!this.ready || socket?.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify(message));
+    return true;
+  }
+  /** Makes a request; its outcome ("unsent" if the socket goes first). */
+  request(request) {
+    this.n += 1;
+    const n = this.n;
+    return new Promise((resolve) => {
+      if (!this.send({ ...request, n })) {
+        resolve(LOST);
+        return;
+      }
+      this.waiting.set(n, resolve);
+    });
+  }
+  /** Closes the socket without waiting for the joiner to agree. */
+  drop() {
+    const socket = this.socket;
+    this.socket = null;
+    if (this.timer !== void 0) clearTimeout(this.timer);
+    this.timer = void 0;
+    if (socket !== null) socket.close();
+    const wasReady = this.ready;
+    this.ready = false;
+    for (const settle of this.waiting.values()) settle(LOST);
+    this.waiting.clear();
+    if (wasReady) this.handlers.open(false);
+  }
+  /** The socket closed or went silent: shown at once, opened again soon. */
+  lost() {
+    this.drop();
+    this.reconnect(this.wait);
+    this.wait = Math.min(this.wait * 2, RECONNECT_MAX_MS);
+  }
+  reconnect(wait) {
+    if (this.stopped || this.timer !== void 0) return;
+    this.timer = window.setTimeout(() => {
+      this.timer = void 0;
+      void this.connect();
+    }, wait);
+  }
+  refuse(reason) {
+    this.stopped = true;
+    this.drop();
+    this.handlers.incompatible(reason);
   }
 };
 
@@ -2826,16 +2646,39 @@ var Ui = class _Ui {
 function install() {
   const ui = Ui.install();
   if (ui === null) return;
-  const outbox = new Outbox();
-  const answers = new Answers(ui);
-  const dialog = new CommentDialog(ui, outbox);
-  const list = new CommentList(ui, outbox);
-  const panel = new Panel(ui);
-  const sender = new CursorSender(ui);
-  const layer = new CursorLayer(ui);
-  const registration = new Registration();
+  let url = pageUrl();
+  let you = null;
+  let here = [];
+  let pending = 0;
   let reloadRevision = LIVE_REVISION;
   let connectionView = { colour: "amber", text: "", incompatible: null };
+  const socket = new PageSocket({
+    hello(hello) {
+      applyHello(hello);
+    },
+    slice(slice) {
+      applySlice(slice);
+    },
+    open(open) {
+      connection.setOpen(open);
+      if (open) report();
+      else sender.setPlaced(false);
+    },
+    incompatible(reason) {
+      connection.refuse(reason);
+    }
+  });
+  const outbox = new Outbox((submission) => socket.request({ type: "comment", ...submission }));
+  const changeSettings = (change) => socket.request({ type: "settings", change });
+  const answers = new Answers(ui);
+  const dialog = new CommentDialog(ui, outbox, () => pending);
+  const list = new CommentList(ui, outbox);
+  const panel = new Panel(ui, changeSettings);
+  const sender = new CursorSender(
+    ui,
+    (position) => socket.send({ type: "cursor", position })
+  );
+  const layer = new CursorLayer(ui);
   const editMode = new EditMode(
     ui,
     dialog,
@@ -2845,9 +2688,6 @@ function install() {
     panel.close();
     list.close();
   };
-  let url = pageUrl();
-  let you = null;
-  let here = [];
   list.onOpen = () => {
     panel.close();
   };
@@ -2857,24 +2697,31 @@ function install() {
   outbox.onChange = () => {
     list.render();
   };
-  outbox.onQueued = (queued) => {
-    if (connection.fresh(queued.epoch, queued.rev, "mine")) ui.setPending(queued.pending);
-    else void connection.refresh();
-  };
-  const prompt = new NamePrompt(ui, (saved) => {
-    if (connection.fresh(saved.epoch, saved.rev, "settings")) panel.show(saved);
-  });
-  panel.fresh = (saved) => connection.fresh(saved.epoch, saved.rev, "settings");
-  const applySettings = (settings) => {
+  const prompt = new NamePrompt(ui, changeSettings);
+  panel.onSettings = (settings) => {
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
     editMode.refresh();
   };
-  panel.onSettings = applySettings;
+  const connection = new Connection((view, recovered) => {
+    connectionView = view;
+    list.showState(view);
+    ui.notice.hidden = view.incompatible === null;
+    ui.notice.textContent = view.incompatible ?? "";
+    editMode.refresh();
+    if (view.colour !== "green") layer.clear();
+    if (recovered) void outbox.resendAll();
+  });
   const showPeople = (people) => {
     here = people;
     panel.showPeople(here, you);
     layer.setPeople(here, url);
+  };
+  const showMine = (undelivered) => {
+    if (undelivered === null) return;
+    pending = undelivered.length;
+    ui.setPending(pending);
+    outbox.sync(undelivered);
   };
   const onRevision = (revision) => {
     if (LIVE_REVISION === null || revision === null) return;
@@ -2888,79 +2735,55 @@ function install() {
     restored = true;
     dialog.restore((selector) => answers.targetFor(selector));
   };
-  const connection = new Connection({
-    state(view, recovered) {
-      connectionView = view;
-      list.showState(view);
-      ui.notice.hidden = view.incompatible === null;
-      ui.notice.textContent = view.incompatible ?? "";
-      editMode.refresh();
-      if (view.colour !== "green") layer.clear();
-      if (!connection.streaming) sender.suspend();
-      if (recovered) void outbox.resendAll();
-    },
-    status(status, parts) {
-      if (parts.has("connection")) you = status.you?.key ?? null;
-      if (parts.has("mine")) {
-        ui.setPending(status.pending);
-        outbox.markDeliveredExcept(status.undelivered);
-      }
-      for (const answer of status.answers) answers.add(answer);
-      restoreDraft();
-      if (parts.has("settings")) panel.show(status.settings);
-      if (parts.has("presence")) showPeople(status.here);
-      else if (parts.has("connection")) showPeople(here);
-      if (parts.has("reload")) onRevision(status.revision);
-    },
-    event(event) {
-      switch (event.type) {
-        case "answer":
-          answers.add(event);
-          break;
-        case "reload":
-          onRevision(event.revision);
-          break;
-        case "delivered":
-          outbox.markDelivered(event.ids);
-          break;
-        case "presence":
-          showPeople(event.here);
-          break;
-        case "settings":
-          panel.show(event);
-          break;
-        case "cursor":
-          if (event.url === url && event.key !== you) layer.update(event.key, event.position);
-          break;
-        case "share":
-        case "status":
-        case "ping":
-          break;
-      }
-    },
-    opened() {
-      register();
-    }
-  }, () => ({ tab: TAB_ID, url, seq: registration.latest }));
-  function register() {
-    if (url === null) sender.suspend();
-    else sender.registering();
-    registration.request(url);
+  function applyHello(hello) {
+    you = hello.link.you?.key ?? null;
+    showMine(hello.mine);
+    for (const answer of hello.answers) answers.add(answer);
+    restoreDraft();
+    panel.show(hello.settings);
+    showPeople(hello.people);
+    onRevision(hello.revision);
+    connection.setLink(hello.link);
   }
-  registration.onConfirmed = (confirmed, seq) => {
-    if (confirmed !== null && confirmed === url && connection.streaming) {
-      sender.confirmed(confirmed, seq);
+  function applySlice(slice) {
+    switch (slice.type) {
+      case "link":
+        you = slice.you?.key ?? null;
+        showPeople(here);
+        connection.setLink(slice);
+        break;
+      case "people":
+        showPeople(slice.here);
+        break;
+      case "mine":
+        showMine(slice.undelivered);
+        break;
+      case "settings":
+        panel.show(slice);
+        break;
+      case "reload":
+        onRevision(slice.revision);
+        break;
+      case "answer":
+        answers.add(slice);
+        break;
+      case "cursor":
+        if (slice.url === url && slice.key !== you) layer.update(slice.key, slice.position);
+        break;
     }
-  };
+  }
+  function report() {
+    if (!socket.send({ type: "page", url })) return;
+    sender.setPlaced(url !== null);
+  }
   watchUrl((now) => {
     url = now;
     layer.clear();
     layer.setPeople(here, url);
-    if (connection.streaming) register();
-    else sender.suspend();
+    report();
   });
   const activate = () => {
-    if (connection.streaming && document.visibilityState === "visible") register();
+    if (document.visibilityState === "visible") report();
   };
   window.addEventListener("focus", activate);
   document.addEventListener("visibilitychange", activate);
@@ -2997,7 +2820,7 @@ function install() {
   }, true);
   list.render();
   if (loadDraft()?.target.kind !== "answer") restoreDraft();
-  void connection.start();
+  socket.start();
 }
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", install, { once: true });

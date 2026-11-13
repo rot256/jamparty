@@ -20,12 +20,8 @@ use crate::core::{ids::Sid, port::Port};
 /// Every response carries `Content-Security-Policy` with this value.
 pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
 
-pub(crate) const COMMENTS_PATH: &str = "/_jampot/api/comments";
 pub(crate) const STATUS_PATH: &str = "/_jampot/api/status";
-pub(crate) const EVENTS_PATH: &str = "/_jampot/api/events";
-pub(crate) const SETTINGS_PATH: &str = "/_jampot/api/settings";
-pub(crate) const PAGE_PATH: &str = "/_jampot/api/page";
-pub(crate) const CURSOR_PATH: &str = "/_jampot/api/cursor";
+pub(crate) const SOCKET_PATH: &str = "/_jampot/api/socket";
 
 /// The request method, as far as the decision cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,18 +68,10 @@ pub(crate) struct RequestFacts<'a> {
 /// Who answers an accepted request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
-    /// POST a comment.
-    Comments,
-    /// GET the status once on load.
+    /// GET the page API's version.
     Status,
-    /// GET the event stream (SSE).
-    Events,
-    /// POST a change to the joiner's settings.
-    Settings,
-    /// POST the URL a tab is on.
-    Page,
-    /// POST the pointer's position in a tab.
-    Cursor,
+    /// GET with an upgrade: the page's WebSocket.
+    Socket,
     /// Forward to the share.
     Proxy,
 }
@@ -96,7 +84,8 @@ pub(crate) enum Refusal {
     CrossSite,
     /// A write or upgrade without this session's exact `Origin`.
     BadOrigin,
-    /// A reserved path with the wrong method, or an upgrade.
+    /// A reserved path with the wrong method, or with an upgrade or
+    /// without one when it takes the other.
     MethodNotAllowed,
 }
 
@@ -183,16 +172,12 @@ pub(crate) fn is_navigation(facts: &RequestFacts<'_>) -> bool {
 }
 
 fn route(facts: &RequestFacts<'_>) -> Result<Route, Refusal> {
-    let (route, method) = match facts.path {
-        COMMENTS_PATH => (Route::Comments, Method::Post),
-        STATUS_PATH => (Route::Status, Method::Get),
-        EVENTS_PATH => (Route::Events, Method::Get),
-        SETTINGS_PATH => (Route::Settings, Method::Post),
-        PAGE_PATH => (Route::Page, Method::Post),
-        CURSOR_PATH => (Route::Cursor, Method::Post),
+    let (route, method, upgrade) = match facts.path {
+        STATUS_PATH => (Route::Status, Method::Get, Upgrade::No),
+        SOCKET_PATH => (Route::Socket, Method::Get, Upgrade::Yes),
         _ => return Ok(Route::Proxy),
     };
-    if facts.method == method && facts.upgrade == Upgrade::No {
+    if facts.method == method && facts.upgrade == upgrade {
         Ok(route)
     } else {
         Err(Refusal::MethodNotAllowed)

@@ -1,10 +1,9 @@
 // The control panel behind the gear: the comment mode and cursor
 // switches with their keys (rebindable), the name, and who is here.
 
-import { changeSettings } from "./api";
 import { PALETTE } from "./config";
 import { RESERVED_KEYS } from "./generated/api";
-import type { Corner, Keys, PageSettings, Person, Saved } from "./generated/api";
+import type { Corner, Keys, Outcome, PageSettings, Person, SettingsChange } from "./generated/api";
 import type { Ui } from "./ui";
 
 type Action = keyof Keys;
@@ -45,6 +44,15 @@ function initials(name: string): string {
   return letters === "" ? "?" : letters;
 }
 
+/** Changes the joiner's settings; what became of the change. */
+export type ChangeSettings = (change: SettingsChange) => Promise<Outcome>;
+
+/** Why a change did not go through, or null when it did. */
+export function failure(outcome: Outcome): string | null {
+  if (outcome === "saved" || "commented" in outcome) return null;
+  return "unsent" in outcome ? outcome.unsent.error : outcome.refused.error;
+}
+
 export function colourOf(person: Person): string {
   return PALETTE[person.colour % PALETTE.length] ?? "#555";
 }
@@ -56,10 +64,11 @@ export class Panel {
   onOpen: () => void = () => undefined;
   /** Called with the settings whenever they change. */
   onSettings: (settings: PageSettings) => void = () => undefined;
-  /** Whether a saved answer is newer than what the page has applied. */
-  fresh: (saved: Saved) => boolean = () => true;
 
-  constructor(private readonly ui: Ui) {
+  constructor(
+    private readonly ui: Ui,
+    private readonly changeSettings: ChangeSettings,
+  ) {
     ui.gear.addEventListener("click", () => { this.toggle(); });
     ui.commentMode.addEventListener("click", () => { this.flip("commentMode"); });
     ui.showCursor.addEventListener("click", () => { this.flip("showCursor"); });
@@ -125,7 +134,7 @@ export class Panel {
     this.ui.panelMessage.textContent = text;
   }
 
-  /** The settings from the joiner (status or a settings event). */
+  /** The settings from the joiner (its hello or a settings message). */
   show(settings: PageSettings): void {
     this.settings = settings;
     const { ui } = this;
@@ -143,14 +152,13 @@ export class Panel {
     this.onSettings(settings);
   }
 
-  private async change(change: Parameters<typeof changeSettings>[0]): Promise<void> {
-    try {
-      const saved = await changeSettings(change);
-      // A `settings` event may have brought newer settings meanwhile.
-      if (this.fresh(saved)) this.show(saved);
-    } catch (error) {
-      this.message(error instanceof Error ? error.message : "could not save");
-    }
+  /**
+   * Asks the joiner for a change. What it saved comes as a settings
+   * message, in order with everyone else's; only a failure is shown here.
+   */
+  private async change(change: SettingsChange): Promise<void> {
+    const failed = failure(await this.changeSettings(change));
+    if (failed !== null) this.message(failed);
   }
 
   private flip(action: Action): void {

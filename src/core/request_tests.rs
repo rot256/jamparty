@@ -4,8 +4,7 @@ use crate::core::{
     ids::EndpointKey,
     port::Port,
     request::{
-        COMMENTS_PATH, CURSOR_PATH, EVENTS_PATH, LocalOrigin, Method, PAGE_PATH, Refusal,
-        RequestFacts, Route, SETTINGS_PATH, STATUS_PATH, Upgrade,
+        LocalOrigin, Method, Refusal, RequestFacts, Route, SOCKET_PATH, STATUS_PATH, Upgrade,
     },
 };
 
@@ -55,6 +54,14 @@ fn bare(method: Method, path: &str) -> RequestFacts<'_> {
     }
 }
 
+/// The page opening its socket.
+fn socket(site: Option<&'static str>) -> RequestFacts<'static> {
+    RequestFacts {
+        path: SOCKET_PATH,
+        ..upgrade(site)
+    }
+}
+
 fn upgrade(site: Option<&'static str>) -> RequestFacts<'static> {
     RequestFacts {
         upgrade: Upgrade::Yes,
@@ -81,9 +88,9 @@ fn the_default_port_is_left_out() {
     let post = RequestFacts {
         host: Some("tzrjdfymwrg5sqai.localhost"),
         origin: Some("http://tzrjdfymwrg5sqai.localhost"),
-        ..fetch(Method::Post, COMMENTS_PATH)
+        ..socket(Some("same-origin"))
     };
-    assert_eq!(local.decide(&post), Ok(Route::Comments));
+    assert_eq!(local.decide(&post), Ok(Route::Socket));
     let explicit = RequestFacts {
         host: Some("tzrjdfymwrg5sqai.localhost:80"),
         ..post
@@ -103,18 +110,8 @@ fn table() {
         ("page", nav("/", "none"), Ok(Route::Proxy)),
         ("asset", fetch(Method::Get, "/app.js"), Ok(Route::Proxy)),
         ("head", fetch(Method::Head, "/"), Ok(Route::Proxy)),
-        (
-            "comment",
-            fetch(Method::Post, COMMENTS_PATH),
-            Ok(Route::Comments),
-        ),
         ("status", fetch(Method::Get, STATUS_PATH), Ok(Route::Status)),
-        ("events", fetch(Method::Get, EVENTS_PATH), Ok(Route::Events)),
-        (
-            "settings",
-            fetch(Method::Post, SETTINGS_PATH),
-            Ok(Route::Settings),
-        ),
+        ("socket", socket(Some("same-origin")), Ok(Route::Socket)),
         ("site post", fetch(Method::Post, "/form"), Ok(Route::Proxy)),
         ("site put", fetch(Method::Other, "/api/x"), Ok(Route::Proxy)),
         (
@@ -139,89 +136,59 @@ fn table() {
         // Non-browser clients.
         ("curl get", bare(Method::Get, "/"), Ok(Route::Proxy)),
         (
-            "curl events",
-            bare(Method::Get, EVENTS_PATH),
-            Ok(Route::Events),
-        ),
-        (
-            "curl post no origin",
-            bare(Method::Post, COMMENTS_PATH),
+            "curl socket no origin",
+            RequestFacts {
+                origin: None,
+                ..socket(None)
+            },
             Err(Refusal::BadOrigin),
         ),
-        (
-            "curl post with origin",
-            RequestFacts {
-                origin: Some(ORIGIN),
-                ..bare(Method::Post, COMMENTS_PATH)
-            },
-            Ok(Route::Comments),
-        ),
-        // Reserved paths: exact path and method.
-        (
-            "get comments",
-            fetch(Method::Get, COMMENTS_PATH),
-            Err(Refusal::MethodNotAllowed),
-        ),
+        ("curl socket with origin", socket(None), Ok(Route::Socket)),
+        // Reserved paths: exact path, method and upgrade.
         (
             "post status",
             fetch(Method::Post, STATUS_PATH),
             Err(Refusal::MethodNotAllowed),
         ),
-        ("page", fetch(Method::Post, PAGE_PATH), Ok(Route::Page)),
         (
-            "cursor",
-            fetch(Method::Post, CURSOR_PATH),
-            Ok(Route::Cursor),
-        ),
-        (
-            "get cursor",
-            fetch(Method::Get, CURSOR_PATH),
-            Err(Refusal::MethodNotAllowed),
-        ),
-        (
-            "get page",
-            fetch(Method::Get, PAGE_PATH),
-            Err(Refusal::MethodNotAllowed),
-        ),
-        (
-            "get settings",
-            fetch(Method::Get, SETTINGS_PATH),
-            Err(Refusal::MethodNotAllowed),
-        ),
-        (
-            "cross-site settings",
+            "upgrade status",
             RequestFacts {
-                sec_fetch_site: Some("cross-site"),
-                ..fetch(Method::Post, SETTINGS_PATH)
-            },
-            Err(Refusal::CrossSite),
-        ),
-        (
-            "head events",
-            fetch(Method::Head, EVENTS_PATH),
-            Err(Refusal::MethodNotAllowed),
-        ),
-        (
-            "upgrade events",
-            RequestFacts {
-                path: EVENTS_PATH,
+                path: STATUS_PATH,
                 ..upgrade(Some("same-origin"))
             },
             Err(Refusal::MethodNotAllowed),
         ),
         (
+            "socket without upgrade",
+            fetch(Method::Get, SOCKET_PATH),
+            Err(Refusal::MethodNotAllowed),
+        ),
+        (
+            "post socket",
+            RequestFacts {
+                method: Method::Post,
+                ..socket(Some("same-origin"))
+            },
+            Err(Refusal::MethodNotAllowed),
+        ),
+        (
+            "head status",
+            fetch(Method::Head, STATUS_PATH),
+            Err(Refusal::MethodNotAllowed),
+        ),
+        (
             "trailing slash",
-            fetch(Method::Post, "/_jampot/api/comments/"),
+            fetch(Method::Get, "/_jampot/api/status/"),
             Ok(Route::Proxy),
         ),
         (
             "encoded",
-            fetch(Method::Post, "/%5Fjampot/api/comments"),
+            fetch(Method::Get, "/%5Fjampot/api/status"),
             Ok(Route::Proxy),
         ),
         (
             "double slash",
-            fetch(Method::Post, "//_jampot/api/comments"),
+            fetch(Method::Get, "//_jampot/api/status"),
             Ok(Route::Proxy),
         ),
     ];
@@ -255,7 +222,7 @@ fn wrong_hosts_are_refused() {
     ];
     let local = local();
     for host in hosts {
-        for facts in [nav("/", "none"), fetch(Method::Post, COMMENTS_PATH)] {
+        for facts in [nav("/", "none"), socket(Some("same-origin"))] {
             let facts = RequestFacts { host, ..facts };
             assert_eq!(local.decide(&facts), Err(Refusal::WrongHost), "{host:?}");
         }
@@ -267,15 +234,14 @@ fn cross_site_requests_are_refused() {
     let local = local();
     for site in ["cross-site", "same-site", "none", "bogus"] {
         let cases = [
-            // A page elsewhere POSTing a comment, with or without a forged
+            // A page elsewhere opening the socket, with or without a forged
             // matching Origin (the fetch site decides first).
-            fetch(Method::Post, COMMENTS_PATH),
+            socket(Some("same-origin")),
             RequestFacts {
                 origin: Some(OTHER_ORIGIN),
-                ..fetch(Method::Post, COMMENTS_PATH)
+                ..socket(Some("same-origin"))
             },
-            // Reading the event stream or status, or any page by fetch.
-            fetch(Method::Get, EVENTS_PATH),
+            // Reading the status, or any page by fetch.
             fetch(Method::Get, STATUS_PATH),
             fetch(Method::Get, "/"),
             // An upgrade.
@@ -287,7 +253,7 @@ fn cross_site_requests_are_refused() {
             },
             RequestFacts {
                 method: Method::Post,
-                ..nav(COMMENTS_PATH, "cross-site")
+                ..nav("/form", "cross-site")
             },
         ];
         for facts in cases {
@@ -340,7 +306,8 @@ fn writes_and_upgrades_need_the_exact_origin() {
     ];
     for origin in origins {
         for facts in [
-            fetch(Method::Post, COMMENTS_PATH),
+            socket(Some("same-origin")),
+            fetch(Method::Post, "/form"),
             fetch(Method::Other, "/"),
             RequestFacts {
                 upgrade: Upgrade::Yes,
@@ -363,29 +330,31 @@ fn refusal_statuses() {
 
 proptest! {
     /// Whatever else a request carries, only the exact host is served, and
-    /// a comment is accepted only from a same-origin (or bare) request with
-    /// the exact Origin.
+    /// the socket opens only for a same-origin (or bare) request with the
+    /// exact Origin.
     #[test]
-    fn comments_need_host_site_and_origin(
+    fn the_socket_needs_host_site_and_origin(
         host in prop_oneof![Just(HOST.to_owned()), "\\PC{0,40}"],
         site in prop::option::of(prop_oneof![
             Just("same-origin"), Just("same-site"), Just("cross-site"), Just("none")
         ]),
-        mode in prop::option::of(prop_oneof![Just("navigate"), Just("cors"), Just("no-cors")]),
+        mode in prop::option::of(prop_oneof![
+            Just("navigate"), Just("cors"), Just("no-cors"), Just("websocket")
+        ]),
         dest in prop::option::of(prop_oneof![Just("document"), Just("empty"), Just("iframe")]),
         origin in prop::option::of(prop_oneof![Just(ORIGIN.to_owned()), "\\PC{0,40}"]),
     ) {
         let facts = RequestFacts {
             host: Some(host.as_str()),
-            method: Method::Post,
-            path: COMMENTS_PATH,
+            method: Method::Get,
+            path: SOCKET_PATH,
             sec_fetch_site: site,
             sec_fetch_mode: mode,
             sec_fetch_dest: dest,
             origin: origin.as_deref(),
-            upgrade: Upgrade::No,
+            upgrade: Upgrade::Yes,
         };
-        let accepted = local().decide(&facts) == Ok(Route::Comments);
+        let accepted = local().decide(&facts) == Ok(Route::Socket);
         let allowed = host == HOST
             && matches!(site, None | Some("same-origin"))
             && origin.as_deref() == Some(ORIGIN);

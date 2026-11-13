@@ -174,7 +174,7 @@ text. Rows:
   browser context). A feature is not done until its Playwright test passes.
   Single-joiner cases:
   - pill with the dot inside; colour follows the state (stop the share:
-    grey; cut the joiner's event stream: amber; back: green);
+    grey; cut the joiner's socket: amber; back: green);
   - expand and collapse; the list shows queued, delivered (after
     `jampot recv`), and not sent with a working `send again`;
   - gear panel: both switches by click and by key; keys ignored while a

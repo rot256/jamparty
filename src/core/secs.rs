@@ -26,6 +26,25 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
     u64::deserialize(deserializer).map(Duration::from_secs)
 }
 
+/// An optional [`Duration`] as whole seconds, or absent.
+pub(crate) mod optional {
+    use std::time::Duration;
+
+    use serde::Serializer;
+
+    use crate::core::secs::whole;
+
+    pub(crate) fn serialize<S: Serializer>(
+        duration: &Option<Duration>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match duration {
+            Some(duration) => serializer.serialize_u64(whole(*duration)),
+            None => serializer.serialize_none(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

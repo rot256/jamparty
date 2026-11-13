@@ -9,28 +9,50 @@ import { CursorLayer, CursorSender } from "./cursors";
 import { CommentDialog } from "./dialog";
 import { loadDraft } from "./draft";
 import { EditMode } from "./edit";
-import type { PageSettings, Person } from "./generated/api";
+import type { Hello, Outcome, PageSettings, Person, SettingsChange } from "./generated/api";
 import { CommentList } from "./list";
-import { Registration, TAB_ID, pageUrl, watchUrl } from "./location";
+import { pageUrl, watchUrl } from "./location";
 import { NamePrompt } from "./name";
 import { Outbox } from "./outbox";
 import { Panel, isEditing } from "./panel";
+import { PageSocket, type Slice } from "./socket";
 import { Ui } from "./ui";
 
 function install(): void {
   const ui = Ui.install();
   if (ui === null) return;
-  const outbox = new Outbox();
-  const answers = new Answers(ui);
-  const dialog = new CommentDialog(ui, outbox);
-  const list = new CommentList(ui, outbox);
-  // The panel takes its keys before the page and the `/` handler below.
-  const panel = new Panel(ui);
-  const sender = new CursorSender(ui);
-  const layer = new CursorLayer(ui);
-  const registration = new Registration();
+  let url = pageUrl();
+  let you: string | null = null;
+  let here: Person[] = [];
+  /** How many of this joiner's comments the share holds, as last said. */
+  let pending = 0;
   let reloadRevision = LIVE_REVISION;
   let connectionView: ConnectionView = { colour: "amber", text: "", incompatible: null };
+
+  // Everything the page asks of the joiner goes over its one socket.
+  const socket = new PageSocket({
+    hello(hello) { applyHello(hello); },
+    slice(slice) { applySlice(slice); },
+    open(open) {
+      connection.setOpen(open);
+      if (open) report();
+      else sender.setPlaced(false);
+    },
+    incompatible(reason) { connection.refuse(reason); },
+  });
+  const outbox = new Outbox((submission) => socket.request({ type: "comment", ...submission }));
+  const changeSettings = (change: SettingsChange): Promise<Outcome> =>
+    socket.request({ type: "settings", change });
+  const answers = new Answers(ui);
+  const dialog = new CommentDialog(ui, outbox, () => pending);
+  const list = new CommentList(ui, outbox);
+  // The panel takes its keys before the page and the `/` handler below.
+  const panel = new Panel(ui, changeSettings);
+  const sender = new CursorSender(
+    ui,
+    (position) => socket.send({ type: "cursor", position }),
+  );
+  const layer = new CursorLayer(ui);
   const editMode = new EditMode(
     ui,
     dialog,
@@ -40,35 +62,41 @@ function install(): void {
     panel.close();
     list.close();
   };
-  let url = pageUrl();
-  let you: string | null = null;
-  let here: Person[] = [];
 
   list.onOpen = () => { panel.close(); };
   panel.onOpen = () => { list.close(); };
   outbox.onChange = () => { list.render(); };
-  outbox.onQueued = (queued) => {
-    // Its count is news unless something newer (its delivery, say) came
-    // first; either way, the joiner's views from before it are old now.
-    if (connection.fresh(queued.epoch, queued.rev, "mine")) ui.setPending(queued.pending);
-    else void connection.refresh();
-  };
 
-  const prompt = new NamePrompt(ui, (saved) => {
-    if (connection.fresh(saved.epoch, saved.rev, "settings")) panel.show(saved);
-  });
-  panel.fresh = (saved) => connection.fresh(saved.epoch, saved.rev, "settings");
-  const applySettings = (settings: PageSettings): void => {
+  const prompt = new NamePrompt(ui, changeSettings);
+  panel.onSettings = (settings: PageSettings): void => {
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
     editMode.refresh();
   };
-  panel.onSettings = applySettings;
+
+  const connection = new Connection((view, recovered) => {
+    connectionView = view;
+    list.showState(view);
+    ui.notice.hidden = view.incompatible === null;
+    ui.notice.textContent = view.incompatible ?? "";
+    // A joiner this page cannot talk to takes no comments.
+    editMode.refresh();
+    if (view.colour !== "green") layer.clear();
+    if (recovered) void outbox.resendAll();
+  });
 
   const showPeople = (people: Person[]): void => {
     here = people;
     panel.showPeople(here, you);
     layer.setPeople(here, url);
+  };
+
+  const showMine = (undelivered: string[] | null): void => {
+    // Unknown (a joiner that restarted, before the share said): as it was.
+    if (undelivered === null) return;
+    pending = undelivered.length;
+    ui.setPending(pending);
+    outbox.sync(undelivered);
   };
 
   const onRevision = (revision: number | null): void => {
@@ -79,7 +107,7 @@ function install(): void {
   };
 
   // A draft left by a reload comes back once; one on an answer waits for
-  // the answers, which come with the first status.
+  // the answers, which come with the first hello.
   let restored = false;
   const restoreDraft = (): void => {
     if (restored) return;
@@ -87,92 +115,66 @@ function install(): void {
     dialog.restore((selector) => answers.targetFor(selector));
   };
 
-  const connection = new Connection({
-    state(view, recovered) {
-      connectionView = view;
-      list.showState(view);
-      ui.notice.hidden = view.incompatible === null;
-      ui.notice.textContent = view.incompatible ?? "";
-      // A joiner this page cannot talk to takes no comments.
-      editMode.refresh();
-      if (view.colour !== "green") layer.clear();
-      // The joiner forgets this tab when the stream goes: no cursor until
-      // it is registered again.
-      if (!connection.streaming) sender.suspend();
-      if (recovered) void outbox.resendAll();
-    },
-    status(status, parts) {
-      if (parts.has("connection")) you = status.you?.key ?? null;
-      if (parts.has("mine")) {
-        ui.setPending(status.pending);
-        outbox.markDeliveredExcept(status.undelivered);
-      }
-      for (const answer of status.answers) answers.add(answer);
-      restoreDraft();
-      if (parts.has("settings")) panel.show(status.settings);
-      // Who is "you" may have changed with the connection: draw again.
-      if (parts.has("presence")) showPeople(status.here);
-      else if (parts.has("connection")) showPeople(here);
-      if (parts.has("reload")) onRevision(status.revision);
-    },
-    event(event) {
-      switch (event.type) {
-        case "answer":
-          answers.add(event);
-          break;
-        case "reload":
-          onRevision(event.revision);
-          break;
-        case "delivered":
-          outbox.markDelivered(event.ids);
-          break;
-        case "presence":
-          showPeople(event.here);
-          break;
-        case "settings":
-          panel.show(event);
-          break;
-        case "cursor":
-          if (event.url === url && event.key !== you) layer.update(event.key, event.position);
-          break;
-        case "share":
-        case "status":
-        case "ping":
-          break;
-      }
-    },
-    opened() {
-      register();
-    },
-  }, () => ({ tab: TAB_ID, url, seq: registration.latest }));
+  function applyHello(hello: Hello): void {
+    you = hello.link.you?.key ?? null;
+    showMine(hello.mine);
+    for (const answer of hello.answers) answers.add(answer);
+    restoreDraft();
+    panel.show(hello.settings);
+    showPeople(hello.people);
+    onRevision(hello.revision);
+    connection.setLink(hello.link);
+  }
+
+  function applySlice(slice: Slice): void {
+    switch (slice.type) {
+      case "link":
+        you = slice.you?.key ?? null;
+        // Who is "you" may have changed: draw again.
+        showPeople(here);
+        connection.setLink(slice);
+        break;
+      case "people":
+        showPeople(slice.here);
+        break;
+      case "mine":
+        showMine(slice.undelivered);
+        break;
+      case "settings":
+        panel.show(slice);
+        break;
+      case "reload":
+        onRevision(slice.revision);
+        break;
+      case "answer":
+        answers.add(slice);
+        break;
+      case "cursor":
+        if (slice.url === url && slice.key !== you) layer.update(slice.key, slice.position);
+        break;
+    }
+  }
 
   /**
-   * Tells the joiner where this tab is now; cursors go out only once it
-   * has taken that page (movement meanwhile waits), and never while the
-   * page cannot say (`null`).
+   * Tells the joiner this tab is here and in front. Pointers go out on the
+   * same socket after it, so the joiner reads them on this page; none
+   * while the page cannot say where it is.
    */
-  function register(): void {
-    if (url === null) sender.suspend();
-    else sender.registering();
-    registration.request(url);
+  function report(): void {
+    if (!socket.send({ type: "page", url })) return;
+    sender.setPlaced(url !== null);
   }
-  registration.onConfirmed = (confirmed, seq) => {
-    if (confirmed !== null && confirmed === url && connection.streaming) {
-      sender.confirmed(confirmed, seq);
-    }
-  };
 
   // Single-page apps move without loading: follow the URL, tell the joiner.
   watchUrl((now) => {
     url = now;
     layer.clear();
     layer.setPeople(here, url);
-    if (connection.streaming) register();
-    else sender.suspend();
+    report();
   });
   // The tab in front is where the joiner is.
   const activate = (): void => {
-    if (connection.streaming && document.visibilityState === "visible") register();
+    if (document.visibilityState === "visible") report();
   };
   window.addEventListener("focus", activate);
   document.addEventListener("visibilitychange", activate);
@@ -217,7 +219,7 @@ function install(): void {
 
   list.render();
   if (loadDraft()?.target.kind !== "answer") restoreDraft();
-  void connection.start();
+  socket.start();
 }
 
 if (document.readyState === "loading") {

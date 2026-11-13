@@ -2,15 +2,14 @@
 // share's id), `delivered`, or `unsent` (kept, sent again when the
 // connection is back). Kept in sessionStorage across reloads.
 
-import { submit } from "./api";
 import { MAX_OUTBOX, OUTBOX_KEY } from "./config";
-
-/** Deliveries of not-yet-known comments the page remembers. */
-const MAX_EARLY = 100;
-import type { Queued, Submission } from "./generated/api";
+import type { Outcome, Submission } from "./generated/api";
 
 /** A comment as the page hands it to the joiner, without its ref. */
-export type Draft = Omit<Submission, "ref">;
+export type Draft = Omit<Submission, "ref" | "n">;
+
+/** Hands a comment to the joiner; what became of it. */
+export type Send = (submission: Omit<Submission, "n">) => Promise<Outcome>;
 
 type OutboxState = "queued" | "delivered" | "unsent" | "sending";
 
@@ -81,23 +80,14 @@ export class Outbox {
   readonly entries: OutboxEntry[] = load();
   /** Called after every change, to redraw. */
   onChange: () => void = () => undefined;
-  /** Called with the joiner's reply after a comment was queued. */
-  onQueued: (queued: Queued) => void = () => undefined;
-
   /**
-   * Ids delivered before this page heard they were queued (the delivery
-   * can overtake the joiner's answer to the page); the latest few.
+   * The ids of this joiner's comments the share holds, as the joiner last
+   * said; null while it does not know (a restarted joiner before the
+   * share admitted it).
    */
-  private early: string[] = [];
+  private undelivered: ReadonlySet<string> | null = null;
 
-  /** A queued entry whose delivery came first is delivered. */
-  private settle(entry: OutboxEntry): void {
-    if (entry.state !== "queued" || entry.id === null) return;
-    const index = this.early.indexOf(entry.id);
-    if (index === -1) return;
-    this.early.splice(index, 1);
-    entry.state = "delivered";
-  }
+  constructor(private readonly send: Send) {}
 
   /** Persists the list (bounded) and redraws. */
   changed(): void {
@@ -113,35 +103,53 @@ export class Outbox {
     this.onChange();
   }
 
+  /** A queued entry the share no longer holds was delivered. */
+  private settle(entry: OutboxEntry): void {
+    if (entry.state !== "queued" || entry.id === null || this.undelivered === null) return;
+    if (!this.undelivered.has(entry.id)) entry.state = "delivered";
+  }
+
   /**
-   * A comment about to be sent, kept first: a reload before the joiner's
-   * answer sends it again under the same ref, so it is queued once.
+   * The joiner's word on which of its comments the share holds (null: it
+   * does not know yet, and nothing changes).
    */
-  sending(draft: Draft, ref: string): OutboxEntry {
+  sync(undelivered: readonly string[] | null): void {
+    this.undelivered = undelivered === null ? null : new Set(undelivered);
+    for (const entry of this.entries) this.settle(entry);
+    this.changed();
+  }
+
+  /**
+   * Sends `draft` under `ref`, kept first: a reload before the joiner's
+   * answer sends it again under the same ref, so it is queued once.
+   * Resolves with the outcome once the entry reflects it; a refused
+   * comment is taken out again (it goes back to the dialog).
+   */
+  async submit(draft: Draft, ref: string): Promise<Outcome> {
     const entry: OutboxEntry = { draft, ref, id: null, state: "sending", at: Date.now() };
     this.entries.push(entry);
     this.changed();
-    return entry;
+    const outcome = await this.send({ ref, ...draft });
+    if (typeof outcome !== "string" && "refused" in outcome) {
+      const index = this.entries.indexOf(entry);
+      if (index !== -1) this.entries.splice(index, 1);
+      this.changed();
+    } else {
+      this.take(entry, outcome);
+    }
+    return outcome;
   }
 
-  /** The joiner queued `entry`. */
-  accepted(entry: OutboxEntry, queued: Queued): void {
-    entry.id = queued.id;
-    entry.state = "queued";
-    this.settle(entry);
-    this.changed();
-  }
-
-  /** `entry` did not reach the joiner: kept, sent again later. */
-  unsent(entry: OutboxEntry): void {
-    entry.state = "unsent";
-    this.changed();
-  }
-
-  /** `entry` was refused (rate limit, full queue): back to the dialog. */
-  withdraw(entry: OutboxEntry): void {
-    const index = this.entries.indexOf(entry);
-    if (index !== -1) this.entries.splice(index, 1);
+  /** Records what became of `entry`. */
+  private take(entry: OutboxEntry, outcome: Outcome): void {
+    if (typeof outcome !== "string" && "commented" in outcome) {
+      entry.id = outcome.commented.id;
+      entry.state = "queued";
+      // Delivered already if the joiner's latest word does not hold it.
+      this.settle(entry);
+    } else {
+      entry.state = "unsent";
+    }
     this.changed();
   }
 
@@ -149,44 +157,13 @@ export class Outbox {
     if (entry.state !== "unsent") return;
     entry.state = "sending";
     this.changed();
-    try {
-      const queued = await submit({ ref: entry.ref, ...entry.draft });
-      entry.id = queued.id;
-      entry.state = "queued";
-      this.settle(entry);
-      this.onQueued(queued);
-    } catch {
-      entry.state = "unsent";
-    }
-    this.changed();
+    const outcome = await this.send({ ref: entry.ref, ...entry.draft });
+    this.take(entry, outcome);
   }
 
   async resendAll(): Promise<void> {
     for (const entry of this.entries.filter((candidate) => candidate.state === "unsent")) {
       await this.resend(entry);
     }
-  }
-
-  markDelivered(ids: readonly string[]): void {
-    const delivered = new Set(ids);
-    for (const entry of this.entries) {
-      if (entry.id !== null && delivered.delete(entry.id) && entry.state === "queued") {
-        entry.state = "delivered";
-      }
-    }
-    // Not known here yet: perhaps queued by a request still on its way.
-    this.early.push(...delivered);
-    this.early.splice(0, Math.max(0, this.early.length - MAX_EARLY));
-    this.changed();
-  }
-
-  /** Every queued comment not in `undelivered` was delivered meanwhile. */
-  markDeliveredExcept(undelivered: readonly string[]): void {
-    const held = new Set(undelivered);
-    this.markDelivered(
-      this.entries
-        .filter((entry) => entry.state === "queued" && entry.id !== null && !held.has(entry.id))
-        .map((entry) => entry.id ?? ""),
-    );
   }
 }

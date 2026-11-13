@@ -4,6 +4,7 @@
 
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
+use serde_json::json;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
@@ -21,8 +22,8 @@ use crate::{
     join::Joiner,
     protocol::{agent::Addressee, comment::Comment},
     tests::harness::{
-        DRAFT, connected, events, events_until, fixture_dir, join, joiner_with_key, next_event,
-        post_comment, share_files, until, within,
+        DRAFT, PageSocket, commented, connected, fixture_dir, join, joiner_with_key, post_comment,
+        share_files, until, within,
     },
 };
 
@@ -76,8 +77,8 @@ async fn recv_waits_for_comments_and_delivery_reaches_only_the_author() {
     let share = share_files(&dir).await;
     let alice = join(&share, "alice").await;
     let bob = join(&share, "bob").await;
-    let mut alice_events = events(&alice).await;
-    let mut bob_events = events(&bob).await;
+    let (mut alice_page, _) = PageSocket::hello(&alice).await;
+    let (mut bob_page, _) = PageSocket::hello(&bob).await;
 
     let path = share.socket_path().to_owned();
     let mut waiting = tokio::spawn(async move { recv(&path).await });
@@ -88,30 +89,30 @@ async fn recv_waits_for_comments_and_delivery_reaches_only_the_author() {
             .is_err()
     );
 
-    let reply = post_comment(&alice, DRAFT).await;
-    assert_eq!(reply.status, 202, "{}", reply.body);
+    let id = commented(&alice_page.comment(DRAFT).await).unwrap();
     let comments = within("recv", waiting).await.unwrap();
     let [comment] = comments.as_slice() else {
         panic!("expected one comment, got {comments:?}");
     };
     assert_eq!(comment.author.name.to_string(), "alice");
     assert_eq!(comment.comment, "Bigger, please");
-    assert!(reply.body.contains(&comment.id.to_string()));
+    assert_eq!(comment.id.to_string(), id);
 
-    let delivered = next_event(&mut alice_events, "delivered").await;
-    assert!(delivered.contains(&comment.id.to_string()), "{delivered}");
-    // Bob's connection hears nothing of alice's delivery: an answer sent
-    // to everyone afterwards arrives first.
+    // Alice's page hears of the delivery: nothing pending any more.
+    let mine = alice_page.next_of("mine").await;
+    assert_eq!(mine["undelivered"], json!([]), "{mine}");
+    // Bob's hears nothing of alice's comments: an answer sent to everyone
+    // afterwards arrives first.
     send(share.socket_path(), "after", None).await.unwrap();
-    let seen = events_until(&mut bob_events, "answer").await;
+    let seen = bob_page.until("answer").await;
     assert!(
-        seen.iter().all(|event| !event.contains("\"delivered\"")),
+        seen.iter().all(|message| message["type"] != "mine"),
         "{seen:?}"
     );
     let mut view = alice.watch();
     within(
         "alice's pending to clear",
-        view.wait_for(|view| view.pending == 0),
+        view.wait_for(|view| view.pending() == 0),
     )
     .await
     .unwrap();
@@ -123,7 +124,7 @@ async fn a_recv_that_dies_before_printing_loses_nothing() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let alice = join(&share, "alice").await;
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
 
     // Take the batch by hand and hang up without saying it was printed.
     let mut raw = BufReader::new(UnixStream::connect(share.socket_path()).await.unwrap());
@@ -163,17 +164,23 @@ async fn answers_reach_every_joiner_and_later_ones() {
     let share = share_files(&dir).await;
     let alice = join(&share, "alice").await;
     let bob = join(&share, "bob").await;
-    let mut bob_events = events(&bob).await;
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    let (mut bob_page, _) = PageSocket::hello(&bob).await;
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
     let id = share.queued().first().unwrap().id;
 
     let path = share.socket_path();
     send(path, "**Done**: see [the title](jampot:%23title)", Some(id))
         .await
         .unwrap();
-    let event = next_event(&mut bob_events, "answer").await;
-    assert!(event.contains("<strong>Done</strong>"), "{event}");
-    assert!(event.contains("\"anchor\":\"#title\""), "{event}");
+    let answer = bob_page.next_of("answer").await;
+    assert!(
+        answer["html"]
+            .as_str()
+            .unwrap()
+            .contains("<strong>Done</strong>"),
+        "{answer}"
+    );
+    assert_eq!(answer["anchor"], "#title", "{answer}");
     for joiner in [&alice, &bob] {
         let mut view = joiner.watch();
         let view = within("the answer", view.wait_for(|view| view.answers.len() == 1))
@@ -240,10 +247,11 @@ async fn addressed_answers_reach_only_their_recipient() {
     let error = send_to(path, "hi", None, Some("alice".parse().unwrap()))
         .await
         .unwrap_err();
-    let alice_fp = alice.watch().borrow().you.clone().unwrap().fingerprint;
+    let alice_fp = alice.watch().borrow().link.you.clone().unwrap().fingerprint;
     let other_fp = other_alice
         .watch()
         .borrow()
+        .link
         .you
         .clone()
         .unwrap()
@@ -283,7 +291,7 @@ async fn addressed_answers_reach_only_their_recipient() {
 
     // An answer to a comment goes to its author by default; `all` and no
     // anchor go to everyone.
-    assert_eq!(post_comment(&bob, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&bob, DRAFT).await).is_some());
     let id = share.queued().first().unwrap().id;
     send_to(path, "about your comment", Some(id), None)
         .await
@@ -336,7 +344,7 @@ async fn a_name_cannot_take_a_fingerprint_address() {
     let share = share_files(&dir).await;
     let alice = join(&share, "alice").await;
     let other_alice = join(&share, "alice").await;
-    let alice_fp = alice.watch().borrow().you.clone().unwrap().fingerprint;
+    let alice_fp = alice.watch().borrow().link.you.clone().unwrap().fingerprint;
     // Mallory names herself after alice's fingerprint.
     let mallory = join(&share, &alice_fp.to_string()).await;
     until("four here", || share.hub().presence().len() == 3).await;
@@ -353,7 +361,7 @@ async fn a_name_cannot_take_a_fingerprint_address() {
     send_to(path, "for alice", None, Some(to_alice))
         .await
         .unwrap();
-    let alice_key = alice.watch().borrow().you.clone().unwrap().key;
+    let alice_key = alice.watch().borrow().link.you.clone().unwrap().key;
     let by_key: Addressee = format!("key:{alice_key}").parse().unwrap();
     send_to(path, "for alice again", None, Some(by_key))
         .await

@@ -1,151 +1,53 @@
-// The joiner's endpoints (`/_jampot/api/*`), typed by the bindings
+// The joiner's page API: `api/status`, which says which version of it the
+// joiner speaks, and the messages on its socket, typed by the bindings
 // generated from its Rust types. The joiner may run another jampot than
-// the share this client came from, so `api/status` is checked for the
-// API version before anything else is trusted.
+// the share this client came from, so the version is checked before the
+// socket is opened, and again in its hello.
 
-import {
-  COMMENTS_URL,
-  CURSOR_URL,
-  EVENTS_URL,
-  PAGE_URL,
-  SETTINGS_URL,
-  SHARE_VERSION,
-  STATUS_URL,
-} from "./config";
-import {
-  API_VERSION,
-  type Stamped,
-  type Saved,
-  type Pointer,
-  type Queued,
-  type SettingsChange,
-  type Status,
-  type Submission,
-  type Visit,
-} from "./generated/api";
-
-/** What `api/events` sends: the joiner's events and its keep-alive. */
-export type ServerEvent = Stamped | { type: "ping" };
-
-/** A failed submission; `unsent` when the comment may not have reached the share. */
-export class SubmitError extends Error {
-  constructor(message: string, readonly unsent: boolean) {
-    super(message);
-  }
-}
+import { SHARE_VERSION, STATUS_URL } from "./config";
+import { API_VERSION, type ToPage } from "./generated/api";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function errorMessage(body: unknown, fallback: string): string {
-  return isObject(body) && typeof body.error === "string" ? body.error : fallback;
-}
-
-/**
- * Hands a comment to the joiner. Sending the same `ref` again never
- * queues it twice.
- */
-export async function submit(submission: Submission): Promise<Queued> {
-  let response: Response;
-  try {
-    response = await fetch(COMMENTS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(submission),
-    });
-  } catch {
-    throw new SubmitError("jampot join is not reachable", true);
-  }
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new SubmitError(
-      errorMessage(body, `request failed (${response.status})`),
-      response.status === 503,
-    );
-  }
-  return body as Queued;
-}
-
-type Checked = { status: Status } | { incompatible: string };
-
-/** `api/status`, checked for the API version; null when the joiner is not reachable. */
-export async function fetchStatus(): Promise<Checked | null> {
-  try {
-    const response = await fetch(STATUS_URL);
-    if (!response.ok) return null;
-    return checkVersion(await response.json());
-  } catch {
-    return null;
-  }
-}
-
-function checkVersion(body: unknown): Checked {
-  const api = isObject(body) ? body.api : undefined;
-  if (api === API_VERSION) return { status: body as Status };
+/** Why the joiner cannot serve this page, or null when it can. */
+export function incompatibility(api: unknown, version: unknown): string | null {
+  if (api === API_VERSION) return null;
   const share = SHARE_VERSION ?? "unknown";
-  const joiner = isObject(body) && typeof body.version === "string" ? body.version : "another";
-  const incompatible = typeof api === "number"
+  const joiner = typeof version === "string" ? version : "another";
+  return typeof api === "number"
     ? `jampot versions do not match: the share runs ${share} (page API ${API_VERSION}), ` +
       `your jampot join runs ${joiner} (page API ${api}). ` +
       "Use the same jampot version on both sides and join again."
     : `Your jampot join is older than the share's jampot ${share} and cannot serve this page. ` +
       "Use the same jampot version on both sides and join again.";
-  return { incompatible };
 }
 
-/** The event stream; `tab` and `url` make this page one of the joiner's tabs. */
-export function openEvents(tab: string, page: string | null, seq: number): EventSource {
-  const url = new URL(EVENTS_URL);
-  url.searchParams.set("tab", tab);
-  if (page !== null) url.searchParams.set("url", page);
-  url.searchParams.set("seq", String(seq));
-  return new EventSource(url);
-}
-
-async function post(url: URL, body: unknown): Promise<Response> {
-  return fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
-/** Changes the joiner's settings; the settings as they are now, or why not. */
-export async function changeSettings(change: SettingsChange): Promise<Saved> {
-  let response: Response;
+/**
+ * Asks the joiner which page API it speaks: null when it is not
+ * reachable, "" when it speaks this one, or why it cannot serve the page.
+ */
+export async function probe(): Promise<string | null> {
   try {
-    response = await post(SETTINGS_URL, change);
+    const response = await fetch(STATUS_URL, { cache: "no-store" });
+    if (!response.ok) return null;
+    const body: unknown = await response.json();
+    return incompatibility(
+      isObject(body) ? body.api : undefined,
+      isObject(body) ? body.version : undefined,
+    ) ?? "";
   } catch {
-    throw new Error("jampot join is not reachable");
-  }
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(errorMessage(body, `request failed (${response.status})`));
-  return body as Saved;
-}
-
-/** Tells the joiner this tab is on `visit.url` now (null: it cannot say); false if it did not take it. */
-export async function reportPage(visit: Visit): Promise<boolean> {
-  try {
-    return (await post(PAGE_URL, visit)).ok;
-  } catch {
-    return false;
+    return null;
   }
 }
 
-/** Hands the pointer to the joiner (no position: it left the page). */
-export async function sendCursor(pointer: Pointer): Promise<void> {
+/** A socket message, if `data` is one (unknown types pass: they are ignored). */
+export function parseMessage(data: unknown): ToPage | null {
+  if (typeof data !== "string") return null;
   try {
-    await post(CURSOR_URL, pointer);
-  } catch {
-    // A lost cursor update is replaced by the next movement.
-  }
-}
-
-export function parseEvent(data: string): ServerEvent | null {
-  try {
-    const event: unknown = JSON.parse(data);
-    return isObject(event) && typeof event.type === "string" ? (event as ServerEvent) : null;
+    const message: unknown = JSON.parse(data);
+    return isObject(message) && typeof message.type === "string" ? (message as ToPage) : null;
   } catch {
     return null;
   }

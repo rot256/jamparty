@@ -23,7 +23,7 @@ use crate::{
         hub::{HELD, RETRYING},
     },
     tests::harness::{
-        DRAFT, TestShare, config, fixture_dir, join, post_comment, start, until, within,
+        DRAFT, TestShare, commented, config, fixture_dir, join, post_comment, start, until, within,
     },
 };
 
@@ -72,7 +72,7 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
     let argv = logging_command(&log, &flag);
     let share = share_to(&dir, argv, Duration::from_secs(60), Arc::clone(&clock)).await;
     let alice = join(&share, "alice").await;
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
 
     until("the first attempt", || {
         lines(&log) == 1 && share.hub().wake_at() == Some(t0() + SignedDuration::from_secs(1))
@@ -81,10 +81,11 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
     let mut view = alice.watch();
     let status = within(
         "the status line",
-        view.wait_for(|view| view.status.is_some()),
+        view.wait_for(|view| view.link.status.is_some()),
     )
     .await
     .unwrap()
+    .link
     .status
     .clone()
     .unwrap();
@@ -104,7 +105,7 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
     share.hub().wake();
     within(
         "delivery",
-        view.wait_for(|view| view.pending == 0 && view.status.is_none()),
+        view.wait_for(|view| view.pending() == 0 && view.link.status.is_none()),
     )
     .await
     .unwrap();
@@ -132,7 +133,7 @@ async fn a_missing_command_holds_comments() {
     let clock = Arc::new(ManualClock::new(t0()));
     let share = share_to(&dir, missing, Duration::from_secs(60), clock).await;
     let alice = join(&share, "alice").await;
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
     until("the hold", || {
         share.hub().delivery_state() == DeliveryState::Held
     })
@@ -140,17 +141,18 @@ async fn a_missing_command_holds_comments() {
     let mut view = alice.watch();
     let status = within(
         "the status line",
-        view.wait_for(|view| view.status.is_some()),
+        view.wait_for(|view| view.link.status.is_some()),
     )
     .await
     .unwrap()
+    .link
     .status
     .clone()
     .unwrap();
     // What went wrong stays in the share's log.
     assert_eq!(String::from(status), HELD);
     // New comments still queue, nothing is sent.
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
     assert_eq!(share.queued().len(), 2);
     assert_eq!(share.hub().delivery_state(), DeliveryState::Held);
 }
@@ -169,14 +171,15 @@ async fn a_command_that_takes_too_long_is_killed_and_retried() {
     let clock = Arc::new(ManualClock::new(t0()));
     let share = share_to(&dir, argv, Duration::from_millis(300), clock).await;
     let alice = join(&share, "alice").await;
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
     let mut view = alice.watch();
     let status = within(
         "the status line",
-        view.wait_for(|view| view.status.is_some()),
+        view.wait_for(|view| view.link.status.is_some()),
     )
     .await
     .unwrap()
+    .link
     .status
     .clone()
     .unwrap();

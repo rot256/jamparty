@@ -10,7 +10,9 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, header};
 
-use crate::tests::harness::{Reply, fetch, fixture_dir, join, local, send, share_files};
+use crate::tests::harness::{
+    Reply, SOCKET, fetch, fixture_dir, handshake, join, local, send, share_files,
+};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn host_and_cross_site_rules() {
@@ -76,64 +78,16 @@ async fn host_and_cross_site_rules() {
         .collect();
     assert_eq!(csp, ["frame-ancestors 'self'"]);
 
-    // Another site cannot read pages, the status or the event stream.
-    for path in ["/", "/_jampot/api/status", "/_jampot/api/events"] {
+    // Another site cannot read pages or the status.
+    for path in ["/", "/_jampot/api/status"] {
         let reply = send("GET", path, &cross_fetch).await;
         assert_eq!(reply.status, 403, "{path}");
         assert!(reply.headers.contains_key(header::CONTENT_SECURITY_POLICY));
     }
-    // Nor post a comment, even as a form navigation or with our Origin
-    // claimed by a cross-site fetch.
-    let post_navigate = [
-        ("sec-fetch-site", "cross-site"),
-        ("sec-fetch-mode", "navigate"),
-        ("sec-fetch-dest", "document"),
-        ("origin", "http://evil.example"),
-    ];
-    let cross_post = [
-        ("sec-fetch-site", "cross-site"),
-        ("origin", origin.as_str()),
-    ];
-    for path in [
-        "/_jampot/api/comments",
-        "/_jampot/api/settings",
-        "/_jampot/api/page",
-        "/_jampot/api/cursor",
-    ] {
-        for headers in [&post_navigate[..], &cross_post[..]] {
-            assert_eq!(send("POST", path, headers).await.status, 403, "{path}");
-        }
-        // Same-origin writes need the exact Origin.
-        let same_site = [("sec-fetch-site", "same-site"), ("origin", origin.as_str())];
-        assert_eq!(send("POST", path, &same_site).await.status, 403, "{path}");
-        let evil = [("origin", "http://evil.example")];
-        assert_eq!(send("POST", path, &evil).await.status, 403, "{path}");
-        // Only POST.
-        assert_eq!(send("GET", path, &[]).await.status, 405, "{path}");
-    }
-    // Same-origin writes need the exact Origin.
-    let same_site_wrong_origin = [("sec-fetch-site", "same-site"), ("origin", origin.as_str())];
-    assert_eq!(
-        send("POST", "/_jampot/api/comments", &same_site_wrong_origin)
-            .await
-            .status,
-        403
-    );
-    assert_eq!(
-        send(
-            "POST",
-            "/_jampot/api/comments",
-            &[("origin", "http://evil.example")]
-        )
-        .await
-        .status,
-        403
-    );
-    // Upgrades need the exact Origin too.
+    // Upgrades elsewhere need the exact Origin too.
     let upgrade = [("connection", "upgrade"), ("upgrade", "websocket")];
     assert_eq!(send("GET", "/socket", &upgrade).await.status, 403);
     // Reserved paths take only their method.
-    assert_eq!(send("GET", "/_jampot/api/comments", &[]).await.status, 405);
     assert_eq!(
         send(
             "POST",
@@ -144,21 +98,50 @@ async fn host_and_cross_site_rules() {
         .status,
         405
     );
-    // A same-origin POST with the right Origin reaches the handler, which
-    // then wants JSON.
-    assert_eq!(
-        send(
-            "POST",
-            "/_jampot/api/comments",
-            &[
-                ("origin", origin.as_str()),
-                ("sec-fetch-site", "same-origin")
-            ]
-        )
-        .await
-        .status,
-        415
-    );
+    assert_eq!(send("GET", SOCKET, &[]).await.status, 405);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_socket_needs_the_exact_origin() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let joiner = join(&share, "alice").await;
+    let origin = joiner.origin().origin().to_owned();
+    let port = joiner.local_addr().port();
+    let open = |origin: Option<String>, headers: &[(&'static str, &'static str)]| {
+        let mut request = handshake(&joiner, origin.as_deref());
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        fetch(&joiner, request.body(Full::default()).unwrap())
+    };
+    // Another site's page, a forged or near-miss Origin, or none at all.
+    for wrong in [
+        None,
+        Some("null".to_owned()),
+        Some("http://evil.example".to_owned()),
+        Some(origin.replace("http://", "https://")),
+        Some(format!("{origin}/")),
+        Some(origin.replace(&port.to_string(), "1")),
+        Some(format!("http://localhost:{port}")),
+    ] {
+        assert_eq!(open(wrong.clone(), &[]).await.status, 403, "{wrong:?}");
+    }
+    // A cross-site fetch claiming our Origin.
+    let cross = [("sec-fetch-site", "cross-site")];
+    assert_eq!(open(Some(origin.clone()), &cross).await.status, 403);
+    // Our Origin, from our page (or without fetch metadata): it opens.
+    let same = [("sec-fetch-site", "same-origin")];
+    let opened = open(Some(origin.clone()), &same).await;
+    assert_eq!(opened.status, 101, "{}", opened.body);
+    // Anything but a version-13 WebSocket handshake is refused.
+    let mut request = handshake(&joiner, Some(&origin))
+        .body(Full::default())
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("sec-websocket-version", "8".parse().unwrap());
+    assert_eq!(fetch(&joiner, request).await.status, 400);
 }
 
 #[tokio::test(flavor = "multi_thread")]

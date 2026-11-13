@@ -1,12 +1,14 @@
 """What the browser tests share: running `jampot` processes, joining a
 share and talking to the joiner's local server."""
 
+import base64
 import hashlib
 import http.client
 import json
 import os
 import queue
 import re
+import socket
 import subprocess
 import tempfile
 import threading
@@ -207,10 +209,96 @@ def wait_connected(joined: Joined) -> None:
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
         try:
-            status, body = request(joined, "/_jampot/api/status")
+            if cast(dict[str, object], hello(joined)["link"])["connected"]:
+                return
         except OSError:
-            status, body = 0, b""
-        if status == 200 and cast(dict[str, object], json.loads(body))["connected"]:
-            return
+            pass
         time.sleep(0.05)
     pytest.fail("the joiner was not admitted")
+
+
+class PageSocket:
+    """The joiner's page socket (`api/socket`), spoken by hand: what a page
+    on the joiner's origin is told, as an oracle for the tests."""
+
+    def __init__(self, joined: Joined, origin: str | None = None) -> None:
+        self.sock: socket.socket = socket.create_connection(
+            ("127.0.0.1", joined.port), timeout=TIMEOUT
+        )
+        key = base64.b64encode(os.urandom(16)).decode()
+        origin = f"http://{joined.host}" if origin is None else origin
+        handshake = (
+            f"GET /_jampot/api/socket HTTP/1.1\r\nHost: {joined.host}\r\n"
+            + "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            + f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+            + f"Origin: {origin}\r\n\r\n"
+        )
+        self.sock.sendall(handshake.encode())
+        self.buffer: bytes = b""
+        while b"\r\n\r\n" not in self.buffer:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                break
+            self.buffer += chunk
+        head, _, self.buffer = self.buffer.partition(b"\r\n\r\n")
+        self.status: int = int(head.split(b" ")[1]) if head else 0
+
+    def _read(self, size: int) -> bytes:
+        while len(self.buffer) < size:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise OSError("the socket closed")
+            self.buffer += chunk
+        data, self.buffer = self.buffer[:size], self.buffer[size:]
+        return data
+
+    def next(self) -> dict[str, object]:
+        """The next message (the joiner's frames are unmasked and whole)."""
+        while True:
+            first, second = self._read(2)
+            size = second & 0x7F
+            if size == 126:
+                size = int.from_bytes(self._read(2))
+            elif size == 127:
+                size = int.from_bytes(self._read(8))
+            payload = self._read(size)
+            opcode = first & 0x0F
+            if opcode == 0x8:
+                raise OSError("the joiner closed the socket")
+            if opcode == 0x1:
+                return cast(dict[str, object], json.loads(payload))
+
+    def send(self, message: dict[str, object]) -> None:
+        payload = json.dumps(message).encode()
+        mask = os.urandom(4)
+        size = len(payload)
+        if size < 126:
+            head = bytes([0x81, 0x80 | size])
+        elif size < 1 << 16:
+            head = bytes([0x81, 0x80 | 126]) + size.to_bytes(2)
+        else:
+            head = bytes([0x81, 0x80 | 127]) + size.to_bytes(8)
+        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        self.sock.sendall(head + mask + masked)
+
+    def request(self, message: dict[str, object]) -> dict[str, object]:
+        """Sends a request (numbered 1) and returns its reply."""
+        self.send({**message, "n": 1})
+        while True:
+            reply = self.next()
+            if reply["type"] == "reply" and reply["to"] == 1:
+                return reply
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+def hello(joined: Joined) -> dict[str, object]:
+    """What a page connecting now is told first: the joiner's state."""
+    page = PageSocket(joined)
+    try:
+        first = page.next()
+        assert first["type"] == "hello", first
+        return first
+    finally:
+        page.close()

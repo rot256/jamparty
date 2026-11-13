@@ -26,7 +26,8 @@ use crate::{
     tests::{
         fake_t3::{FakeT3, FakeThread, State},
         harness::{
-            DRAFT, TestShare, config, fixture_dir, join, post_comment, start, until, within,
+            DRAFT, TestShare, commented, config, fixture_dir, join, post_comment, start, until,
+            within,
         },
     },
 };
@@ -151,9 +152,9 @@ async fn deliver_one(sse: bool) {
     t3::open(&target).await.unwrap();
     let share = share_to(&dir, target, Arc::new(ManualClock::new(t0()))).await;
     let alice = join(&share, "alice").await;
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
     let mut view = alice.watch();
-    within("delivery", view.wait_for(|view| view.pending == 0))
+    within("delivery", view.wait_for(|view| view.pending() == 0))
         .await
         .unwrap();
     let [send] = fake.calls_to("t3_thread_send").try_into().unwrap();
@@ -200,7 +201,7 @@ async fn an_http_error_backs_off_on_the_clock_then_delivers() {
     let clock = Arc::new(ManualClock::new(t0()));
     let share = share_to(&dir, target(&fake, &token, "top"), Arc::clone(&clock)).await;
     let alice = join(&share, "alice").await;
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
     until("the backoff", || {
         share.hub().wake_at() == Some(t0() + SignedDuration::from_secs(1))
     })
@@ -208,10 +209,11 @@ async fn an_http_error_backs_off_on_the_clock_then_delivers() {
     let mut view = alice.watch();
     let status = within(
         "the status line",
-        view.wait_for(|view| view.status.is_some()),
+        view.wait_for(|view| view.link.status.is_some()),
     )
     .await
     .unwrap()
+    .link
     .status
     .clone()
     .unwrap();
@@ -220,13 +222,13 @@ async fn an_http_error_backs_off_on_the_clock_then_delivers() {
     assert_eq!(fake.calls_to("t3_thread_send").len(), 1);
     // A comment arriving meanwhile goes in a batch of its own.
     let later = DRAFT.replace("Bigger, please", "Later");
-    assert_eq!(post_comment(&alice, &later).await.status, 202);
+    assert!(commented(&post_comment(&alice, &later).await).is_some());
 
     clock.advance(SignedDuration::from_secs(1));
     share.hub().wake();
     within(
         "delivery",
-        view.wait_for(|view| view.pending == 0 && view.status.is_none()),
+        view.wait_for(|view| view.pending() == 0 && view.link.status.is_none()),
     )
     .await
     .unwrap();
@@ -266,14 +268,15 @@ async fn a_thread_gone_during_delivery_holds_comments() {
     fake.state().unsendable.insert("top".to_owned());
     let share = share_to(&dir, target, Arc::new(ManualClock::new(t0()))).await;
     let alice = join(&share, "alice").await;
-    assert_eq!(post_comment(&alice, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
     let mut view = alice.watch();
     let status = within(
         "the status line",
-        view.wait_for(|view| view.status.is_some()),
+        view.wait_for(|view| view.link.status.is_some()),
     )
     .await
     .unwrap()
+    .link
     .status
     .clone()
     .unwrap();

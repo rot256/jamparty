@@ -3,12 +3,13 @@
 const SCRIPT_URL = new URL(import.meta.url);
 const BASE = new URL("./", SCRIPT_URL);
 
-export const COMMENTS_URL = new URL("api/comments", BASE);
 export const STATUS_URL = new URL("api/status", BASE);
-export const EVENTS_URL = new URL("api/events", BASE);
-export const SETTINGS_URL = new URL("api/settings", BASE);
-export const PAGE_URL = new URL("api/page", BASE);
-export const CURSOR_URL = new URL("api/cursor", BASE);
+/** The joiner's socket for this page, on the same host. */
+export const SOCKET_URL = ((): URL => {
+  const url = new URL("api/socket", BASE);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url;
+})();
 
 /** The live-reload revision this page was served at (shared directories only). */
 export const LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
@@ -20,8 +21,11 @@ export const DISMISSED_KEY = "jampot-dismissed-v1";
 export const OUTBOX_KEY = "jampot-outbox-v1";
 export const DRAFT_KEY = "jampot-draft-v1";
 export const MAX_OUTBOX = 20;
-/** The joiner pings every 15 s; a stream silent for longer than this is dead. */
+/** The joiner pings every 15 s; a socket silent for longer than this is dead. */
 export const WATCHDOG_MS = 35000;
+/** The first wait before reconnecting to the joiner, doubled up to the most. */
+export const RECONNECT_MIN_MS = 250;
+export const RECONNECT_MAX_MS = 5000;
 /** Selectors of agent answers, for comments on an answer. */
 export const AGENT_TARGET_PREFIX = "jampot-agent:";
 /** Cursor messages per second at most (docs/ui.md: about 15). */

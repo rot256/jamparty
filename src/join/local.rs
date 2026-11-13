@@ -27,7 +27,7 @@ use crate::{
     core::request::{
         FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade, is_navigation,
     },
-    join::{api, control::Control, session::Session},
+    join::{api, control::Control, session::Session, socket},
     share::{
         HEADER_READ_TIMEOUT,
         body::{AppBody, RequestError, full_body, map_incoming_response},
@@ -98,12 +98,8 @@ async fn handle(
     let page_load = is_navigation(&request_facts);
     let decision = origin.decide(&request_facts);
     let mut response = match decision {
-        Ok(Route::Comments) => api::comment(request, session).await,
-        Ok(Route::Status) => api::status(session),
-        Ok(Route::Events) => api::events(session, request.uri().query()),
-        Ok(Route::Page) => api::page(request, session).await,
-        Ok(Route::Cursor) => api::cursor(request, session).await,
-        Ok(Route::Settings) => api::settings(request, session).await,
+        Ok(Route::Status) => api::status(),
+        Ok(Route::Socket) => socket::open(request, session),
         Ok(Route::Proxy) => match forward(request, session, connect_wait).await {
             Ok(response) => response,
             Err(error) if page_load && error.status == StatusCode::BAD_GATEWAY => {
@@ -216,11 +212,11 @@ async fn connection(session: &Session, wait: Duration) -> Option<Arc<Control>> {
     if let Some(control) = session.control() {
         return Some(control);
     }
-    let mut view = session.watch();
+    let mut snapshot = session.watch();
     // Timing out is the "not reachable" answer the caller gives.
     let _ = time::timeout(
         wait,
-        view.wait_for(|view| view.connected || view.refused.is_some()),
+        snapshot.wait_for(|snapshot| snapshot.link.connected || snapshot.link.refused.is_some()),
     )
     .await;
     session.control()

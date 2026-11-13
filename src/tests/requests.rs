@@ -49,7 +49,7 @@ async fn static_files_with_the_client_injected() {
 
     let client = get(&joiner, "/_jampot/client.js").await;
     assert_eq!(client.status, 200);
-    assert!(client.body.contains("api/events"));
+    assert!(client.body.contains("api/socket"));
 
     for hidden in ["/.secret", "/%2esecret", "/missing", "/_jampot/other"] {
         assert_eq!(get(&joiner, hidden).await.status, 404, "{hidden}");
@@ -217,11 +217,14 @@ async fn without_the_share_a_page_load_gets_a_page_that_retries() {
     )
     .await;
     let mut view = joiner.watch();
-    within("admission", view.wait_for(|view| view.connected))
+    within("admission", view.wait_for(|view| view.link.connected))
         .await
         .unwrap();
     share.stop().await;
-    until("the joiner notices", || !joiner.watch().borrow().connected).await;
+    until("the joiner notices", || {
+        !joiner.watch().borrow().link.connected
+    })
+    .await;
 
     let page = load_page(&joiner, "/").await;
     assert_eq!(page.status, StatusCode::SERVICE_UNAVAILABLE);

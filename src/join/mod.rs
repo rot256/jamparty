@@ -6,10 +6,14 @@ mod connection;
 mod control;
 mod local;
 mod markdown;
+mod pages;
+mod preferences;
 mod session;
+mod socket;
+mod state;
+mod uplink;
 #[cfg(test)]
-pub(crate) use crate::join::session::REPORT_GAP;
-mod tabs;
+pub(crate) use crate::join::{pages::PAGE_QUEUE, uplink::REPORT_GAP};
 
 use std::{
     error::Error,
@@ -38,11 +42,8 @@ use crate::{
         endpoint::{Accept, NetConfig, bind},
         settings,
     },
-    core::{name::JoinerName, port::Port, request::LocalOrigin, rng::SystemRng, token::PartyToken},
-    join::{
-        connection::Dial,
-        session::{Epoch, Preferences, Session, View},
-    },
+    core::{name::JoinerName, port::Port, request::LocalOrigin, token::PartyToken},
+    join::{connection::Dial, preferences::Preferences, session::Session, state::Snapshot},
     protocol::control::{RefusedReason, SiteInfo},
 };
 
@@ -265,7 +266,7 @@ impl Joiner {
             given: name,
             default: default_name,
         };
-        let session = Arc::new(Session::new(preferences, Epoch::generate(&SystemRng)));
+        let session = Arc::new(Session::new(preferences));
         let sid = token.share.sid();
         let endpoint = bind(&net, key, Accept::Nothing).await?;
         let dial = Dial {
@@ -276,7 +277,7 @@ impl Joiner {
         let mut tasks = JoinSet::new();
         let (first, admitted) = oneshot::channel();
         tasks.spawn(connection::run(dial, Arc::clone(&session), first));
-        tasks.spawn(session::report_changes(Arc::clone(&session)));
+        tasks.spawn(uplink::run(Arc::clone(&session)));
         let site = match admitted.await {
             Ok(Ok(site)) => site,
             Ok(Err(reason)) => {
@@ -340,9 +341,9 @@ impl Joiner {
         &self.origin
     }
 
-    /// The session state, as `api/status` reports it.
+    /// The session state, as pages are told it.
     #[must_use]
-    pub(crate) fn watch(&self) -> watch::Receiver<View> {
+    pub(crate) fn watch(&self) -> watch::Receiver<Snapshot> {
         self.session.watch()
     }
 

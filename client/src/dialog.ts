@@ -3,7 +3,6 @@
 // written is kept as a draft (see draft.ts) and comes back after a reload;
 // once sent, it is the outbox's (sent again under its ref if need be).
 
-import { SubmitError, submit } from "./api";
 import { type Captured, captureTarget, capturePageTarget } from "./capture";
 import { AGENT_TARGET_PREFIX } from "./config";
 import { type DraftKind, type DraftTarget, clearDraft, loadDraft, saveDraft } from "./draft";
@@ -38,6 +37,8 @@ export class CommentDialog {
   constructor(
     private readonly ui: Ui,
     private readonly outbox: Outbox,
+    /** How many of this joiner's comments the share holds. */
+    private readonly pending: () => number,
   ) {
     const { dialog, form, textarea, cancel } = ui;
     form.addEventListener("submit", (event) => {
@@ -248,34 +249,24 @@ export class CommentDialog {
     const ref = crypto.randomUUID();
     // The outbox has it (and its ref) before it goes: a reload before the
     // answer sends it again rather than bringing back a draft to send anew.
-    const entry = this.outbox.sending(draft, ref);
     this.sending = true;
     clearDraft();
-    submit({ ref, ...draft })
-      .then((queued) => {
-        this.outbox.accepted(entry, queued);
-        this.outbox.onQueued(queued);
+    void this.outbox.submit(draft, ref).then((outcome) => {
+      this.sending = false;
+      ui.send.disabled = false;
+      ui.cancel.disabled = false;
+      if (outcome === "saved" || "commented" in outcome) {
         this.close();
-        ui.showToast(`Comment queued · ${queued.pending} pending`);
-      })
-      .catch((error: unknown) => {
-        if (error instanceof SubmitError && error.unsent) {
-          this.outbox.unsent(entry);
-          this.close();
-          ui.showToast("Not sent: kept in the page, sent when the connection is back");
-          return;
-        }
-        // Refused (too many, a full queue): the dialog's again, and a draft.
-        this.outbox.withdraw(entry);
-        this.sending = false;
+        ui.showToast(`Comment queued · ${this.pending()} pending`);
+      } else if ("unsent" in outcome) {
+        this.close();
+        ui.showToast("Not sent: kept in the page, sent when the connection is back");
+      } else {
+        // Refused (too many, invalid): the dialog's again, and a draft.
         this.keep();
-        ui.status.textContent = error instanceof Error ? error.message : "Could not queue comment";
+        ui.status.textContent = outcome.refused.error;
         ui.textarea.focus();
-      })
-      .finally(() => {
-        this.sending = false;
-        ui.send.disabled = false;
-        ui.cancel.disabled = false;
-      });
+      }
+    });
   }
 }

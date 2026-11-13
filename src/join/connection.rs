@@ -126,9 +126,7 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
             }
         };
     let control = Arc::new(Control::new(connection, send, presence));
-    session
-        .connected(Arc::clone(&control), you, &undelivered)
-        .await;
+    session.connected(Arc::clone(&control), you, &undelivered);
     if let Some(first) = first.take() {
         let _ = first.send(Ok(site));
     }

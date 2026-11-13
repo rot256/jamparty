@@ -7,12 +7,10 @@
 // without a position. Positions are element-relative: the element's
 // selector and fractions of its box, never viewport coordinates.
 
-import { sendCursor } from "./api";
 import { cssSelector } from "./capture";
 import { CURSOR_FADE_MS, CURSOR_RATE } from "./config";
 import { FRACTION_ONE, MAX_CURSOR_SELECTOR } from "./generated/api";
-import type { Person, Pointer, Position } from "./generated/api";
-import { TAB_ID } from "./location";
+import type { Person, Position } from "./generated/api";
 import { colourOf } from "./panel";
 import type { Ui } from "./ui";
 
@@ -23,35 +21,25 @@ function fraction(offset: number, size: number): number {
   return Math.round(Math.min(1, Math.max(0, offset / size)) * FRACTION_ONE);
 }
 
-/** What is waiting to go out: a position, or the pointer left (null). */
-interface Pending {
-  position: Position | null;
-}
-
 export class CursorSender {
   private on = false;
   /**
-   * The page the joiner confirmed for this tab, and the number of that
-   * report; null while it has none (not yet confirmed, being changed, or
-   * not representable). Nothing is sent then.
+   * The socket is up and has been told this page's URL: pointers go out
+   * on it, after that report, so the joiner reads them on that page.
    */
-  private page: { url: string; seq: number } | null = null;
-  /**
-   * A representable page awaits the joiner's confirmation: movement meanwhile
-   * is kept (the latest) and sent once it is confirmed.
-   */
-  private awaiting = false;
+  private placed = false;
   /** The latest pointer position not yet sent. */
   private latest: { x: number; y: number } | null = null;
   private lastSent = 0;
   private timer: number | undefined;
   /** Whether others currently see this pointer (a position went out). */
   private present = false;
-  /** At most one request in flight, and one waiting: only the latest. */
-  private pending: Pending | null = null;
-  private sending = false;
 
-  constructor(private readonly ui: Ui) {
+  constructor(
+    private readonly ui: Ui,
+    /** Sends a pointer message; false if it could not. */
+    private readonly send: (position: Position | null) => boolean,
+  ) {
     document.addEventListener("pointermove", (event) => { this.moved(event); }, {
       capture: true,
       passive: true,
@@ -64,7 +52,7 @@ export class CursorSender {
   }
 
   private get active(): boolean {
-    return this.on && this.page !== null;
+    return this.on && this.placed;
   }
 
   /** Forgets everything not sent yet. */
@@ -72,7 +60,6 @@ export class CursorSender {
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
     this.latest = null;
-    this.pending = null;
     this.present = false;
   }
 
@@ -83,36 +70,18 @@ export class CursorSender {
   }
 
   /**
-   * The page is being registered with the joiner: nothing is sent until it
-   * is confirmed, but the latest movement is kept for then.
+   * Whether the joiner has this page's URL: true right after telling it,
+   * false while the socket is down or the page cannot say where it is.
    */
-  registering(): void {
-    const latest = this.latest;
-    this.page = null;
-    this.reset();
-    this.awaiting = true;
-    this.latest = latest;
-  }
-
-  /** The joiner took `url` for this tab, with report number `seq`. */
-  confirmed(url: string, seq: number): void {
-    this.page = { url, seq };
-    this.awaiting = false;
-    if (this.latest !== null) this.schedule();
-  }
-
-  /** No page (not representable, or no event stream): nothing is kept or sent. */
-  suspend(): void {
-    this.page = null;
-    this.awaiting = false;
-    this.reset();
+  setPlaced(placed: boolean): void {
+    this.placed = placed;
+    if (!placed) this.reset();
   }
 
   private moved(event: PointerEvent): void {
-    if (!this.on || event.pointerType === "touch") return;
-    if (this.page === null && !this.awaiting) return;
+    if (!this.active || event.pointerType === "touch") return;
     this.latest = { x: event.clientX, y: event.clientY };
-    if (this.page !== null) this.schedule();
+    this.schedule();
   }
 
   /** Sends the latest movement now, or at the end of the rate window. */
@@ -136,8 +105,7 @@ export class CursorSender {
     const position = this.position(latest.x, latest.y);
     if (position === null) return;
     this.lastSent = performance.now();
-    this.present = true;
-    this.enqueue(position);
+    this.present = this.send(position);
   }
 
   /** The pointer left the page: one message without a position. */
@@ -147,7 +115,7 @@ export class CursorSender {
     this.latest = null;
     if (!this.active || !this.present) return;
     this.present = false;
-    this.enqueue(null);
+    this.send(null);
   }
 
   /** The element under the point (not jampot's own overlay) and the offset in its box. */
@@ -164,29 +132,6 @@ export class CursorSender {
       x: fraction(x - rect.left, rect.width),
       y: fraction(y - rect.top, rect.height),
     };
-  }
-
-  /** Replaces whatever waits (a leave replaces positions too). */
-  private enqueue(position: Position | null): void {
-    this.pending = { position };
-    void this.pump();
-  }
-
-  private async pump(): Promise<void> {
-    if (this.sending) return;
-    this.sending = true;
-    for (let next = this.pending; next !== null; next = this.pending) {
-      this.pending = null;
-      // The switch and the page are checked right before each send.
-      const page = this.page;
-      if (!this.on || page === null) break;
-      const { url, seq } = page;
-      const pointer: Pointer = next.position === null
-        ? { tab: TAB_ID, seq, url }
-        : { tab: TAB_ID, seq, url, position: next.position };
-      await sendCursor(pointer);
-    }
-    this.sending = false;
   }
 }
 

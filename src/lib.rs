@@ -532,10 +532,10 @@ async fn join(
         Open::Browser => open_browser(&url),
         Open::No => {}
     }
-    let mut view = joiner.watch();
+    let mut snapshot = joiner.watch();
     let refused = tokio::select! {
-        refused = view.wait_for(|view| view.refused.is_some()) => {
-            refused.ok().and_then(|view| view.refused)
+        refused = snapshot.wait_for(|snapshot| snapshot.link.refused.is_some()) => {
+            refused.ok().and_then(|snapshot| snapshot.link.refused)
         }
         signal = shutdown_signal() => {
             signal?;

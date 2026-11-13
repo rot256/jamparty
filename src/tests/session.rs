@@ -1,23 +1,34 @@
-//! Comments, presence, the share stopping and reconnection.
+//! Comments, presence, the share stopping and reconnection, and the page
+//! socket: its hello, the order of its messages, slow pages.
 
 use std::time::Duration;
 
 use futures_util::FutureExt;
-use http_body_util::{BodyExt, Full};
 use iroh::endpoint::VarInt;
+use serde_json::{Value, json};
 use tokio::{net::UnixStream, time};
 
 use crate::{
     adapters::endpoint::generate_key,
     agent,
     core::{ids::EndpointKey, rng::SystemRng},
-    protocol::comment::Draft,
+    join::PAGE_QUEUE,
+    protocol::{agent::Addressee, comment::Draft},
     share::hub::MAX_JOINERS_PER_KEY,
     tests::harness::{
-        DRAFT, connected, events, fixture_dir, get, join, joiner_with_key, local, next_event,
-        post_comment, post_json, send, share_files, until, within,
+        DRAFT, PageSocket, about, commented, connected, fixture_dir, get, join, joiner_with_key,
+        post_comment, share_files, until, within,
     },
 };
+
+/// A page's comment request for `draft`, under `reference`.
+fn comment_request(draft: &str, reference: &str) -> Value {
+    let mut body: Value = serde_json::from_str(draft).unwrap();
+    let object = body.as_object_mut().unwrap();
+    object.insert("type".to_owned(), "comment".into());
+    object.insert("ref".to_owned(), reference.into());
+    body
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn comments_are_queued_with_the_author_from_admission() {
@@ -28,9 +39,15 @@ async fn comments_are_queued_with_the_author_from_admission() {
     let joiner = joiner_with_key(share.token().clone(), share.direct_addrs(), "alice", key).await;
     connected(&joiner).await;
 
-    let reply = post_comment(&joiner, DRAFT).await;
-    assert_eq!(reply.status, 202, "{}", reply.body);
-    assert!(reply.body.contains("\"pending\":1"), "{}", reply.body);
+    let (mut page, _) = PageSocket::hello(&joiner).await;
+    let seen = about(page.request(comment_request(DRAFT, "first-ref")).await);
+    // The comment is in `mine` before the reply says it is queued.
+    let [mine, reply] = seen.as_slice() else {
+        panic!("{seen:?}");
+    };
+    let id = commented(&reply["outcome"]).unwrap();
+    assert_eq!(mine["type"], "mine", "{mine}");
+    assert_eq!(mine["undelivered"], json!([id]), "{mine}");
 
     let queued = share.queued();
     let [comment] = queued.as_slice() else {
@@ -39,41 +56,42 @@ async fn comments_are_queued_with_the_author_from_admission() {
     assert_eq!(comment.author.name.to_string(), "alice");
     assert_eq!(comment.author.key, public);
     assert_eq!(comment.author.fingerprint, public.fingerprint());
-    let you = joiner.watch().borrow().you.clone().unwrap();
+    let you = joiner.watch().borrow().link.you.clone().unwrap();
     assert_eq!(comment.author, you);
     assert_eq!(comment.comment, "Bigger, please");
     assert_eq!(comment.selected_text.as_deref(), Some("Fixture"));
-    assert!(reply.body.contains(&comment.id.to_string()));
+    assert_eq!(comment.id.to_string(), id);
 
-    // A draft cannot claim an author.
+    // A draft cannot claim an author, and must be one.
     let forged = DRAFT.replace(
         '}',
         r#","author":{"name":"bob","fingerprint":"0000000000"}}"#,
     );
-    assert_eq!(post_comment(&joiner, &forged).await.status, 400);
-    assert_eq!(post_comment(&joiner, "{}").await.status, 400);
+    let refused = page.comment(&forged).await;
+    assert!(refused["refused"]["error"].is_string(), "{refused}");
+    let refused = page.comment(r#"{"comment":"no page"}"#).await;
+    assert!(refused["refused"]["error"].is_string(), "{refused}");
     assert_eq!(share.queued().len(), 1);
 
-    let status = get(&joiner, "/_jampot/api/status").await;
-    assert!(status.body.contains("\"pending\":1"), "{}", status.body);
-    assert!(
-        status.body.contains("\"connected\":true"),
-        "{}",
-        status.body
-    );
+    // A page that connects now is told all of it.
+    let (_, hello) = PageSocket::hello(&joiner).await;
+    assert_eq!(hello["mine"], json!([id]), "{hello}");
+    assert_eq!(hello["link"]["connected"], true, "{hello}");
+    assert_eq!(hello["api"], 3, "{hello}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn rate_limit_answers_429() {
+async fn the_rate_limit_says_how_long_to_wait() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let joiner = join(&share, "alice").await;
+    let (mut page, _) = PageSocket::hello(&joiner).await;
     for _ in 0..10 {
-        assert_eq!(post_comment(&joiner, DRAFT).await.status, 202);
+        assert!(commented(&page.comment(DRAFT).await).is_some());
     }
-    let limited = post_comment(&joiner, DRAFT).await;
-    assert_eq!(limited.status, 429);
-    assert!(limited.body.contains("retryAfterSecs"), "{}", limited.body);
+    let limited = page.comment(DRAFT).await;
+    let wait = limited["refused"]["retryAfterSecs"].as_u64();
+    assert!(wait.is_some_and(|secs| secs > 0), "{limited}");
     assert_eq!(share.queued().len(), 10);
 }
 
@@ -87,51 +105,31 @@ async fn presence_follows_two_joiners() {
     let mut view = alice.watch();
     within(
         "both in presence",
-        view.wait_for(|view| view.joiners.len() == 2),
+        view.wait_for(|view| view.people.len() == 2),
     )
     .await
     .unwrap();
     let names: Vec<String> = view
         .borrow()
-        .joiners
+        .people
         .iter()
-        .map(|author| author.name.to_string())
+        .map(|person| person.name.to_string())
         .collect();
     assert_eq!(names, ["alice", "bob"]);
     assert_eq!(share.presence().len(), 2);
 
-    // Presence also streams to pages.
-    let events = local(&alice, "GET", "/_jampot/api/events")
-        .body(Full::default())
-        .unwrap();
-    let response = send(alice.local_addr(), events).await;
-    assert_eq!(response.status(), 200);
-    let mut body = response.into_body();
-    let first = within("the first event", body.frame())
-        .await
-        .unwrap()
-        .unwrap();
-    let first = String::from_utf8(first.into_data().unwrap().to_vec()).unwrap();
-    assert!(first.starts_with("data: {\"epoch\":"), "{first}");
-    assert!(
-        first.ends_with(",\"type\":\"share\",\"connected\":true}\n\n"),
-        "{first}"
-    );
+    // Presence also goes to pages: in the hello first.
+    let (mut page, hello) = PageSocket::hello(&alice).await;
+    assert_eq!(hello["people"].as_array().unwrap().len(), 2, "{hello}");
 
     bob.stop().await;
-    within("bob gone", view.wait_for(|view| view.joiners.len() == 1))
+    within("bob gone", view.wait_for(|view| view.people.len() == 1))
         .await
         .unwrap();
     // Presence that still lists bob may be on its way when he leaves (it is
-    // coalesced); the stream must come to one without him.
-    within("a presence event without bob", async {
-        loop {
-            let frame = body.frame().await.unwrap().unwrap();
-            let event = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
-            if event.contains("\"type\":\"presence\"") && !event.contains("bob") {
-                break;
-            }
-        }
+    // coalesced); the socket must come to one without him.
+    within("people without bob", async {
+        while page.next_of("people").await.to_string().contains("bob") {}
     })
     .await;
     until("the share to drop bob", || share.presence().len() == 1).await;
@@ -145,11 +143,12 @@ async fn stopping_the_share_disconnects_joiners() {
     assert_eq!(get(&joiner, "/").await.status, 200);
     share.stop().await;
     let mut view = joiner.watch();
-    within("the disconnect", view.wait_for(|view| !view.connected))
+    within("the disconnect", view.wait_for(|view| !view.link.connected))
         .await
         .unwrap();
     assert_eq!(get(&joiner, "/").await.status, 502);
-    assert_eq!(post_comment(&joiner, DRAFT).await.status, 503);
+    let unsent = post_comment(&joiner, DRAFT).await;
+    assert!(unsent["unsent"]["error"].is_string(), "{unsent}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -160,7 +159,7 @@ async fn the_joiner_reconnects_after_losing_the_connection() {
     let first = joiner.connection().unwrap();
     first.close(VarInt::from_u32(0), b"test drop");
     let mut view = joiner.watch();
-    within("the disconnect", view.wait_for(|view| !view.connected))
+    within("the disconnect", view.wait_for(|view| !view.link.connected))
         .await
         .unwrap();
     connected(&joiner).await;
@@ -168,7 +167,7 @@ async fn the_joiner_reconnects_after_losing_the_connection() {
     assert_ne!(first.stable_id(), second.stable_id());
     assert_eq!(get(&joiner, "/").await.status, 200);
     until("presence to settle", || share.presence().len() == 1).await;
-    assert_eq!(post_comment(&joiner, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&joiner, DRAFT).await).is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -176,27 +175,30 @@ async fn a_reconnecting_joiner_learns_what_was_delivered_meanwhile() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let joiner = join(&share, "alice").await;
-    assert_eq!(post_comment(&joiner, DRAFT).await.status, 202);
+    assert!(commented(&post_comment(&joiner, DRAFT).await).is_some());
     let mut view = joiner.watch();
-    assert_eq!(view.borrow().pending, 1);
+    assert_eq!(view.borrow().pending(), 1);
 
     joiner
         .connection()
         .unwrap()
         .close(VarInt::from_u32(0), b"test drop");
-    within("the disconnect", view.wait_for(|view| !view.connected))
+    within("the disconnect", view.wait_for(|view| !view.link.connected))
         .await
         .unwrap();
     // Delivered while the joiner is away (it waits a second to reconnect).
     let stream = UnixStream::connect(share.socket_path()).await.unwrap();
     agent::recv(stream, &mut Vec::new()).await.unwrap();
     until("the delivery", || share.queued().is_empty()).await;
-    assert!(!view.borrow().connected, "reconnected too early to tell");
-    assert_eq!(view.borrow().pending, 1);
+    assert!(
+        !view.borrow().link.connected,
+        "reconnected too early to tell"
+    );
+    assert_eq!(view.borrow().pending(), 1);
 
     within(
         "reconnection with the delivered state",
-        view.wait_for(|view| view.connected && view.pending == 0 && view.undelivered.is_empty()),
+        view.wait_for(|view| view.link.connected && view.mine == Some(Vec::new())),
     )
     .await
     .unwrap();
@@ -207,14 +209,12 @@ async fn a_comment_sent_again_is_queued_once() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let joiner = join(&share, "alice").await;
+    let (mut page, _) = PageSocket::hello(&joiner).await;
     let body = DRAFT.replacen('{', r#"{"ref":"page-ref-1","#, 1);
-    let first = post_comment(&joiner, &body).await;
-    assert_eq!(first.status, 202, "{}", first.body);
-    let again = post_comment(&joiner, &body).await;
-    assert_eq!(again.status, 202, "{}", again.body);
-    // The same comment (only the view's revision moved on).
-    let id_and_pending = |body: &str| body.split(",\"rev\"").next().unwrap_or_default().to_owned();
-    assert_eq!(id_and_pending(&first.body), id_and_pending(&again.body));
+    let first = commented(&page.comment(&body).await).unwrap();
+    // Again on another socket, as a page that reloaded does.
+    let again = commented(&post_comment(&joiner, &body).await).unwrap();
+    assert_eq!(first, again);
     assert_eq!(share.queued().len(), 1);
 
     // A wait given up (the page went away, a timeout) leaves nothing behind.
@@ -227,7 +227,7 @@ async fn a_comment_sent_again_is_queued_once() {
     assert_eq!(control.waiting(), 0);
     // The comment may still have reached the share; sending it again is safe.
     let body = DRAFT.replacen('{', r#"{"ref":"page-ref-2","#, 1);
-    assert_eq!(post_comment(&joiner, &body).await.status, 202);
+    assert!(commented(&post_comment(&joiner, &body).await).is_some());
     until("both queued", || share.queued().len() == 2).await;
 }
 
@@ -266,54 +266,109 @@ async fn a_full_share_is_retried_not_final() {
     connected(&extra).await;
 }
 
-/// The `epoch` and `rev` fields of a JSON object.
-fn stamp(json: &str) -> (String, u64) {
-    #[derive(serde::Deserialize)]
-    struct Stamp {
-        epoch: String,
-        rev: u64,
-    }
-    let Stamp { epoch, rev } =
-        serde_json::from_str(json.trim_start_matches("data: ").trim_end()).unwrap();
-    (epoch, rev)
-}
-
-fn rev(json: &str) -> u64 {
-    stamp(json).1
+#[tokio::test(flavor = "multi_thread")]
+async fn every_page_hears_every_change_in_order() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let alice = join(&share, "alice").await;
+    let (mut first, hello) = PageSocket::hello(&alice).await;
+    assert_eq!(hello["mine"], json!([]), "{hello}");
+    let (mut second, _) = PageSocket::hello(&alice).await;
+    // A comment from the first page: its `mine` comes before the reply.
+    let seen = about(first.request(comment_request(DRAFT, "in-order")).await);
+    let [mine, reply] = seen.as_slice() else {
+        panic!("{seen:?}");
+    };
+    let id = commented(&reply["outcome"]).unwrap();
+    assert_eq!(mine["undelivered"], json!([id]));
+    // Delivered: both pages hear it after the comment was queued.
+    let stream = UnixStream::connect(share.socket_path()).await.unwrap();
+    agent::recv(stream, &mut Vec::new()).await.unwrap();
+    assert_eq!(first.next_of("mine").await["undelivered"], json!([]));
+    assert_eq!(second.next_of("mine").await["undelivered"], json!([id]));
+    assert_eq!(second.next_of("mine").await["undelivered"], json!([]));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn status_events_and_comments_carry_the_view_revision() {
+async fn a_page_that_falls_behind_is_closed_and_comes_back() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
-    let joiner = join(&share, "alice").await;
-    let mut page = events(&joiner).await;
-    let before = rev(&get(&joiner, "/_jampot/api/status").await.body);
-    let queued = post_comment(&joiner, DRAFT).await;
-    assert_eq!(queued.status, 202, "{}", queued.body);
-    let queued = rev(&queued.body);
-    assert!(queued > before, "{queued} after {before}");
-    // A status read now has the comment, at that revision or later.
-    let status = get(&joiner, "/_jampot/api/status").await.body;
-    assert!(rev(&status) >= queued);
-    assert!(status.contains("\"pending\":1"), "{status}");
-    // Its delivery is a later event.
-    let stream = UnixStream::connect(share.socket_path()).await.unwrap();
-    agent::recv(stream, &mut Vec::new()).await.unwrap();
-    let delivered = next_event(&mut page, "delivered").await;
-    assert!(rev(&delivered) > queued);
+    let alice = join(&share, "alice").await;
+    // A page that reads nothing (a frozen tab), with little buffered for it.
+    let mut slow = PageSocket::open_slow(&alice).await;
+    let (mut page, _) = PageSocket::hello(&alice).await;
+    // Long answers, many more than a page's queue holds; the page that
+    // reads keeps up.
+    let long = format!("{} end", "x".repeat(9000));
+    for _ in 0..PAGE_QUEUE * 4 {
+        let stream = UnixStream::connect(share.socket_path()).await.unwrap();
+        let message = long.clone().try_into().unwrap();
+        agent::send(stream, message, None, Some(Addressee::Everyone))
+            .await
+            .unwrap();
+        page.next_of("answer").await;
+    }
+    // The slow one is closed ("try again later") once it reads what was
+    // queued before.
+    assert_eq!(slow.closed().await, Some(1013));
+    // A new socket starts afresh from a hello with the latest state.
+    let (_, hello) = PageSocket::hello(&alice).await;
+    assert!(!hello["answers"].as_array().unwrap().is_empty(), "{hello}");
+}
 
-    // All in this joiner's epoch: 16 hex characters, the same everywhere.
-    let (epoch, _) = stamp(&delivered);
-    assert_eq!(epoch.len(), 16);
-    assert!(epoch.bytes().all(|b| b.is_ascii_hexdigit()));
-    assert_eq!(stamp(&status).0, epoch);
-    let saved = post_json(&joiner, "/_jampot/api/settings", r#"{"commentMode":"off"}"#).await;
-    assert_eq!(stamp(&saved.body).0, epoch);
-    let settings = next_event(&mut page, "settings").await;
-    assert_eq!(stamp(&settings), stamp(&saved.body));
-    // Another joiner process has an epoch of its own.
-    let other = join(&share, "bob").await;
-    let other = stamp(&get(&other, "/_jampot/api/status").await.body).0;
-    assert_ne!(other, epoch);
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restarted_joiner_takes_what_is_pending_from_the_share() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let key = generate_key(&SystemRng);
+    let first = joiner_with_key(
+        share.token().clone(),
+        share.direct_addrs(),
+        "alice",
+        key.clone(),
+    )
+    .await;
+    connected(&first).await;
+    let id = commented(&post_comment(&first, DRAFT).await).unwrap();
+    first.stop().await;
+
+    // The same key, a new process: it knows nothing until admitted, and
+    // then what the share holds.
+    let again = joiner_with_key(share.token().clone(), share.direct_addrs(), "alice", key).await;
+    connected(&again).await;
+    let (_, hello) = PageSocket::hello(&again).await;
+    assert_eq!(hello["mine"], json!([id]), "{hello}");
+    let status = get(&again, "/_jampot/api/status").await;
+    assert_eq!(status.status, 200);
+    let status: Value = serde_json::from_str(&status.body).unwrap();
+    assert_eq!(
+        status,
+        json!({"api": 3, "version": env!("CARGO_PKG_VERSION")})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_message_that_is_not_one_closes_the_socket() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let alice = join(&share, "alice").await;
+    for bad in [
+        json!({"type": "nonsense"}),
+        json!({"type": "page", "url": "http://evil/"}),
+        json!({"type": "page", "url": "/", "tab": "x"}),
+        json!({"type": "cursor", "position": {"selector": "h1", "x": 10001, "y": 0}}),
+    ] {
+        let (mut page, _) = PageSocket::hello(&alice).await;
+        page.send(bad.clone()).await;
+        assert_eq!(page.closed().await, Some(1008), "{bad}");
+    }
+    // An invalid request is answered instead, so the page can say why.
+    let (mut page, _) = PageSocket::hello(&alice).await;
+    let outcome = page.settings(r#"{"corner":"middle"}"#).await;
+    assert!(outcome["refused"]["error"].is_string(), "{outcome}");
+    // Text frames only; a frame too large closes it too.
+    let (mut page, _) = PageSocket::hello(&alice).await;
+    page.send(json!({"type": "page", "url": format!("/{}", "a".repeat(70_000))}))
+        .await;
+    assert!(page.closed().await.is_some_and(|code| code != 1000));
 }
