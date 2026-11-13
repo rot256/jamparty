@@ -23,12 +23,14 @@ from support import (
 
 
 class StrictHandler(FixtureHandler):
-    """A dev server whose page allows connections to its own origin only."""
+    """A dev server whose page loads scripts from, and connects to, its own
+    origin only."""
 
     def end_headers(self) -> None:
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'",
+            "default-src 'none'; script-src 'self'; connect-src 'self'; "
+            + "style-src 'self' 'unsafe-inline'",
         )
         super().end_headers()
 
@@ -72,8 +74,9 @@ def test_a_wrong_token_is_refused(tmp_path: Path) -> None:
 
 
 def test_a_site_that_allows_only_its_own_origin(tmp_path: Path, page: Page) -> None:
-    """`connect-src 'self'` covers the joiner's socket on the same host
-    (and port), so the overlay works on such a site."""
+    """`script-src 'self'` covers the client the joiner serves and
+    `connect-src 'self'` its socket, on the same host and port: the overlay
+    works on such a site."""
     with (
         upstream_server(handler=StrictHandler) as upstream,
         share(tmp_path, "proxy", upstream) as shared,
@@ -88,7 +91,9 @@ def test_a_site_that_allows_only_its_own_origin(tmp_path: Path, page: Page) -> N
                 else None
             ),
         )
-        _ = page.goto(joined.url)
+        with page.expect_response("**/_jampot/client.js") as client:
+            _ = page.goto(joined.url)
+        assert client.value.status == 200
         expect(page.locator("#jampot #connection")).to_have_attribute(
             "data-state", "green"
         )
