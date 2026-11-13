@@ -117,6 +117,17 @@ class EchoHandler(FixtureHandler):
         _ = self.wfile.write(body)
 
 
+class StrictHandler(FixtureHandler):
+    """A dev server whose page allows connections to its own origin only."""
+
+    def end_headers(self) -> None:
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'",
+        )
+        super().end_headers()
+
+
 class StreamedHandler(BaseHTTPRequestHandler):
     """A dev server that streams its page in chunks, without a length."""
 
@@ -329,6 +340,53 @@ def test_streamed_html_gets_the_overlay(tmp_path: Path, page: Page) -> None:
         expect(page.locator("#jampot #connection")).to_have_attribute(
             "data-state", "green"
         )
+
+
+def test_a_site_that_allows_only_its_own_origin(tmp_path: Path, page: Page) -> None:
+    """`connect-src 'self'` covers the joiner's socket on the same host
+    (and port), so the overlay works on such a site."""
+    with (
+        upstream_server(handler=StrictHandler) as upstream,
+        share(tmp_path, "proxy", upstream) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        violations: list[str] = []
+        page.on(
+            "console",
+            lambda message: (
+                violations.append(message.text)
+                if "Content Security Policy" in message.text
+                else None
+            ),
+        )
+        _ = page.goto(joined.url)
+        expect(page.locator("#jampot #connection")).to_have_attribute(
+            "data-state", "green"
+        )
+        comment_on_intro(page, "Under a strict policy.")
+        expect(page.locator("#jampot #badge")).to_have_text("1 queued")
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "Under a strict policy."
+        assert violations == [], violations
+
+
+def test_another_site_cannot_open_the_socket(tmp_path: Path, page: Page) -> None:
+    with (
+        upstream_server() as upstream,
+        share(tmp_path, "proxy", upstream) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        # A page on another origin (the dev server's own) tries.
+        _ = page.goto(upstream)
+        opened = page.evaluate(
+            """(url) => new Promise((resolve) => {
+                const socket = new WebSocket(url);
+                socket.onopen = () => resolve("opened");
+                socket.onerror = () => resolve("refused");
+            })""",
+            f"ws://{joined.host}/_jampot/api/socket",
+        )
+        assert opened == "refused"
 
 
 def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:
