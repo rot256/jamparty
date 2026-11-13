@@ -16,14 +16,12 @@ use crate::{
     protocol::comment::Author,
 };
 
-/// Whether the share takes `presence` and `cursor` messages; a share that
-/// does not say (an older one) does not.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// That the share takes `presence` and `cursor` messages, as admission
+/// says in the version-1 schema; every share does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Support {
     Supported,
-    #[default]
-    Unsupported,
 }
 
 pub(crate) const MAX_PAGE_PATH: usize = 512;

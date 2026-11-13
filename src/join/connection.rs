@@ -20,8 +20,11 @@ use crate::{
     },
     join::{control::Control, session::Session},
     protocol::{
-        control::{Envelope, Greeting, JoinerMessage, RefusedReason, ShareMessage, SiteInfo},
+        control::{
+            Envelope, Greeting, Hello, JoinerMessage, RefusedReason, ShareMessage, SiteInfo,
+        },
         decode_line,
+        presence::Support,
     },
     share::REFUSED_CODE,
 };
@@ -42,10 +45,10 @@ pub(crate) struct Dial {
 /// What the share said when it first admitted this joiner.
 #[derive(Clone, Debug)]
 pub(crate) struct Welcome {
-    /// What the share serves (none from an older share).
-    pub(crate) site: Option<SiteInfo>,
-    /// The share's jampot (none from an older share).
-    pub(crate) jampot: Option<JampotVersion>,
+    /// What the share serves.
+    pub(crate) site: SiteInfo,
+    /// The share's jampot.
+    pub(crate) jampot: JampotVersion,
 }
 
 /// Why the joiner gives up on the share for good.
@@ -123,11 +126,11 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
         Err(error) => return Ended::Failed(error.into()),
     };
     let mut recv = BufReader::new(recv);
-    let hello = Envelope::from(JoinerMessage::Hello {
+    let hello = Envelope::from(JoinerMessage::Hello(Hello {
         secret: dial.token.secret.clone(),
         name: session.name(),
-        jampot: Some(JampotVersion::current()),
-    });
+        jampot: JampotVersion::current(),
+    }));
     if let Err(error) = lines::write(&mut send, &hello).await {
         return Ended::Failed(error);
     }
@@ -144,7 +147,7 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
             dial.admission_wait.as_secs()
         ));
     };
-    let (you, undelivered, presence, welcome) = match line {
+    let (you, undelivered, welcome) = match line {
         Ok(Some((Some(greeting), _))) if greeting.version != PROTOCOL => {
             connection.close(VarInt::from_u32(0), b"incompatible");
             return Ended::Final(Final::Incompatible(Incompatible {
@@ -162,10 +165,10 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
             ShareMessage::Admitted {
                 you,
                 undelivered,
-                presence,
+                presence: Support::Supported,
                 site,
                 jampot,
-            } => (you, undelivered, presence, Welcome { site, jampot }),
+            } => (you, undelivered, Welcome { site, jampot }),
             ShareMessage::Refused {
                 reason: RefusedReason::Incompatible,
                 jampot,
@@ -198,7 +201,7 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
             };
         }
     };
-    let control = Arc::new(Control::new(connection, send, presence));
+    let control = Arc::new(Control::new(connection, send));
     session.connected(Arc::clone(&control), you, &undelivered);
     if let Some(first) = first.take() {
         let _ = first.send(Ok(welcome));

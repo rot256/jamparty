@@ -159,11 +159,11 @@ enum Wanted {
 }
 
 impl Wanted {
-    fn new(given: Option<Port>, site: Option<SiteInfo>) -> Self {
+    fn new(given: Option<Port>, site: SiteInfo) -> Self {
         match (given, site) {
             (Some(port), _) => Self::Given(port),
-            (None, Some(SiteInfo::Proxy { port })) => Self::Mirror(port),
-            (None, Some(SiteInfo::Files | SiteInfo::Other) | None) => Self::Any,
+            (None, SiteInfo::Proxy { port }) => Self::Mirror(port),
+            (None, SiteInfo::Files | SiteInfo::Other) => Self::Any,
         }
     }
 }
@@ -251,7 +251,7 @@ pub(crate) struct Joiner {
     endpoint: Endpoint,
     session: Arc<Session>,
     /// The share's jampot, as it said on admission.
-    share_version: Option<JampotVersion>,
+    share_version: JampotVersion,
     origin: Arc<LocalOrigin>,
     #[cfg(test)]
     port: Port,
@@ -340,7 +340,7 @@ impl Joiner {
     /// protocol.
     #[must_use]
     pub(crate) fn version_note(&self) -> Option<String> {
-        self.share_version.as_ref().and_then(mismatch_note)
+        mismatch_note(&self.share_version)
     }
 
     /// Why the share's protocol turned out not to be this joiner's, after

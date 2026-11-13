@@ -16,7 +16,7 @@ use crate::{
 };
 
 fn hello(secret: &str) -> Vec<u8> {
-    format!("{{\"version\":1,\"message\":{{\"type\":\"hello\",\"secret\":\"{secret}\",\"name\":\"mallory\"}}}}\n")
+    format!("{{\"version\":1,\"message\":{{\"type\":\"hello\",\"secret\":\"{secret}\",\"name\":\"mallory\",\"jampot\":\"0.1.0\"}}}}\n")
         .into_bytes()
 }
 

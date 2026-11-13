@@ -6,7 +6,7 @@ use crate::{
         MAX_LINE_BYTES,
         comment::{Author, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT, MAX_SELECTOR},
         control::{
-            AckOutcome, Anchor, CommentRef, Envelope, JoinerMessage, MAX_COMMENT_REF,
+            AckOutcome, Anchor, CommentRef, Envelope, Hello, JoinerMessage, MAX_COMMENT_REF,
             MAX_STATUS_LINE, RefusedReason, Revision, ShareMessage, SiteInfo, StatusLine,
         },
         decode_line, encode_line,
@@ -29,7 +29,7 @@ fn joiner_messages_round_trip() {
     let secret = secret();
     let lines = [
         format!(
-            r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"alice@laptop"}}}}"#
+            r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"alice@laptop","jampot":"0.1.0"}}}}"#
         ),
         r#"{"version":1,"message":{"type":"comment","ref":"7","draft":{"page":"/","selector":"main > h1","selectedText":"Hi","comment":"Bigger"}}}"#.to_owned(),
         r#"{"version":1,"message":{"type":"comment","ref":"a-B-9","draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
@@ -46,18 +46,31 @@ fn joiner_messages_round_trip() {
         );
     }
     let hello = joiner(lines.first().unwrap()).unwrap();
-    let JoinerMessage::Hello {
+    let JoinerMessage::Hello(Hello {
         secret: presented,
         name,
         jampot,
-    } = hello.message
+    }) = hello.message
     else {
         panic!("not a hello");
     };
     assert!(presented.matches(&secret.parse().unwrap()));
     assert_eq!(name.as_str(), "alice@laptop");
-    // A hello without a jampot version (an older joiner's) still parses.
-    assert_eq!(jampot, None);
+    assert_eq!(jampot.to_string(), "0.1.0");
+    // A later jampot of this protocol may add to its hello.
+    let later = joiner(&format!(
+        r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"a","jampot":"9.0.0","wants":["more"]}}}}"#
+    ));
+    assert!(
+        matches!(
+            later,
+            Ok(Envelope {
+                message: JoinerMessage::Hello(_),
+                ..
+            })
+        ),
+        "{later:?}"
+    );
 }
 
 #[test]
@@ -66,17 +79,17 @@ fn invalid_joiner_messages_are_rejected() {
     let hello = |body: &str| format!(r#"{{"version":1,"message":{{"type":"hello",{body}}}}}"#);
     let bad = [
         // Envelope.
-        format!(r#"{{"version":2,"message":{{"type":"hello","secret":"{secret}","name":"a"}}}}"#),
-        format!(r#"{{"message":{{"type":"hello","secret":"{secret}","name":"a"}}}}"#),
-        format!(r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"a"}},"x":1}}"#),
+        format!(r#"{{"version":2,"message":{{"type":"hello","secret":"{secret}","name":"a","jampot":"0.1.0"}}}}"#),
+        format!(r#"{{"message":{{"type":"hello","secret":"{secret}","name":"a","jampot":"0.1.0"}}}}"#),
+        format!(r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"a","jampot":"0.1.0"}},"x":1}}"#),
         r#"{"version":1,"message":{"type":"nope"}}"#.to_owned(),
         // Hello.
-        hello(&format!(r#""secret":"{secret}","name":"a","admin":true"#)),
-        hello(&format!(r#""secret":"{}","name":"a""#, secret.to_uppercase())),
-        hello(r#""secret":"short","name":"a""#),
-        hello(&format!(r#""secret":"{secret}","name":"a b""#)),
-        hello(&format!(r#""secret":"{secret}","name":"""#)),
-        hello(&format!(r#""secret":"{secret}""#)),
+        hello(&format!(r#""secret":"{}","name":"a","jampot":"0.1.0""#, secret.to_uppercase())),
+        hello(r#""secret":"short","name":"a","jampot":"0.1.0""#),
+        hello(&format!(r#""secret":"{secret}","name":"a b","jampot":"0.1.0""#)),
+        hello(&format!(r#""secret":"{secret}","name":"","jampot":"0.1.0""#)),
+        hello(&format!(r#""secret":"{secret}","jampot":"0.1.0""#)),
+        hello(&format!(r#""secret":"{secret}","name":"a""#)),
         // Comments: authorship is the share's, caps hold.
         r#"{"version":1,"message":{"type":"comment","ref":"1","draft":{"page":"/","selector":"","comment":"x","author":{"name":"bob","fingerprint":"0000000000"}}}}"#.to_owned(),
         r#"{"version":1,"message":{"type":"comment","ref":"1","draft":{"page":"/","selector":"","comment":" "}}}"#.to_owned(),
@@ -147,16 +160,12 @@ fn share_messages() {
     let reference = |raw: &str| CommentRef::try_from(raw.to_owned()).unwrap();
     let cases = [
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported, site: None, jampot: None },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"presence":"supported"}}"#),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported, site: SiteInfo::Proxy { port: 1313.try_into().unwrap() }, jampot: "0.1.0".to_owned().try_into().unwrap() },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"presence":"supported","site":{{"kind":"proxy","port":1313}},"jampot":"0.1.0"}}"#),
         ),
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: Some(SiteInfo::Proxy { port: 1313.try_into().unwrap() }), jampot: Some("0.1.0".to_owned().try_into().unwrap()) },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"proxy","port":1313}},"jampot":"0.1.0"}}"#),
-        ),
-        (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: Some(SiteInfo::Files), jampot: None },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}}}}"#),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: SiteInfo::Files, jampot: "0.1.0".to_owned().try_into().unwrap() },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jampot":"0.1.0"}}"#),
         ),
         (
             ShareMessage::Refused { reason: RefusedReason::WrongSecret, jampot: None },
@@ -237,22 +246,13 @@ fn share_messages() {
         let parsed: Envelope<ShareMessage> = decode_line(line.as_bytes()).unwrap();
         assert_eq!(parsed.message, message);
     }
-    // What an older share sends still parses: no presence support, no
-    // `here`.
-    let older = format!(
+    // Every field a share writes is required: no build leaves one out.
+    let partial = format!(
         r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{key}"}}}}}}"#
     );
-    let Envelope {
-        message: ShareMessage::Admitted { presence, site, .. },
-        ..
-    } = decode_line::<Envelope<ShareMessage>>(older.as_bytes()).unwrap()
-    else {
-        panic!("not admitted");
-    };
-    assert_eq!(presence, Support::Unsupported);
-    assert_eq!(site, None);
-    let older = r#"{"version":1,"message":{"type":"presence","joiners":[]}}"#;
-    assert!(decode_line::<Envelope<ShareMessage>>(older.as_bytes()).is_ok());
+    assert!(decode_line::<Envelope<ShareMessage>>(partial.as_bytes()).is_err());
+    let partial = r#"{"version":1,"message":{"type":"presence","joiners":[]}}"#;
+    assert!(decode_line::<Envelope<ShareMessage>>(partial.as_bytes()).is_err());
     // A newer share may add fields.
     let extra = r#"{"version":1,"message":{"type":"reload","revision":3,"at":"now"}}"#;
     assert!(decode_line::<Envelope<ShareMessage>>(extra.as_bytes()).is_ok());
@@ -272,7 +272,7 @@ fn text_limits() {
 fn site_announcements() {
     let admitted = |site: &str| {
         let line = format!(
-            r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{}"}},"site":{site}}}}}"#,
+            r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{site},"jampot":"0.1.0"}}}}"#,
             "ab".repeat(32)
         );
         decode_line::<Envelope<ShareMessage>>(line.as_bytes()).map(|envelope| {
@@ -284,18 +284,15 @@ fn site_announcements() {
     };
     assert_eq!(
         admitted(r#"{"kind":"proxy","port":80,"tls":true}"#).unwrap(),
-        Some(SiteInfo::Proxy {
+        SiteInfo::Proxy {
             port: 80.try_into().unwrap()
-        })
+        }
     );
-    assert_eq!(
-        admitted(r#"{"kind":"files"}"#).unwrap(),
-        Some(SiteInfo::Files)
-    );
+    assert_eq!(admitted(r#"{"kind":"files"}"#).unwrap(), SiteInfo::Files);
     // A kind from a newer share is not this joiner's to mirror.
     assert_eq!(
         admitted(r#"{"kind":"tunnel","port":22}"#).unwrap(),
-        Some(SiteInfo::Other)
+        SiteInfo::Other
     );
     for bad in [
         r#"{"kind":"proxy"}"#,

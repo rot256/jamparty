@@ -86,7 +86,7 @@ fn assert_refused(reply: Option<ShareMessage>, closed: &ConnectionError, reason:
 }
 
 fn hello(secret: &str) -> Vec<u8> {
-    format!("{{\"version\":1,\"message\":{{\"type\":\"hello\",\"secret\":\"{secret}\",\"name\":\"mallory\"}}}}\n")
+    format!("{{\"version\":1,\"message\":{{\"type\":\"hello\",\"secret\":\"{secret}\",\"name\":\"mallory\",\"jampot\":\"0.1.0\"}}}}\n")
         .into_bytes()
 }
 
@@ -149,8 +149,8 @@ async fn right_secret_is_admitted_then_served() {
     assert_eq!(you.name.to_string(), "mallory");
     assert!(undelivered.is_empty());
     assert_eq!(presence, Support::Supported);
-    assert_eq!(site, Some(SiteInfo::Files));
-    assert_eq!(jampot, Some(JampotVersion::current()));
+    assert_eq!(site, SiteInfo::Files);
+    assert_eq!(jampot, JampotVersion::current());
     let answered = String::from_utf8(try_request(&connection).await).unwrap();
     assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
     assert!(answered.contains("Fixture"));
@@ -327,8 +327,8 @@ async fn a_proxy_share_announces_its_dev_server_port() {
     };
     assert_eq!(
         site,
-        Some(SiteInfo::Proxy {
+        SiteInfo::Proxy {
             port: 1313.try_into().unwrap()
-        })
+        }
     );
 }

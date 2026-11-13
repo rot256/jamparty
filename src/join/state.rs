@@ -248,16 +248,7 @@ impl State {
                 self.revision = Some(revision);
                 vec![ToPage::Reload { revision }]
             }
-            ShareMessage::Presence { joiners, here } => {
-                // An older share says only who is here.
-                let here = if here.is_empty() {
-                    joiners
-                        .into_iter()
-                        .map(|author| Person::new(author, None, Switch::Off))
-                        .collect()
-                } else {
-                    here
-                };
+            ShareMessage::Presence { joiners: _, here } => {
                 self.people.clone_from(&here);
                 vec![ToPage::People { here }]
             }

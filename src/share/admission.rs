@@ -4,7 +4,7 @@
 use crate::{
     Report,
     core::{invalid::Invalid, name::JoinerName, token::PartySecret},
-    protocol::control::{Envelope, JoinerMessage, RefusedReason},
+    protocol::control::{Envelope, Hello, JoinerMessage, RefusedReason},
 };
 
 /// The QUIC close code for a refused joiner; the reason is the
@@ -22,11 +22,11 @@ pub(crate) fn admit(first: FirstLine, secret: &PartySecret) -> Result<JoinerName
         Ok(Some(Envelope {
             version: _,
             message:
-                JoinerMessage::Hello {
+                JoinerMessage::Hello(Hello {
                     secret: presented,
                     name,
                     jampot: _,
-                },
+                }),
         })) => {
             if secret.matches(&presented) {
                 Ok(name)
@@ -81,20 +81,21 @@ mod tests {
     use rootcause::prelude::report;
 
     use crate::{
+        core::version::JampotVersion,
         core::{rng::SeededRng, token::PartySecret},
         protocol::{
             comment::{Draft, DraftFields},
-            control::{Envelope, JoinerMessage, RefusedReason},
+            control::{Envelope, Hello, JoinerMessage, RefusedReason},
         },
         share::admission::{admit, reason_text},
     };
 
     fn hello(secret: &PartySecret) -> Envelope<JoinerMessage> {
-        JoinerMessage::Hello {
+        JoinerMessage::Hello(Hello {
             secret: secret.clone(),
             name: "alice".parse().unwrap(),
-            jampot: None,
-        }
+            jampot: JampotVersion::current(),
+        })
         .into()
     }
 

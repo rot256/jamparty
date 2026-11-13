@@ -20,7 +20,7 @@ use crate::{
     protocol::{
         comment::Draft,
         control::{AckOutcome, CommentRef, Envelope, JoinerMessage},
-        presence::{Position, Support, Whereabouts},
+        presence::{Position, Whereabouts},
     },
 };
 
@@ -33,8 +33,6 @@ const WRITE_QUEUE: usize = 16;
 /// acknowledgements are matched by the page's ref.
 pub(crate) struct Control {
     pub(crate) connection: Connection,
-    /// Whether the share takes presence (and cursor) messages.
-    presence: Support,
     lines: mpsc::Sender<Envelope<JoinerMessage>>,
     acks: Mutex<Acks>,
 }
@@ -42,12 +40,11 @@ pub(crate) struct Control {
 impl Control {
     /// Starts the writer on `writer`; it stops when the stream fails or
     /// the control is dropped.
-    pub(crate) fn new(connection: Connection, writer: SendStream, presence: Support) -> Self {
+    pub(crate) fn new(connection: Connection, writer: SendStream) -> Self {
         let (lines, queued) = mpsc::channel(WRITE_QUEUE);
         tokio::spawn(write_lines(writer, queued));
         Self {
             connection,
-            presence,
             lines,
             acks: Mutex::new(Acks::default()),
         }
@@ -86,12 +83,8 @@ impl Control {
             .map_err(|_| report!("the connection to the share was lost"))
     }
 
-    /// Tells the share where this joiner is, if it takes that.
+    /// Tells the share where this joiner is.
     pub(crate) async fn tell(&self, whereabouts: Whereabouts) -> Result<(), Report> {
-        match self.presence {
-            Support::Supported => {}
-            Support::Unsupported => return Ok(()),
-        }
         let Whereabouts { name, url, cursor } = whereabouts;
         self.lines
             .send(Envelope::from(JoinerMessage::Presence {
@@ -105,10 +98,6 @@ impl Control {
 
     /// Sends the joiner's pointer (none: it left the page).
     pub(crate) async fn cursor(&self, position: Option<Position>) -> Result<(), Report> {
-        match self.presence {
-            Support::Supported => {}
-            Support::Unsupported => return Ok(()),
-        }
         self.lines
             .send(Envelope::from(JoinerMessage::Cursor { position }))
             .await

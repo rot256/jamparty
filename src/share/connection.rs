@@ -207,8 +207,8 @@ async fn joined(
         you: author.clone(),
         undelivered: shared.hub.undelivered_by(author),
         presence: Support::Supported,
-        site: Some(shared.site.info()),
-        jampot: Some(JampotVersion::current()),
+        site: shared.site.info(),
+        jampot: JampotVersion::current(),
     }];
     if let Some(reload) = shared.site.reload() {
         greeting.push(ShareMessage::Reload {
@@ -278,7 +278,7 @@ async fn joined(
                         tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "cursor ignored");
                     }
                 }
-                JoinerMessage::Hello { .. } => return "second hello",
+                JoinerMessage::Hello(_) => return "second hello",
             }
         }
     };

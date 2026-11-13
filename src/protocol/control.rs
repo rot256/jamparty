@@ -1,9 +1,12 @@
 //! Control-stream messages. Every line is an [`Envelope`]:
 //! `{"version":1,"message":{"type":...}}`.
 //!
-//! Joiner to share: [`JoinerMessage::Hello`] first, then comments and,
-//! when the share says it takes them, presence. Parsed strictly (unknown
-//! fields are refused): it is untrusted input.
+//! Joiner to share: [`JoinerMessage::Hello`] first, then comments,
+//! presence and cursors. Parsed strictly (unknown fields are refused): it
+//! is untrusted input, and a field the share does not know (an `author`
+//! in a draft, say) must not pass for one it does. The hello alone
+//! ignores unknown fields, so a later jampot of this protocol may add
+//! some and still be admitted, and told what else it needs to know.
 //!
 //! Share to joiner: admission or refusal, comment acknowledgements,
 //! answers, delivered comments, live-reload revisions, the status line and
@@ -54,14 +57,7 @@ impl<T> From<T> for Envelope<T> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum JoinerMessage {
-    /// The first message: the party secret and the joiner's display name.
-    Hello {
-        secret: PartySecret,
-        name: JoinerName,
-        /// The joiner's jampot (none from an older joiner).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        jampot: Option<JampotVersion>,
-    },
+    Hello(Hello),
     /// A comment; `ref` is the page's own id for it, echoed in the
     /// acknowledgement. The share queues a `ref` once per joiner: sending
     /// it again ("send again" after a lost acknowledgement) gets the same
@@ -72,8 +68,7 @@ pub(crate) enum JoinerMessage {
         draft: Draft,
     },
     /// Where the joiner is and how it is called now: sent after admission
-    /// and on every change, only to a share that supports it (see
-    /// [`ShareMessage::Admitted`]).
+    /// and on every change.
     Presence {
         name: JoinerName,
         /// The page the joiner's most recently active tab is on.
@@ -89,6 +84,15 @@ pub(crate) enum JoinerMessage {
     },
 }
 
+/// The joiner's first message: the party secret, its display name and
+/// its jampot. Unknown fields are ignored (see the module).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Hello {
+    pub(crate) secret: PartySecret,
+    pub(crate) name: JoinerName,
+    pub(crate) jampot: JampotVersion,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ShareMessage {
@@ -97,22 +101,18 @@ pub(crate) enum ShareMessage {
     /// (any others it had queued were delivered meanwhile).
     Admitted {
         you: Author,
-        #[serde(default)]
         undelivered: Vec<CommentId>,
-        /// Whether the share takes `presence` (and `cursor`) messages.
-        #[serde(default)]
+        /// That the share takes `presence` and `cursor` messages.
         presence: Support,
-        /// What the share serves (none from an older share).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        site: Option<SiteInfo>,
-        /// The share's jampot (none from an older share).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        jampot: Option<JampotVersion>,
+        /// What the share serves.
+        site: SiteInfo,
+        /// The share's jampot.
+        jampot: JampotVersion,
     },
     /// The hello was refused; the share closes the connection after this.
     Refused {
         reason: RefusedReason,
-        /// The share's jampot (none from an older share).
+        /// The share's jampot, told only to a joiner of another protocol.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         jampot: Option<JampotVersion>,
     },
@@ -139,12 +139,12 @@ pub(crate) enum ShareMessage {
     Reload { revision: Revision },
     /// The status line (`null` clears it).
     Status { line: Option<StatusLine> },
-    /// Who is connected now: `joiners` once per key (what older joiners
-    /// read), `here` the same people with their colour, page and cursor
-    /// switch.
+    /// Who is connected now, once per key: `here` with their colour,
+    /// page and cursor switch. `joiners`, the same people as their
+    /// comments are signed, is part of the version-1 schema; joiners read
+    /// `here`.
     Presence {
         joiners: Vec<Author>,
-        #[serde(default)]
         here: Vec<Person>,
     },
     /// Joiner `key`'s pointer on page `url` (the recipient's page), or
