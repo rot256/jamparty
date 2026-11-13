@@ -5,9 +5,8 @@ join from their own machine, point at the page and comment; the comments
 reach the agent's session, and the agent's answers appear on the page for
 everyone. It is the multi-user successor of
 [komtar](https://github.com/rot256/komtar), peer to peer over
-[iroh](https://iroh.computer): there is no jampot server. See
-[DESIGN.md](DESIGN.md) for the design and the implementation plan. jampot
-was called jamjam during design, and briefly nabe.
+[iroh](https://iroh.computer): there is no jampot server. jampot was
+called jamjam during design, and briefly nabe.
 
 ## Installation
 

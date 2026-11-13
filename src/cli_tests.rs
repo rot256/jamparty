@@ -189,13 +189,13 @@ fn delivery_options_choose_the_target() {
 }
 
 #[test]
-fn bare_jampot_prints_the_overview_in_the_design() {
-    let design = include_str!("../DESIGN.md");
-    let start = design
-        .find("Bare `jampot` prints, always the same:")
-        .unwrap();
-    let block = design.get(start..).unwrap();
-    let open = block.find("```\n").unwrap() + 4;
-    let close = block.get(open..).unwrap().find("```").unwrap();
-    assert_eq!(block.get(open..open + close).unwrap(), guides::OVERVIEW);
+fn bare_jampot_prints_the_overview() {
+    for line in [
+        "jampot serve <dir>",
+        "jampot proxy <url>",
+        "jampot join <token>",
+        "Guide for agents: jampot agent",
+    ] {
+        assert!(guides::OVERVIEW.contains(line), "{line}");
+    }
 }

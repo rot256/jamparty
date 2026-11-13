@@ -1,7 +1,7 @@
 # Ideas
 
 **Ideas only: none of this is planned or decided.** Brainstorming kept for
-later; nothing here binds the design (DESIGN.md, docs/ui.md). Each entry
+later; nothing here binds jampot or docs/ui.md. Each entry
 says what it is, why it might be worth it, and what is unclear.
 
 ## Identity through SSH and GitHub keys
@@ -116,7 +116,7 @@ process signs and the page only shows the result:
 - Tests would run two joiners at different window sizes (desktop and
   phone width).
 
-## Also kept for later (from DESIGN.md "Later")
+## Also kept for later
 
 - An MCP endpoint on the running share, so agents get `send` and friends
   as tools.

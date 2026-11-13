@@ -1,8 +1,8 @@
 # Repository instructions
 
-`jampot` is the multi-user, peer-to-peer successor of komtar; DESIGN.md
-describes the target and its implementation plan. Keep the runtime as one
-self-contained binary: the browser client (JavaScript and CSS) is written in
+`jampot` is the multi-user, peer-to-peer successor of komtar; docs/ui.md
+specifies the joiner's overlay. Keep the runtime as one self-contained
+binary: the browser client (JavaScript and CSS) is written in
 TypeScript under `client/src` and bundled by `npm run build` into
 `assets/client.js`, which is committed and embedded with `include_str!`.
 
