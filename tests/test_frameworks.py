@@ -38,7 +38,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import ConsoleMessage, Page, WebSocket, expect
-from support import ROOT, join, join_process, share
+from support import ROOT, jampot, join, join_process, share
 
 pytestmark = pytest.mark.frameworks
 
@@ -515,3 +515,45 @@ def test_a_dev_server_port_taken_here(
             _ = page.goto(url, timeout=LOAD)
             expect(page.locator("#jampot")).to_be_attached()
             expect(page.locator("#marker")).to_have_text(MARKER)
+
+
+def test_a_comment_draft_survives_a_dev_server_reload(
+    sites: Callable[[str], Path], tmp_path: Path, page: Page
+) -> None:
+    """Hugo reloads the page itself, whatever jampot's dialog holds: the
+    half-written comment comes back, and goes out once."""
+    site = sites("hugo")
+    port = free_port()
+    command = [
+        str(tool(HUGO)),
+        "server",
+        *["--source", str(site), "--bind", DEV_HOST, "--port", str(port)],
+    ]
+    with (
+        edited(site / "layouts/home.html") as edit,
+        dev_server(command, site, port, tmp_path / "hugo.log", {}) as upstream,
+        share(tmp_path, "proxy", upstream) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        watched = watch(page)
+        _ = page.goto(joined.url, timeout=LOAD)
+        expect(page.locator("#jampot #connection")).to_have_attribute(
+            "data-state", "green"
+        )
+        settle(page, watched)
+        page.locator("#marker").click(button="right")
+        textarea = page.locator("#jampot textarea")
+        expect(textarea).to_be_focused()
+        textarea.press_sequentially("Half written")
+        changed = f"jampot-marker-{time.monotonic_ns()}"
+        edit(changed)
+        expect(page.locator("#marker")).to_have_text(changed, timeout=UPDATE)
+        expect(textarea).to_have_value("Half written")
+        expect(page.locator("#jampot #dialog-label")).to_have_text("Comment:")
+        textarea.press_sequentially(", now whole.")
+        textarea.press("Enter")
+        expect(page.locator("#jampot #badge")).to_have_text("1 queued")
+        lines = jampot(tmp_path, "recv").splitlines()
+        assert len(lines) == 1, lines
+        assert '"comment":"Half written, now whole."' in lines[0]
+        assert '"selector":"#marker"' in lines[0]
