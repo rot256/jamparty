@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use tokio::net::UnixStream;
 
 use crate::{
-    adapters::t3::{self, T3Delivery, T3Target, Thread},
+    adapters::t3::{self, T3Delivery, T3Target, Thread, ThreadId},
     agent,
     core::{clock::ManualClock, queue::DeliveryResult},
     protocol::comment::{Author, Comment, Draft},
@@ -71,7 +71,7 @@ fn target(fake: &FakeT3, token: &Path, thread: &str) -> T3Target {
     T3Target {
         url: fake.url().parse().unwrap(),
         token_file: token.to_owned(),
-        thread: thread.to_owned(),
+        thread: thread.to_owned().try_into().unwrap(),
         site: "/srv/site".to_owned(),
     }
 }
@@ -93,14 +93,17 @@ async fn start_reads_the_thread_and_resolves_subagents() {
     assert_eq!(
         top,
         Thread {
-            id: "top".to_owned(),
+            id: "top".to_owned().try_into().unwrap(),
             title: "Fix the header".to_owned(),
             resolved_from: None,
         }
     );
     let child = t3::open(&target(&fake, &token, "child")).await.unwrap();
     assert_eq!(
-        (child.id.as_str(), child.resolved_from.as_deref()),
+        (
+            child.id.as_str(),
+            child.resolved_from.as_ref().map(ThreadId::as_str)
+        ),
         ("top", Some("child"))
     );
     // A fork is a thread of its own.
@@ -341,7 +344,7 @@ async fn t3_contract() {
     let mut target = T3Target {
         url: url.parse().unwrap(),
         token_file: token_file.into(),
-        thread,
+        thread: thread.try_into().unwrap(),
         site: "the jampot contract test".to_owned(),
     };
     let thread = t3::open(&target).await.unwrap();

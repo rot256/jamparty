@@ -151,14 +151,14 @@ fn delivery_options_choose_the_target() {
     let Target::T3(from_env) = from_env else {
         panic!("not t3: {from_env:?}");
     };
-    assert_eq!(from_env.thread, "thread-1");
+    assert_eq!(from_env.thread.as_str(), "thread-1");
     assert_eq!(from_env.site, "/srv/site");
     assert_eq!(from_env.url.to_string(), "http://127.0.0.1:3773/mcp");
     let given = [&t3[..], &["--thread", "thread-2"]].concat();
     let (Target::T3(given), _) = choose(&given, Some("thread-1")).unwrap() else {
         panic!("not t3");
     };
-    assert_eq!(given.thread, "thread-2");
+    assert_eq!(given.thread.as_str(), "thread-2");
 
     // Each missing piece names its option; nothing is probed.
     let missing = |args: &[&str], env: Option<&str>| choose(args, env).unwrap_err().to_string();

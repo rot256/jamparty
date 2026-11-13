@@ -40,7 +40,7 @@ use crate::{
     adapters::{
         endpoint::{Discovery, NetConfig},
         keyfile, runtime, settings,
-        t3::{self, T3Target},
+        t3::{self, T3Target, ThreadId},
     },
     agent::guides::{self, Kind},
     core::{
@@ -352,6 +352,7 @@ fn target(
                 .filter(|thread| !thread.is_empty())
                 .context("the t3 target needs a thread: pass --thread (or set T3CODE_THREAD_ID)")?,
         };
+        let thread = ThreadId::try_from(thread).context("--thread")?;
         let target = T3Target {
             url,
             token_file,

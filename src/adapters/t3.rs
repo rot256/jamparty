@@ -7,7 +7,7 @@
 //! `{"_tag":"OrchestratorMcpFailure","code","message"}` as the text of an
 //! `isError` result.
 
-use std::{mem, path::PathBuf};
+use std::{fmt, mem, path::PathBuf};
 
 use data_encoding::HEXLOWER;
 use hyper::Uri;
@@ -18,7 +18,7 @@ use sha3::{Digest, Sha3_256};
 use crate::{
     Report,
     adapters::mcp::{McpClient, McpError, ToolFailure},
-    core::queue::DeliveryResult,
+    core::{invalid::Invalid, queue::DeliveryResult},
     protocol::comment::Comment,
 };
 
@@ -27,12 +27,70 @@ const MAX_MESSAGE: usize = 120_000;
 /// How many parents a child thread may have before jampot gives up.
 const MAX_DEPTH: usize = 8;
 
+/// A T3 thread's id, as T3 gives it (not empty).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub(crate) struct ThreadId(String);
+
+impl ThreadId {
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for ThreadId {
+    type Error = Invalid;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        if raw.is_empty() {
+            Err(Invalid::new("a T3 thread id is not empty"))
+        } else {
+            Ok(Self(raw))
+        }
+    }
+}
+
+impl From<ThreadId> for String {
+    fn from(id: ThreadId) -> Self {
+        id.0
+    }
+}
+
+impl fmt::Display for ThreadId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// How a thread came from its parent; only a subagent's is followed up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Relationship {
+    Subagent,
+    /// A fork, or a kind from a newer T3.
+    #[serde(other)]
+    Other,
+}
+
+/// What a T3 tool failure says went wrong, as far as jampot tells apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FailureCode {
+    ThreadNotFound,
+    ThreadNotSendable,
+    /// Any other code, or none.
+    #[serde(other)]
+    Other,
+}
+
 /// Where the t3 target delivers: the options, the thread resolved at start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct T3Target {
     pub(crate) url: Uri,
     pub(crate) token_file: PathBuf,
-    pub(crate) thread: String,
+    pub(crate) thread: ThreadId,
     /// What is shared (a directory or a URL), named in the header.
     pub(crate) site: String,
 }
@@ -40,7 +98,7 @@ pub(crate) struct T3Target {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReadInput<'a> {
-    thread_id: &'a str,
+    thread_id: &'a ThreadId,
     limit: u32,
     max_chars_per_item: u32,
 }
@@ -53,17 +111,17 @@ struct ReadResult {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadDetail {
-    thread_id: String,
+    thread_id: ThreadId,
     title: String,
-    parent_thread_id: Option<String>,
-    relationship_to_parent: Option<String>,
+    parent_thread_id: Option<ThreadId>,
+    relationship_to_parent: Option<Relationship>,
     archived: bool,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SendInput<'a> {
-    thread_id: &'a str,
+    thread_id: &'a ThreadId,
     message: &'a str,
     mode: &'static str,
     client_request_id: &'a str,
@@ -76,14 +134,14 @@ struct SendResult {}
 /// T3's tool failure (`OrchestratorMcpFailure`).
 #[derive(Debug, Deserialize)]
 struct Failure {
-    code: String,
+    code: FailureCode,
     message: String,
 }
 
 impl From<ToolFailure> for Failure {
     fn from(ToolFailure(text): ToolFailure) -> Self {
         serde_json::from_str(&text).unwrap_or(Self {
-            code: String::new(),
+            code: FailureCode::Other,
             message: text,
         })
     }
@@ -92,10 +150,10 @@ impl From<ToolFailure> for Failure {
 /// The thread a target delivers to, as read at start.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Thread {
-    pub(crate) id: String,
+    pub(crate) id: ThreadId,
     pub(crate) title: String,
     /// Set when the given thread was a subagent's, resolved to this one.
-    pub(crate) resolved_from: Option<String>,
+    pub(crate) resolved_from: Option<ThreadId>,
 }
 
 /// Reads the target's thread: an unknown or archived thread is an error; a
@@ -115,7 +173,7 @@ pub(crate) async fn open(target: &T3Target) -> Result<Thread, Report> {
             .context_with(|| format!("could not read the T3 thread {id}"))?;
         let thread = match read.map_err(Failure::from) {
             Ok(read) => read.thread,
-            Err(failure) if failure.code == "thread_not_found" => {
+            Err(failure) if failure.code == FailureCode::ThreadNotFound => {
                 bail!(
                     "T3 has no thread {id} (check --thread or T3CODE_THREAD_ID): {}",
                     failure.message
@@ -128,12 +186,9 @@ pub(crate) async fn open(target: &T3Target) -> Result<Thread, Report> {
         if thread.archived {
             bail!("the T3 thread {id} ({}) is archived", thread.title);
         }
-        match (
-            thread.relationship_to_parent.as_deref(),
-            thread.parent_thread_id,
-        ) {
-            (Some("subagent"), Some(parent)) => id = parent,
-            _ => {
+        match (thread.relationship_to_parent, thread.parent_thread_id) {
+            (Some(Relationship::Subagent), Some(parent)) => id = parent,
+            (Some(Relationship::Subagent | Relationship::Other) | None, _) => {
                 let resolved_from =
                     (thread.thread_id != target.thread).then(|| target.thread.clone());
                 return Ok(Thread {
@@ -150,7 +205,7 @@ pub(crate) async fn open(target: &T3Target) -> Result<Thread, Report> {
 /// Delivers batches to one thread.
 pub(crate) struct T3Delivery {
     client: McpClient,
-    thread: String,
+    thread: ThreadId,
     header: String,
 }
 
@@ -196,9 +251,11 @@ impl T3Delivery {
                 Ok(Ok(SendResult {})) => {}
                 Ok(Err(failure)) => {
                     let Failure { code, message } = Failure::from(failure);
-                    let result = match code.as_str() {
-                        "thread_not_found" | "thread_not_sendable" => DeliveryResult::Gone,
-                        _ => DeliveryResult::Error,
+                    let result = match code {
+                        FailureCode::ThreadNotFound | FailureCode::ThreadNotSendable => {
+                            DeliveryResult::Gone
+                        }
+                        FailureCode::Other => DeliveryResult::Error,
                     };
                     return (result, format!("T3: {message}"));
                 }
