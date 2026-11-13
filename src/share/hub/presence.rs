@@ -5,7 +5,10 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
 
-use tokio::{sync::mpsc, time};
+use tokio::{
+    sync::{mpsc, mpsc::error::TrySendError},
+    time,
+};
 
 use crate::{
     core::{ratelimit::RateLimiter, settings::Switch},
@@ -14,7 +17,7 @@ use crate::{
         control::{AckOutcome, CommentRef, ShareMessage},
         presence::{PagePath, Person, Position, Whereabouts},
     },
-    share::hub::{Audience, Hub, PRESENCE_INTERVAL},
+    share::hub::{Hub, PRESENCE_INTERVAL},
 };
 
 /// Who `here` are, as their comments are signed.
@@ -94,6 +97,8 @@ pub(super) struct Seat {
     pub(super) cursor_limiter: RateLimiter<()>,
     /// Other joiners' cursors, for its control stream.
     pub(super) cursors: mpsc::Sender<ShareMessage>,
+    /// The acknowledgements of its comments, for its control stream.
+    pub(super) acks: mpsc::Sender<ShareMessage>,
 }
 
 /// Why a joiner's message changed nothing.
@@ -101,7 +106,8 @@ pub(super) struct Seat {
 pub(crate) enum Ignored {
     /// Over its rate limit; dropped.
     RateLimited,
-    /// Presence updates past the flood limit: recorded, but the joiner is
+    /// Presence updates past the flood limit (recorded), or comments
+    /// faster than the joiner reads their acknowledgements: the joiner is
     /// disconnected.
     Flood,
     /// A cursor while the joiner's cursor switch is off.
@@ -166,34 +172,37 @@ impl Presence {
     }
 
     /// Queues a comment from this connection's `author` (see
-    /// [`Hub::comment`]) and sends its acknowledgement to this connection
-    /// under the hub's lock: before anything the comment leads to, its
-    /// delivery included, is sent.
+    /// [`Hub::comment`]) and queues its acknowledgement for this
+    /// connection under the hub's lock: before anything the comment leads
+    /// to, its delivery included, is broadcast. [`Ignored::Flood`] when
+    /// the connection has as many acknowledgements unread as it may.
     pub(crate) fn comment(
         &self,
         author: &Author,
         reference: CommentRef,
         draft: Draft,
-    ) -> AckOutcome {
+    ) -> Result<AckOutcome, Ignored> {
         let outcome = {
-            let mut inner = self.hub.lock();
+            let mut guard = self.hub.lock();
+            let inner = &mut *guard;
+            let acks = inner
+                .joiners
+                .iter()
+                .find(|seat| seat.connection == self.connection)
+                .map(|seat| seat.acks.clone())
+                .ok_or(Ignored::Gone)?;
+            let permit = acks.try_reserve().map_err(|error| match error {
+                TrySendError::Full(()) => Ignored::Flood,
+                TrySendError::Closed(()) => Ignored::Gone,
+            })?;
             let outcome = self
                 .hub
-                .queue_comment(&mut inner, author, reference.clone(), draft);
-            self.hub.send(
-                Audience::Connection(self.connection),
-                ShareMessage::CommentAck { reference, outcome },
-            );
+                .queue_comment(inner, author, reference.clone(), draft);
+            permit.send(ShareMessage::CommentAck { reference, outcome });
             outcome
         };
         self.hub.wake_for(outcome);
-        outcome
-    }
-
-    /// This connection's number.
-    #[must_use]
-    pub(crate) fn connection(&self) -> ConnectionId {
-        self.connection
+        Ok(outcome)
     }
 
     /// Forwards this joiner's cursor to the other people on its page (not

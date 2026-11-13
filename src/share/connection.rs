@@ -17,7 +17,6 @@ use tokio::{
     sync::{
         OwnedSemaphorePermit,
         broadcast::{self, error::RecvError},
-        mpsc,
     },
     task::JoinSet,
     time::{Instant, timeout, timeout_at},
@@ -41,7 +40,7 @@ use crate::{
         Shared,
         admission::{REFUSED_CODE, admit, reason_text},
         http::serve_stream,
-        hub::{Outgoing, Presence},
+        hub::{Inbox, Outgoing, Presence},
     },
 };
 
@@ -194,12 +193,12 @@ async fn joined(
     mut send: SendStream,
     mut recv: ControlReader,
     mut broadcasts: broadcast::Receiver<Outgoing>,
-    seated: (Presence, mpsc::Receiver<ShareMessage>),
+    seated: (Presence, Inbox),
     author: &Author,
     shared: &Arc<Shared>,
 ) -> &'static str {
     // Presence is left when this returns.
-    let (presence, mut cursors) = seated;
+    let (presence, mut inbox) = seated;
     let presence = &presence;
     let mut greeting = vec![ShareMessage::Admitted {
         you: author.clone(),
@@ -234,10 +233,9 @@ async fn joined(
     };
 
     // Reading and writing run side by side so neither cancels the other
-    // mid-line. Acknowledgements go out with the hub's broadcasts, in the
-    // order the hub sent them: an acknowledgement before the delivery of
-    // its comment.
-    let connection_id = presence.connection();
+    // mid-line. Acknowledgements are this connection's own, read first: one
+    // is queued before anything its comment leads to is broadcast, so it
+    // goes out before the delivery of its comment.
     let reader = async {
         // Renamed by presence updates; comments are signed with the latest.
         let mut author = author.clone();
@@ -255,7 +253,13 @@ async fn joined(
             };
             match message {
                 JoinerMessage::Comment { reference, draft } => {
-                    presence.comment(&author, reference, draft);
+                    match presence.comment(&author, reference, draft) {
+                        Ok(_) => {}
+                        Err(ignored) if ignored.disconnects() => return "comment flood",
+                        Err(ignored) => {
+                            tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "comment ignored");
+                        }
+                    }
                 }
                 JoinerMessage::Presence { name, url, cursor } => {
                     match presence.update(Whereabouts { name, url, cursor }) {
@@ -278,19 +282,22 @@ async fn joined(
     let writer = async {
         loop {
             let message = tokio::select! {
+                biased;
+                ack = inbox.acks.recv() => match ack {
+                    Some(ack) => ack,
+                    None => return "share stopped",
+                },
                 message = broadcasts.recv() => match message {
-                    // Answers, deliveries and acknowledgements for someone
-                    // else are not this joiner's.
-                    Ok(Outgoing { audience, .. })
-                        if !audience.includes(author.key, connection_id) =>
-                    {
+                    // Answers and deliveries for someone else are not this
+                    // joiner's.
+                    Ok(Outgoing { audience, .. }) if !audience.includes(author.key) => {
                         continue;
                     }
                     Ok(Outgoing { message, .. }) => presence.redact(message),
                     Err(RecvError::Lagged(_)) => return "fell behind",
                     Err(RecvError::Closed) => return "share stopped",
                 },
-                cursor = cursors.recv() => match cursor {
+                cursor = inbox.cursors.recv() => match cursor {
                     Some(cursor) => cursor,
                     None => return "share stopped",
                 },

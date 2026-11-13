@@ -35,10 +35,10 @@ use crate::{
         comment::{Author, Comment},
         control::{Anchor, CommentRef, ShareMessage, StatusLine},
     },
-    share::hub::presence::Seat,
+    share::hub::presence::{ConnectionId, Seat},
 };
 
-pub(crate) use crate::share::hub::presence::{ConnectionId, Presence, flush_presence};
+pub(crate) use crate::share::hub::presence::{Presence, flush_presence};
 #[cfg(test)]
 pub(crate) use crate::share::hub::{
     comments::{HELD, RETRYING},
@@ -63,6 +63,10 @@ const MAX_REFS: usize = 1000;
 /// Cursor messages waiting for one joiner's control stream; more are
 /// dropped (the next movement replaces them anyway).
 const CURSOR_QUEUE: usize = 32;
+/// Acknowledgements waiting for one joiner's control stream. A joiner
+/// that sends comments faster than it reads their acknowledgements is
+/// flooding, and is disconnected.
+pub(crate) const ACK_QUEUE: usize = 64;
 /// Presence changes reach joiners at most this often, together.
 const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -153,11 +157,9 @@ impl Hub {
     /// Adds an admitted joiner to presence until the returned guard drops;
     /// `None` if the share has [`MAX_JOINERS`] connections, or
     /// [`MAX_JOINERS_PER_KEY`] with this key.
-    pub(crate) fn join(
-        self: &Arc<Self>,
-        author: Author,
-    ) -> Option<(Presence, mpsc::Receiver<ShareMessage>)> {
-        let (cursors, receiver) = mpsc::channel(CURSOR_QUEUE);
+    pub(crate) fn join(self: &Arc<Self>, author: Author) -> Option<(Presence, Inbox)> {
+        let (cursors, cursors_in) = mpsc::channel(CURSOR_QUEUE);
+        let (acks, acks_in) = mpsc::channel(ACK_QUEUE);
         let connection = {
             let mut inner = self.lock();
             let same_key = inner
@@ -183,6 +185,7 @@ impl Hub {
                 updates: 0,
                 cursor_limiter: RateLimiter::new(RateLimit::CURSOR),
                 cursors,
+                acks,
             });
             connection
         };
@@ -191,7 +194,11 @@ impl Hub {
             hub: Arc::clone(self),
             connection,
         };
-        Some((presence, receiver))
+        let inbox = Inbox {
+            acks: acks_in,
+            cursors: cursors_in,
+        };
+        Some((presence, inbox))
     }
 
     /// What a newly admitted joiner is told besides presence: recent answers
@@ -202,11 +209,7 @@ impl Hub {
         let mut messages: Vec<ShareMessage> = inner
             .answers
             .iter()
-            .filter(|answer| match answer.audience {
-                Audience::Everyone => true,
-                Audience::Key(only) => only == key,
-                Audience::Connection(_) => false,
-            })
+            .filter(|answer| answer.audience.includes(key))
             .map(|answer| answer.message.clone())
             .collect();
         if let Some(line) = &inner.status {
@@ -268,20 +271,26 @@ pub(crate) enum Audience {
     /// The connections of one joiner key: its delivered comments, answers
     /// addressed to it.
     Key(EndpointKey),
-    /// One connection: the acknowledgement of a comment it sent.
-    Connection(ConnectionId),
 }
 
 impl Audience {
-    /// Whether connection `connection` of joiner `key` is in it.
+    /// Whether the connections of joiner `key` are in it.
     #[must_use]
-    pub(crate) fn includes(self, key: EndpointKey, connection: ConnectionId) -> bool {
+    pub(crate) fn includes(self, key: EndpointKey) -> bool {
         match self {
             Self::Everyone => true,
             Self::Key(only) => only == key,
-            Self::Connection(only) => only == connection,
         }
     }
+}
+
+/// What one connection is sent besides the hub's broadcasts.
+pub(crate) struct Inbox {
+    /// The acknowledgements of its comments, each queued before anything
+    /// the comment leads to is broadcast: read them first.
+    pub(crate) acks: mpsc::Receiver<ShareMessage>,
+    /// Other joiners' cursors on its page.
+    pub(crate) cursors: mpsc::Receiver<ShareMessage>,
 }
 
 impl From<Option<EndpointKey>> for Audience {

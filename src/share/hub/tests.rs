@@ -12,7 +12,9 @@ use crate::{
         control::{AckOutcome, CommentRef, ShareMessage},
         presence::{Position, Whereabouts},
     },
-    share::hub::{Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, MAX_QUEUED_PER_KEY, Outgoing},
+    share::hub::{
+        ACK_QUEUE, Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, MAX_QUEUED_PER_KEY, Outgoing,
+    },
 };
 
 fn hub() -> (Arc<Hub>, Arc<ManualClock>) {
@@ -255,7 +257,7 @@ fn cursors_go_only_to_other_people_on_the_same_page() {
     assert_eq!(bob.cursor(Some(position("h1"))), Err(Ignored::CursorOff));
     bob.update(whereabouts("bob", None, Switch::On)).unwrap();
     assert_eq!(bob.cursor(Some(position("h1"))), Err(Ignored::Nowhere));
-    assert!(alice_rx.try_recv().is_err());
+    assert!(alice_rx.cursors.try_recv().is_err());
 
     bob.update(whereabouts("bob", Some("/a"), Switch::On))
         .unwrap();
@@ -264,20 +266,20 @@ fn cursors_go_only_to_other_people_on_the_same_page() {
         key,
         url,
         position: Some(at),
-    }) = alice_rx.try_recv()
+    }) = alice_rx.cursors.try_recv()
     else {
         panic!("alice got no cursor");
     };
     assert_eq!(key, EndpointKey([2; 32]));
     assert_eq!(String::from(url), "/a");
     assert_eq!(at, position("h1"));
-    assert!(carol_rx.try_recv().is_err(), "carol is elsewhere");
-    assert!(bob_rx.try_recv().is_err() && bob_again_rx.try_recv().is_err());
+    assert!(carol_rx.cursors.try_recv().is_err(), "carol is elsewhere");
+    assert!(bob_rx.cursors.try_recv().is_err() && bob_again_rx.cursors.try_recv().is_err());
 
     // Leaving the page is a cursor without a position.
     assert_eq!(bob.cursor(None), Ok(1));
     assert!(matches!(
-        alice_rx.try_recv(),
+        alice_rx.cursors.try_recv(),
         Ok(ShareMessage::Cursor { position: None, .. })
     ));
 
@@ -285,12 +287,12 @@ fn cursors_go_only_to_other_people_on_the_same_page() {
     bob.update(whereabouts("bob", Some("/c"), Switch::On))
         .unwrap();
     assert_eq!(bob.cursor(Some(position("p"))), Ok(1));
-    assert!(carol_rx.try_recv().is_ok());
-    assert!(alice_rx.try_recv().is_err());
+    assert!(carol_rx.cursors.try_recv().is_ok());
+    assert!(alice_rx.cursors.try_recv().is_err());
     bob.update(whereabouts("bob", Some("/c"), Switch::Off))
         .unwrap();
     assert_eq!(bob.cursor(Some(position("p"))), Err(Ignored::CursorOff));
-    assert!(carol_rx.try_recv().is_err());
+    assert!(carol_rx.cursors.try_recv().is_err());
 
     // At most 25 per second.
     clock.advance(SignedDuration::from_secs(1));
@@ -305,41 +307,74 @@ fn cursors_go_only_to_other_people_on_the_same_page() {
 }
 
 #[tokio::test]
-async fn the_ack_goes_out_before_the_delivery() {
+async fn the_ack_is_queued_for_its_connection_before_the_delivery() {
     let (hub, _) = hub();
     let alice = author("alice", 1);
     let mut heard = hub.subscribe();
-    let (presence, _cursors) = hub.join(alice.clone()).unwrap();
-    let mine = presence.connection();
-    let (other, _other_cursors) = hub.join(alice.clone()).unwrap();
+    let (presence, mut inbox) = hub.join(alice.clone()).unwrap();
+    let (_other, mut other_inbox) = hub.join(alice.clone()).unwrap();
     let reference = fresh();
     // Delivered at once: the delivery task may finish before the
-    // connection's writer runs; the ack is still ahead of it.
-    let AckOutcome::Queued { id } = presence.comment(&alice, reference.clone(), draft()) else {
+    // connection's writer runs; the ack is queued already, and the writer
+    // reads acks first.
+    let AckOutcome::Queued { id } = presence
+        .comment(&alice, reference.clone(), draft())
+        .unwrap()
+    else {
         panic!("not queued");
     };
     hub.next_batch().await;
     hub.finish(DeliveryResult::Ok, "");
-    let mut order = Vec::new();
-    while let Ok(Outgoing { audience, message }) = heard.try_recv() {
+    let ack = inbox.acks.try_recv().unwrap();
+    assert_eq!(
+        ack,
+        ShareMessage::CommentAck {
+            reference,
+            outcome: AckOutcome::Queued { id }
+        }
+    );
+    assert!(
+        other_inbox.acks.try_recv().is_err(),
+        "acks are per connection"
+    );
+    // Only the delivery is broadcast.
+    let mut broadcast = Vec::new();
+    while let Ok(Outgoing { message, .. }) = heard.try_recv() {
         match message {
-            ShareMessage::CommentAck { .. } => {
-                assert!(audience.includes(alice.key, mine));
-                assert!(!audience.includes(alice.key, other.connection()));
-                order.push("ack");
-            }
-            ShareMessage::Delivered { ids } => {
-                assert_eq!(ids, [id]);
-                order.push("delivered");
-            }
-            ShareMessage::Admitted { .. }
+            ShareMessage::Presence { .. } => {}
+            other @ (ShareMessage::Admitted { .. }
             | ShareMessage::Refused { .. }
+            | ShareMessage::CommentAck { .. }
             | ShareMessage::Answer { .. }
+            | ShareMessage::Delivered { .. }
             | ShareMessage::Reload { .. }
             | ShareMessage::Status { .. }
-            | ShareMessage::Presence { .. }
-            | ShareMessage::Cursor { .. } => {}
+            | ShareMessage::Cursor { .. }) => broadcast.push(other),
         }
     }
-    assert_eq!(order, ["ack", "delivered"]);
+    assert_eq!(broadcast, [ShareMessage::Delivered { ids: vec![id] }]);
+}
+
+#[test]
+fn comments_faster_than_their_acks_are_read_are_a_flood() {
+    let (hub, _) = hub();
+    let alice = author("alice", 1);
+    let mut heard = hub.subscribe();
+    let (presence, _inbox) = hub.join(alice.clone()).unwrap();
+    // Rate-limited or not, each comment line is acknowledged; none of it
+    // reaches the broadcast that every joiner reads.
+    for _ in 0..ACK_QUEUE {
+        assert!(presence.comment(&alice, fresh(), draft()).is_ok());
+    }
+    assert_eq!(
+        presence.comment(&alice, fresh(), draft()),
+        Err(Ignored::Flood)
+    );
+    assert!(Ignored::Flood.disconnects());
+    while let Ok(Outgoing { message, .. }) = heard.try_recv() {
+        assert!(
+            matches!(message, ShareMessage::Presence { .. }),
+            "{message:?}"
+        );
+    }
 }
