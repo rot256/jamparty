@@ -322,10 +322,8 @@ impl Hub {
             .and_then(|()| inner.limiter.check(author.key, clock))
             .and_then(|()| inner.global.check((), clock));
         if let Err(limited) = limited {
-            let retry = limited.retry_after;
-            let secs = retry.as_secs() + i64::from(retry.subsec_nanos() > 0);
             return AckOutcome::RateLimited {
-                retry_after_secs: u64::try_from(secs).unwrap_or(0),
+                retry_after: limited.retry_after.unsigned_abs(),
             };
         }
         let mine = inner

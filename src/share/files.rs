@@ -16,9 +16,12 @@ use hyper_staticfile::{ResolveResult, Resolver, ResponseBuilder};
 use nix::libc;
 use tokio::fs;
 
-use crate::share::{
-    body::{AppBody, BodyError, RequestError, empty_response},
-    inject::{ClientMode, maybe_inject_client},
+use crate::{
+    protocol::control::Revision,
+    share::{
+        body::{AppBody, BodyError, RequestError, empty_response},
+        inject::{ClientMode, maybe_inject_client},
+    },
 };
 
 #[derive(Clone)]
@@ -39,7 +42,7 @@ impl Files {
     pub(crate) async fn handle(
         &self,
         request: Request<Incoming>,
-        revision: u64,
+        revision: Revision,
     ) -> Result<Response<AppBody>, RequestError> {
         let Self { root, resolver } = self;
         let request_method = request.method().clone();

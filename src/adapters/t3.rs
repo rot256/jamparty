@@ -267,8 +267,8 @@ mod tests {
         let author: Author =
             Author::new("alice".parse().unwrap(), "01".repeat(32).parse().unwrap());
         let draft = Draft::try_from(DraftFields {
-            page: "/".to_owned(),
-            selector: "h1".to_owned(),
+            page: "/".to_owned().try_into().unwrap(),
+            selector: "h1".to_owned().try_into().unwrap(),
             selected_text: None,
             comment: text.to_owned(),
         })

@@ -11,7 +11,7 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
-use crate::Report;
+use crate::{Report, protocol::control::Revision};
 
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
 const RELOAD_MAX_DELAY: Duration = Duration::from_secs(2);
@@ -19,23 +19,23 @@ const RELOAD_MAX_DELAY: Duration = Duration::from_secs(2);
 /// The live-reload revision: starts at 0 and counts content changes.
 #[derive(Clone)]
 pub(crate) struct ReloadState {
-    revision: watch::Sender<u64>,
+    revision: watch::Sender<Revision>,
 }
 
 impl ReloadState {
     #[must_use]
-    pub(crate) fn current(&self) -> u64 {
+    pub(crate) fn current(&self) -> Revision {
         *self.revision.borrow()
     }
 
     #[must_use]
-    pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
+    pub(crate) fn subscribe(&self) -> watch::Receiver<Revision> {
         self.revision.subscribe()
     }
 }
 
-fn bump(revision: &watch::Sender<u64>) {
-    revision.send_modify(|revision| *revision = revision.wrapping_add(1));
+fn bump(revision: &watch::Sender<Revision>) {
+    revision.send_modify(|revision| *revision = revision.next());
 }
 
 pub(crate) struct LiveWatcher {
@@ -66,7 +66,7 @@ pub(crate) fn start(root: &Path) -> Result<(LiveWatcher, ReloadState), Report> {
             ))
         })?;
 
-    let (revision, _) = watch::channel(0);
+    let (revision, _) = watch::channel(Revision::default());
     let state = ReloadState {
         revision: revision.clone(),
     };
@@ -82,7 +82,7 @@ pub(crate) fn start(root: &Path) -> Result<(LiveWatcher, ReloadState), Report> {
 
 async fn run_debouncer(
     mut events: mpsc::UnboundedReceiver<notify::Result<Event>>,
-    revision: watch::Sender<u64>,
+    revision: watch::Sender<Revision>,
     root: PathBuf,
 ) {
     while let Some(event) = events.recv().await {

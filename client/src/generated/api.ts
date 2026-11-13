@@ -14,6 +14,12 @@ export type CommentId = string;
 
 export type CommentRef = string;
 
+export type CommentPage = string;
+
+export type CommentSelector = string;
+
+export type Revision = number;
+
 export type EndpointKey = string;
 
 export type Fingerprint = string;
@@ -92,11 +98,11 @@ export type Answer = { id: CommentId, html: string,
 /**
  * The selector of the comment it answers.
  */
-anchor?: string, 
+anchor?: CommentSelector, 
 /**
  * The page that comment was made on.
  */
-page?: string, 
+page?: CommentPage, 
 /**
  * Addressed to this joiner alone (`jampot send --to`, or an answer to
  * its comment); the page says so.
@@ -127,7 +133,7 @@ here: Array<Person>,
 /**
  * The live-reload revision (shared directories only).
  */
-revision: number | null, status: StatusLine | null, 
+revision: Revision | null, status: StatusLine | null, 
 /**
  * This joiner's comments the share holds undelivered.
  */
@@ -176,7 +182,7 @@ here: Array<Person>,
 /**
  * The live-reload revision (shared directories only).
  */
-revision: number | null, status: StatusLine | null, 
+revision: Revision | null, status: StatusLine | null, 
 /**
  * This joiner's comments the share holds undelivered.
  */
@@ -201,11 +207,11 @@ rev: number,
  */
 epoch: Epoch, };
 
-export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, };
+export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: Revision, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, };
 
 export type Epoch = string;
 
-export type Stamped = { epoch: Epoch, rev: number, } & ({ "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, });
+export type Stamped = { epoch: Epoch, rev: number, } & ({ "type": "share", connected: boolean, } | { "type": "reload", revision: Revision, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, });
 
 export type Saved = { epoch: Epoch, rev: number, 
 /**
@@ -217,7 +223,7 @@ name: JoinerName,
  */
 askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: Corner, };
 
-export type Submission = { ref: CommentRef, page: string, selector: string, selectedText: string | null, comment: string, };
+export type Submission = { ref: CommentRef, page: CommentPage, selector: CommentSelector, selectedText: string | null, comment: string, };
 
 export type Queued = { id: CommentId, pending: number, 
 /**

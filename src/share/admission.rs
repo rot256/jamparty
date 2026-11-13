@@ -107,8 +107,8 @@ mod tests {
             Err(RefusedReason::WrongSecret)
         );
         let draft = Draft::try_from(DraftFields {
-            page: "/".to_owned(),
-            selector: "body".to_owned(),
+            page: "/".to_owned().try_into().unwrap(),
+            selector: "body".to_owned().try_into().unwrap(),
             selected_text: None,
             comment: "hi".to_owned(),
         })

@@ -14,6 +14,7 @@ use crate::{
     adapters::endpoint::generate_key,
     core::rng::SystemRng,
     join::Joiner,
+    protocol::control::Revision,
     tests::{
         harness::{
             Reply, fetch, fixture_dir, get, join, joiner, joiner_waiting, local, send, share_files,
@@ -88,14 +89,17 @@ async fn live_reload_reaches_the_joiner() {
     let mut view = joiner.watch();
     within(
         "the first revision",
-        view.wait_for(|view| view.revision == Some(0)),
+        view.wait_for(|view| view.revision == Some(Revision::default())),
     )
     .await
     .unwrap();
     fs::write(dir.path().join("style.css"), "h1 { color: blue }").unwrap();
     within(
         "a new revision",
-        view.wait_for(|view| view.revision.is_some_and(|revision| revision > 0)),
+        view.wait_for(|view| {
+            view.revision
+                .is_some_and(|revision| revision > Revision::default())
+        }),
     )
     .await
     .unwrap();

@@ -181,8 +181,11 @@ async fn answers_reach_every_joiner_and_later_ones() {
             .unwrap()
             .clone();
         let answer = view.answers.first().unwrap();
-        assert_eq!(answer.anchor.as_deref(), Some("#title"));
-        assert_eq!(answer.page.as_deref(), Some("http://x.localhost/"));
+        assert_eq!(answer.anchor.as_ref().map(AsRef::as_ref), Some("#title"));
+        assert_eq!(
+            answer.page.as_ref().map(AsRef::as_ref),
+            Some("http://x.localhost/")
+        );
     }
 
     let unknown = CommentId::generate(&SeededRng::new(9));

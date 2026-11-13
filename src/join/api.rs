@@ -27,7 +27,7 @@ use crate::{
     },
     protocol::{
         MAX_LINE_BYTES,
-        comment::{Draft, DraftFields},
+        comment::{CommentPage, CommentSelector, Draft, DraftFields},
         control::{AckOutcome, CommentRef},
         presence::{PagePath, Position},
     },
@@ -64,8 +64,8 @@ struct Status {
 struct Submission {
     #[serde(rename = "ref")]
     reference: CommentRef,
-    page: String,
-    selector: String,
+    page: CommentPage,
+    selector: CommentSelector,
     #[serde(default)]
     selected_text: Option<String>,
     comment: String,
@@ -88,7 +88,9 @@ struct Queued {
 #[cfg_attr(test, derive(ts_rs::TS))]
 struct Limited429 {
     error: &'static str,
-    retry_after_secs: u64,
+    #[serde(rename = "retryAfterSecs", with = "crate::core::secs")]
+    #[cfg_attr(test, ts(rename = "retryAfterSecs", type = "number"))]
+    retry_after: Duration,
 }
 
 /// `POST api/comments`: a JSON draft, handed to the share.
@@ -168,11 +170,11 @@ async fn submit(
     Ok(match outcome {
         AckOutcome::Queued { id } => queued(id, session.queued(id)),
         AckOutcome::Delivered { id } => queued(id, session.already_delivered(id)),
-        AckOutcome::RateLimited { retry_after_secs } => json_response(
+        AckOutcome::RateLimited { retry_after } => json_response(
             StatusCode::TOO_MANY_REQUESTS,
             &Limited429 {
                 error: "too many comments; try again shortly",
-                retry_after_secs,
+                retry_after,
             },
         ),
         AckOutcome::QueueFull => {
@@ -526,8 +528,8 @@ mod bindings {
             tabs::TabId,
         },
         protocol::{
-            comment::{Author, MAX_COMMENT, MAX_SELECTED_TEXT},
-            control::{CommentRef, RefusedReason, StatusLine},
+            comment::{Author, CommentPage, CommentSelector, MAX_COMMENT, MAX_SELECTED_TEXT},
+            control::{CommentRef, RefusedReason, Revision, StatusLine},
             presence::{
                 Colour, CursorSelector, FRACTION_ONE, Fraction, MAX_CURSOR_SELECTOR, MAX_PAGE_PATH,
                 PagePath, Person, Position,
@@ -542,6 +544,9 @@ mod bindings {
         let decls = [
             CommentId::decl(&cfg),
             CommentRef::decl(&cfg),
+            CommentPage::decl(&cfg),
+            CommentSelector::decl(&cfg),
+            Revision::decl(&cfg),
             EndpointKey::decl(&cfg),
             Fingerprint::decl(&cfg),
             JoinerName::decl(&cfg),

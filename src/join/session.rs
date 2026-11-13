@@ -30,9 +30,9 @@ use crate::{
         tabs::{TabError, TabId, Tabs},
     },
     protocol::{
-        comment::{Author, Draft},
+        comment::{Author, CommentPage, CommentSelector, Draft},
         control::{
-            AckOutcome, CommentRef, Envelope, JoinerMessage, RefusedReason, ShareMessage,
+            AckOutcome, CommentRef, Envelope, JoinerMessage, RefusedReason, Revision, ShareMessage,
             StatusLine,
         },
         presence::{PagePath, Person, Position, Support, Whereabouts},
@@ -58,7 +58,7 @@ pub(crate) struct View {
     /// The same people with their colour, page and cursor switch.
     pub(crate) here: Vec<Person>,
     /// The live-reload revision (shared directories only).
-    pub(crate) revision: Option<u64>,
+    pub(crate) revision: Option<Revision>,
     pub(crate) status: Option<StatusLine>,
     /// This joiner's comments the share holds undelivered.
     pub(crate) pending: usize,
@@ -179,11 +179,11 @@ pub(crate) struct Answer {
     /// The selector of the comment it answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
-    pub(crate) anchor: Option<String>,
+    pub(crate) anchor: Option<CommentSelector>,
     /// The page that comment was made on.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
-    pub(crate) page: Option<String>,
+    pub(crate) page: Option<CommentPage>,
     /// Addressed to this joiner alone (`jampot send --to`, or an answer to
     /// its comment); the page says so.
     #[serde(rename = "toYou")]
@@ -200,7 +200,7 @@ pub(crate) enum Event {
         connected: bool,
     },
     Reload {
-        revision: u64,
+        revision: Revision,
     },
     Presence {
         joiners: Vec<Author>,

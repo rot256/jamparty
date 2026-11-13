@@ -14,7 +14,10 @@ use hyper::{
     header::{self, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, ETAG},
 };
 
-use crate::share::body::{AppBody, RequestError, full_body};
+use crate::{
+    protocol::control::Revision,
+    share::body::{AppBody, RequestError, full_body},
+};
 
 const MAX_HTML_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 /// The client learns this jampot's version from its URL, to name it when
@@ -31,7 +34,7 @@ const EDIT_SCRIPT: &[u8] = concat!(
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ClientMode {
     Edit,
-    Live(u64),
+    Live(Revision),
 }
 
 pub(crate) async fn maybe_inject_client(
@@ -179,10 +182,14 @@ mod tests {
     use hyper::{Method, Response, body::Frame, header};
     use tokio::sync::mpsc;
 
-    use crate::share::{
-        body::{AppBody, BodyError},
-        inject::{
-            ClientMode, EDIT_SCRIPT, MAX_HTML_RESPONSE_BYTES, inject_client, maybe_inject_client,
+    use crate::{
+        protocol::control::Revision,
+        share::{
+            body::{AppBody, BodyError},
+            inject::{
+                ClientMode, EDIT_SCRIPT, MAX_HTML_RESPONSE_BYTES, inject_client,
+                maybe_inject_client,
+            },
         },
     };
 
@@ -279,7 +286,7 @@ mod tests {
 
     #[test]
     fn marks_the_live_client_script() {
-        let output = inject_client(b"<body>Hello</body>", ClientMode::Live(7));
+        let output = inject_client(b"<body>Hello</body>", ClientMode::Live(Revision::from(7)));
         let output = String::from_utf8_lossy(&output).into_owned();
         let version = env!("CARGO_PKG_VERSION");
         assert!(output.contains(&format!("client.js?live=7&amp;version={version}")));

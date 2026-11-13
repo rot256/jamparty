@@ -10,6 +10,8 @@
 //! presence. Unknown fields inside these are ignored, so a share may add
 //! some.
 
+use std::{fmt, time::Duration};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -24,7 +26,7 @@ use crate::{
         version::Version1,
     },
     protocol::{
-        comment::{Author, Draft},
+        comment::{Author, CommentPage, CommentSelector, Draft},
         presence::{PagePath, Person, Position, Support},
     },
 };
@@ -123,7 +125,7 @@ pub(crate) enum ShareMessage {
     /// These comments reached the target.
     Delivered { ids: Vec<CommentId> },
     /// The shared content changed; pages reload.
-    Reload { revision: u64 },
+    Reload { revision: Revision },
     /// The status line (`null` clears it).
     Status { line: Option<StatusLine> },
     /// Who is connected now: `joiners` once per key (what older joiners
@@ -143,6 +145,33 @@ pub(crate) enum ShareMessage {
         #[serde(default)]
         position: Option<Position>,
     },
+}
+
+/// The live-reload revision of a shared directory: starts at 0 and counts
+/// content changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
+pub(crate) struct Revision(u64);
+
+impl Revision {
+    /// The revision after this one.
+    #[must_use]
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+}
+
+impl From<u64> for Revision {
+    fn from(count: u64) -> Self {
+        Self(count)
+    }
+}
+
+impl fmt::Display for Revision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 /// What the share serves, as far as joiners care.
@@ -166,8 +195,8 @@ pub(crate) enum SiteInfo {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Anchor {
     pub(crate) comment: CommentId,
-    pub(crate) page: String,
-    pub(crate) selector: String,
+    pub(crate) page: CommentPage,
+    pub(crate) selector: CommentSelector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,8 +220,12 @@ pub(crate) enum AckOutcome {
     Queued { id: CommentId },
     /// Sent before (same `ref`) as `id`, which is delivered already.
     Delivered { id: CommentId },
-    /// Over 10 per minute; try again after this many seconds.
-    RateLimited { retry_after_secs: u64 },
+    /// Over 10 per minute; try again after this long (whole seconds on
+    /// the wire).
+    RateLimited {
+        #[serde(rename = "retry_after_secs", with = "crate::core::secs")]
+        retry_after: Duration,
+    },
     /// The share's queue is full, or holds as many of this joiner's
     /// comments as it takes.
     QueueFull,

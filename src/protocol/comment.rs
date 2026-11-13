@@ -40,12 +40,68 @@ impl Author {
     }
 }
 
+/// The page a comment was made on: its full URL as the browser had it, at
+/// most 4096 characters.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
+pub(crate) struct CommentPage(String);
+
+impl TryFrom<String> for CommentPage {
+    type Error = Invalid;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        check_len(&raw, "page", MAX_PAGE)?;
+        Ok(Self(raw))
+    }
+}
+
+impl From<CommentPage> for String {
+    fn from(page: CommentPage) -> Self {
+        page.0
+    }
+}
+
+impl AsRef<str> for CommentPage {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What a comment points at: a CSS selector, `jampot-agent:<id>` for an
+/// answer, or empty for the whole page; at most 2048 characters.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
+pub(crate) struct CommentSelector(String);
+
+impl TryFrom<String> for CommentSelector {
+    type Error = Invalid;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        check_len(&raw, "selector", MAX_SELECTOR)?;
+        Ok(Self(raw))
+    }
+}
+
+impl From<CommentSelector> for String {
+    fn from(selector: CommentSelector) -> Self {
+        selector.0
+    }
+}
+
+impl AsRef<str> for CommentSelector {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The fields of a draft; only reachable through a validated [`Draft`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DraftFields {
-    pub(crate) page: String,
-    pub(crate) selector: String,
+    pub(crate) page: CommentPage,
+    pub(crate) selector: CommentSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected_text: Option<String>,
     pub(crate) comment: String,
@@ -60,8 +116,6 @@ impl TryFrom<DraftFields> for Draft {
     type Error = Invalid;
 
     fn try_from(fields: DraftFields) -> Result<Self, Self::Error> {
-        check_len(&fields.page, "page", MAX_PAGE)?;
-        check_len(&fields.selector, "selector", MAX_SELECTOR)?;
         if let Some(selected) = &fields.selected_text {
             check_len(selected, "selectedText", MAX_SELECTED_TEXT)?;
         }
@@ -83,8 +137,8 @@ impl From<Draft> for DraftFields {
 pub(crate) struct Comment {
     pub(crate) id: CommentId,
     pub(crate) author: Author,
-    pub(crate) page: String,
-    pub(crate) selector: String,
+    pub(crate) page: CommentPage,
+    pub(crate) selector: CommentSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected_text: Option<String>,
     pub(crate) comment: String,
@@ -122,8 +176,11 @@ mod tests {
 
     fn fields(comment: &str) -> DraftFields {
         DraftFields {
-            page: "http://tzrjdfymwrg5sqai.localhost:4321/".to_owned(),
-            selector: "main > h1".to_owned(),
+            page: "http://tzrjdfymwrg5sqai.localhost:4321/"
+                .to_owned()
+                .try_into()
+                .unwrap(),
+            selector: "main > h1".to_owned().try_into().unwrap(),
             selected_text: None,
             comment: comment.to_owned(),
         }

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::{
     core::{ids::EndpointKey, rng::SeededRng, settings::Switch, token::PartySecret},
     protocol::{
@@ -5,7 +7,7 @@ use crate::{
         comment::{Author, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT, MAX_SELECTOR},
         control::{
             AckOutcome, Anchor, CommentRef, Envelope, JoinerMessage, MAX_COMMENT_REF,
-            MAX_STATUS_LINE, RefusedReason, ShareMessage, SiteInfo, StatusLine,
+            MAX_STATUS_LINE, RefusedReason, Revision, ShareMessage, SiteInfo, StatusLine,
         },
         decode_line, encode_line,
         presence::{MAX_CURSOR_SELECTOR, MAX_PAGE_PATH, Person, Support},
@@ -118,8 +120,8 @@ fn a_maximal_draft_fits_in_a_line() {
     // Control characters are escaped as \u00XX: the worst case per char.
     let escaped = |n: usize| "\u{1}".repeat(n);
     let draft = DraftFields {
-        page: escaped(MAX_PAGE),
-        selector: escaped(MAX_SELECTOR),
+        page: escaped(MAX_PAGE).try_into().unwrap(),
+        selector: escaped(MAX_SELECTOR).try_into().unwrap(),
         selected_text: Some(escaped(MAX_SELECTED_TEXT)),
         comment: format!("x{}", escaped(MAX_COMMENT - 1)),
     };
@@ -166,7 +168,7 @@ fn share_messages() {
             format!(r#"{{"type":"comment_ack","ref":"7","outcome":{{"result":"queued","id":"{ID}"}}}}"#),
         ),
         (
-            ShareMessage::CommentAck { reference: reference("8"), outcome: AckOutcome::RateLimited { retry_after_secs: 6 } },
+            ShareMessage::CommentAck { reference: reference("8"), outcome: AckOutcome::RateLimited { retry_after: Duration::from_secs(6) } },
             r#"{"type":"comment_ack","ref":"8","outcome":{"result":"rate_limited","retry_after_secs":6}}"#.to_owned(),
         ),
         (
@@ -177,7 +179,7 @@ fn share_messages() {
             ShareMessage::Answer {
                 id: ID.parse().unwrap(),
                 message: "Done.".to_owned().try_into().unwrap(),
-                anchor: Some(Anchor { comment: ID.parse().unwrap(), page: "/".to_owned(), selector: "h1".to_owned() }),
+                anchor: Some(Anchor { comment: ID.parse().unwrap(), page: "/".to_owned().try_into().unwrap(), selector: "h1".to_owned().try_into().unwrap() }),
                 to: None,
             },
             format!(r#"{{"type":"answer","id":"{ID}","message":"Done.","anchor":{{"comment":"{ID}","page":"/","selector":"h1"}}}}"#),
@@ -195,7 +197,7 @@ fn share_messages() {
             format!(r#"{{"type":"delivered","ids":["{ID}"]}}"#),
         ),
         (
-            ShareMessage::Reload { revision: 3 },
+            ShareMessage::Reload { revision: Revision::from(3) },
             r#"{"type":"reload","revision":3}"#.to_owned(),
         ),
         (
