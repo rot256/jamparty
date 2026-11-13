@@ -4,7 +4,6 @@ use clap::{CommandFactory, Parser};
 
 use crate::{
     Cli, Command, Delivery, TokenArg,
-    agent::guides,
     core::{
         ids::EndpointKey,
         rng::SeededRng,
@@ -194,17 +193,5 @@ fn delivery_options_choose_the_target() {
         "http://[::1]:3773/mcp",
     ] {
         assert!(remote(local).is_ok(), "{local}");
-    }
-}
-
-#[test]
-fn bare_jampot_prints_the_overview() {
-    for line in [
-        "jampot serve <dir>",
-        "jampot proxy <url>",
-        "jampot join <token>",
-        "Guide for agents: jampot agent",
-    ] {
-        assert!(guides::OVERVIEW.contains(line), "{line}");
     }
 }

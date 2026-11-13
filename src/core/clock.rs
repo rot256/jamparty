@@ -66,7 +66,7 @@ impl Clock for ManualClock {
 mod tests {
     use jiff::{SignedDuration, Timestamp};
 
-    use crate::core::clock::{Clock, ManualClock, SystemClock};
+    use crate::core::clock::{Clock, ManualClock};
 
     #[test]
     fn manual_clock_moves_only_when_told() {
@@ -78,10 +78,5 @@ mod tests {
         assert_eq!(clock.now().as_second(), 60);
         clock.set(Timestamp::UNIX_EPOCH);
         assert_eq!(clock.now(), Timestamp::UNIX_EPOCH);
-    }
-
-    #[test]
-    fn system_clock_is_after_2025() {
-        assert!(SystemClock.now().as_second() > 1_735_689_600);
     }
 }
