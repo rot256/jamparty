@@ -2,6 +2,13 @@
 // Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings
 
 export const API_VERSION = 2;
+export const MAX_NAME = 40;
+export const MAX_COMMENT = 10000;
+export const MAX_SELECTED_TEXT = 2000;
+export const MAX_PAGE_PATH = 512;
+export const MAX_CURSOR_SELECTOR = 512;
+export const FRACTION_ONE = 10000;
+export const RESERVED_KEYS: readonly string[] = ["/", "Escape"];
 
 export type CommentId = string;
 

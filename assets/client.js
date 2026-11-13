@@ -1,36 +1,14 @@
 // Generated from client/src by `npm run build`; do not edit.
 
-// client/src/config.ts
-var SCRIPT_URL = new URL(import.meta.url);
-var BASE = new URL("./", SCRIPT_URL);
-var COMMENTS_URL = new URL("api/comments", BASE);
-var STATUS_URL = new URL("api/status", BASE);
-var EVENTS_URL = new URL("api/events", BASE);
-var SETTINGS_URL = new URL("api/settings", BASE);
-var PAGE_URL = new URL("api/page", BASE);
-var CURSOR_URL = new URL("api/cursor", BASE);
-var LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
-var SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
-var HOST_ID = "jampot";
+// client/src/generated/api.ts
+var API_VERSION = 2;
+var MAX_NAME = 40;
+var MAX_COMMENT = 1e4;
 var MAX_SELECTED_TEXT = 2e3;
-var DISMISSED_KEY = "jampot-dismissed-v1";
-var OUTBOX_KEY = "jampot-outbox-v1";
-var MAX_OUTBOX = 20;
-var WATCHDOG_MS = 35e3;
-var AGENT_TARGET_PREFIX = "jampot-agent:";
-var CURSOR_RATE = 15;
-var CURSOR_FADE_MS = 4e3;
+var MAX_PAGE_PATH = 512;
+var MAX_CURSOR_SELECTOR = 512;
+var FRACTION_ONE = 1e4;
 var RESERVED_KEYS = ["/", "Escape"];
-var PALETTE = [
-  "#0b7896",
-  "#9c4f96",
-  "#b4461f",
-  "#2b7a3d",
-  "#5f5bb8",
-  "#a33a5b",
-  "#7a6200",
-  "#3d6b8f"
-];
 
 // client/src/capture.ts
 function truncate(value, length) {
@@ -103,6 +81,36 @@ function samePage(page) {
     return false;
   }
 }
+
+// client/src/config.ts
+var SCRIPT_URL = new URL(import.meta.url);
+var BASE = new URL("./", SCRIPT_URL);
+var COMMENTS_URL = new URL("api/comments", BASE);
+var STATUS_URL = new URL("api/status", BASE);
+var EVENTS_URL = new URL("api/events", BASE);
+var SETTINGS_URL = new URL("api/settings", BASE);
+var PAGE_URL = new URL("api/page", BASE);
+var CURSOR_URL = new URL("api/cursor", BASE);
+var LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
+var SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
+var HOST_ID = "jampot";
+var DISMISSED_KEY = "jampot-dismissed-v1";
+var OUTBOX_KEY = "jampot-outbox-v1";
+var MAX_OUTBOX = 20;
+var WATCHDOG_MS = 35e3;
+var AGENT_TARGET_PREFIX = "jampot-agent:";
+var CURSOR_RATE = 15;
+var CURSOR_FADE_MS = 4e3;
+var PALETTE = [
+  "#0b7896",
+  "#9c4f96",
+  "#b4461f",
+  "#2b7a3d",
+  "#5f5bb8",
+  "#a33a5b",
+  "#7a6200",
+  "#3d6b8f"
+];
 
 // client/src/answers.ts
 var GAP = 8;
@@ -335,9 +343,6 @@ var Answers = class {
     this.reveal(selector);
   }
 };
-
-// client/src/generated/api.ts
-var API_VERSION = 2;
 
 // client/src/api.ts
 var SubmitError = class extends Error {
@@ -656,12 +661,11 @@ var Connection = class {
 
 // client/src/location.ts
 var TAB_ID = crypto.randomUUID();
-var MAX_URL = 512;
 function pageUrl() {
   const url = new URL(window.location.href);
   const raw = `${url.pathname}${url.search}${url.hash}`;
   const encoded = raw.replace(/[^\x21-\x7e]|["\\]/gu, (character) => encodeURIComponent(character));
-  return encoded.startsWith("/") && encoded.length <= MAX_URL ? encoded : null;
+  return encoded.startsWith("/") && encoded.length <= MAX_PAGE_PATH ? encoded : null;
 }
 function watchUrl(listener) {
   let last = pageUrl();
@@ -938,9 +942,7 @@ var Panel = class {
 };
 
 // client/src/cursors.ts
-var FRACTION_ONE = 1e4;
 var INTERVAL_MS = 1e3 / CURSOR_RATE;
-var MAX_SELECTOR = 512;
 function fraction(offset, size) {
   if (size <= 0) return 0;
   return Math.round(Math.min(1, Math.max(0, offset / size)) * FRACTION_ONE);
@@ -1068,7 +1070,7 @@ var CursorSender = class {
     const element = document.elementsFromPoint(x, y).find((candidate) => candidate !== this.ui.host && !this.ui.host.contains(candidate));
     if (element === void 0) return null;
     const selector = cssSelector(element);
-    if (selector.length > MAX_SELECTOR) return null;
+    if (selector.length > MAX_CURSOR_SELECTOR) return null;
     const rect = element.getBoundingClientRect();
     return {
       selector,
@@ -2463,7 +2465,7 @@ var MARKUP = `
     </div>
     <div id="name-row">
       <label for="name-field">Name</label>
-      <input id="name-field" type="text" maxlength="40" autocomplete="nickname" spellcheck="false">
+      <input id="name-field" type="text" maxlength="${MAX_NAME}" autocomplete="nickname" spellcheck="false">
     </div>
     <div id="panel-message" role="status"></div>
     <div id="people">
@@ -2484,7 +2486,7 @@ var MARKUP = `
         <div id="selection-label">Selected text</div>
         <blockquote id="selection-text"></blockquote>
       </div>
-      <textarea id="comment" name="comment" maxlength="10000" required></textarea>
+      <textarea id="comment" name="comment" maxlength="${MAX_COMMENT}" required></textarea>
       <div id="status" role="alert"></div>
       <div id="reload-notice" role="status" hidden>
         Files changed. Reloading when this edit closes.
@@ -2502,7 +2504,7 @@ var MARKUP = `
         <span>Your name is shown next to your comments and your cursor.</span>
       </div>
       <label for="name-input">Name</label>
-      <input id="name-input" type="text" maxlength="40" autocomplete="nickname" spellcheck="false" required>
+      <input id="name-input" type="text" maxlength="${MAX_NAME}" autocomplete="nickname" spellcheck="false" required>
       <div id="name-error" role="alert"></div>
       <div id="name-foot">
         <span>Remembered on this computer; change it under the gear.</span>

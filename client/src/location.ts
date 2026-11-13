@@ -3,11 +3,10 @@
 // changes, and this tab's id for the joiner.
 
 import { reportPage } from "./api";
+import { MAX_PAGE_PATH } from "./generated/api";
 
 /** This tab, for the joiner (it tracks which URL each tab is on). */
 export const TAB_ID = crypto.randomUUID();
-
-const MAX_URL = 512;
 
 /**
  * The page's URL without its origin, in the joiner's alphabet (printable
@@ -17,7 +16,7 @@ export function pageUrl(): string | null {
   const url = new URL(window.location.href);
   const raw = `${url.pathname}${url.search}${url.hash}`;
   const encoded = raw.replace(/[^\x21-\x7e]|["\\]/gu, (character) => encodeURIComponent(character));
-  return encoded.startsWith("/") && encoded.length <= MAX_URL ? encoded : null;
+  return encoded.startsWith("/") && encoded.length <= MAX_PAGE_PATH ? encoded : null;
 }
 
 type Listener = (url: string | null) => void;

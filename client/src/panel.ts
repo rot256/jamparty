@@ -2,7 +2,8 @@
 // switches with their keys (rebindable), the name, and who is here.
 
 import { changeSettings } from "./api";
-import { PALETTE, RESERVED_KEYS } from "./config";
+import { PALETTE } from "./config";
+import { RESERVED_KEYS } from "./generated/api";
 import type { Corner, Keys, PageSettings, Person, Saved } from "./generated/api";
 import type { Ui } from "./ui";
 

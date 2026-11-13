@@ -10,14 +10,13 @@
 import { sendCursor } from "./api";
 import { cssSelector } from "./capture";
 import { CURSOR_FADE_MS, CURSOR_RATE } from "./config";
+import { FRACTION_ONE, MAX_CURSOR_SELECTOR } from "./generated/api";
 import type { Person, Pointer, Position } from "./generated/api";
 import { TAB_ID } from "./location";
 import { colourOf } from "./panel";
 import type { Ui } from "./ui";
 
-const FRACTION_ONE = 10000;
 const INTERVAL_MS = 1000 / CURSOR_RATE;
-const MAX_SELECTOR = 512;
 
 function fraction(offset: number, size: number): number {
   if (size <= 0) return 0;
@@ -158,7 +157,7 @@ export class CursorSender {
       .find((candidate) => candidate !== this.ui.host && !this.ui.host.contains(candidate));
     if (element === undefined) return null;
     const selector = cssSelector(element);
-    if (selector.length > MAX_SELECTOR) return null;
+    if (selector.length > MAX_CURSOR_SELECTOR) return null;
     const rect = element.getBoundingClientRect();
     return {
       selector,

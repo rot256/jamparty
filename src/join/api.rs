@@ -515,8 +515,10 @@ mod bindings {
     use crate::{
         core::{
             ids::{CommentId, EndpointKey, Fingerprint},
-            name::JoinerName,
-            settings::{Corner, KeyBinding, Keys, KeysFields, SettingsChange, Switch},
+            name::{JoinerName, MAX_NAME},
+            settings::{
+                Corner, KeyBinding, Keys, KeysFields, RESERVED_KEYS, SettingsChange, Switch,
+            },
         },
         join::{
             api::{API_VERSION, Limited429, Pointer, Queued, Saved, Status, Submission, Visit},
@@ -524,9 +526,12 @@ mod bindings {
             tabs::TabId,
         },
         protocol::{
-            comment::Author,
+            comment::{Author, MAX_COMMENT, MAX_SELECTED_TEXT},
             control::{CommentRef, RefusedReason, StatusLine},
-            presence::{Colour, CursorSelector, Fraction, PagePath, Person, Position},
+            presence::{
+                Colour, CursorSelector, FRACTION_ONE, Fraction, MAX_CURSOR_SELECTOR, MAX_PAGE_PATH,
+                PagePath, Person, Position,
+            },
         },
         share::body::ErrorBody,
     };
@@ -576,6 +581,26 @@ mod bindings {
              // Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings\n\n",
         );
         out.push_str(&format!("export const API_VERSION = {API_VERSION};\n"));
+        // The limits the share enforces, for the client to stay within.
+        let limits = [
+            ("MAX_NAME", MAX_NAME),
+            ("MAX_COMMENT", MAX_COMMENT),
+            ("MAX_SELECTED_TEXT", MAX_SELECTED_TEXT),
+            ("MAX_PAGE_PATH", MAX_PAGE_PATH),
+            ("MAX_CURSOR_SELECTOR", MAX_CURSOR_SELECTOR),
+            ("FRACTION_ONE", usize::from(FRACTION_ONE)),
+        ];
+        for (name, value) in limits {
+            out.push_str(&format!("export const {name} = {value};\n"));
+        }
+        let reserved: Vec<String> = RESERVED_KEYS
+            .iter()
+            .map(|key| serde_json::to_string(key).unwrap())
+            .collect();
+        out.push_str(&format!(
+            "export const RESERVED_KEYS: readonly string[] = [{}];\n",
+            reserved.join(", ")
+        ));
         for decl in decls {
             out.push_str("\nexport ");
             out.push_str(&decl);

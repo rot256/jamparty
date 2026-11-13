@@ -1,7 +1,7 @@
 // What a comment is about: the element (or the whole page), its selector
 // and any selected text.
 
-import { MAX_SELECTED_TEXT } from "./config";
+import { MAX_SELECTED_TEXT } from "./generated/api";
 
 export interface Captured {
   /** The element commented on; null for a page-level comment. */

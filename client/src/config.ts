@@ -16,7 +16,6 @@ export const LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
 export const SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
 
 export const HOST_ID = "jampot";
-export const MAX_SELECTED_TEXT = 2000;
 export const DISMISSED_KEY = "jampot-dismissed-v1";
 export const OUTBOX_KEY = "jampot-outbox-v1";
 export const MAX_OUTBOX = 20;
@@ -28,8 +27,6 @@ export const AGENT_TARGET_PREFIX = "jampot-agent:";
 export const CURSOR_RATE = 15;
 /** A cursor without an update for this long fades out. */
 export const CURSOR_FADE_MS = 4000;
-/** Keys jampot keeps for itself (`/` opens a page comment, Escape cancels). */
-export const RESERVED_KEYS = ["/", "Escape"];
 /** The colours people are shown in, by the share's colour index; white text reads on each. */
 export const PALETTE = [
   "#0b7896",

@@ -4,6 +4,7 @@
 // agent's answers and the dialogs.
 
 import { HOST_ID } from "./config";
+import { MAX_COMMENT, MAX_NAME } from "./generated/api";
 import { styles } from "./styles";
 
 const GEAR_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>`;
@@ -57,7 +58,7 @@ const MARKUP = `
     </div>
     <div id="name-row">
       <label for="name-field">Name</label>
-      <input id="name-field" type="text" maxlength="40" autocomplete="nickname" spellcheck="false">
+      <input id="name-field" type="text" maxlength="${MAX_NAME}" autocomplete="nickname" spellcheck="false">
     </div>
     <div id="panel-message" role="status"></div>
     <div id="people">
@@ -78,7 +79,7 @@ const MARKUP = `
         <div id="selection-label">Selected text</div>
         <blockquote id="selection-text"></blockquote>
       </div>
-      <textarea id="comment" name="comment" maxlength="10000" required></textarea>
+      <textarea id="comment" name="comment" maxlength="${MAX_COMMENT}" required></textarea>
       <div id="status" role="alert"></div>
       <div id="reload-notice" role="status" hidden>
         Files changed. Reloading when this edit closes.
@@ -96,7 +97,7 @@ const MARKUP = `
         <span>Your name is shown next to your comments and your cursor.</span>
       </div>
       <label for="name-input">Name</label>
-      <input id="name-input" type="text" maxlength="40" autocomplete="nickname" spellcheck="false" required>
+      <input id="name-input" type="text" maxlength="${MAX_NAME}" autocomplete="nickname" spellcheck="false" required>
       <div id="name-error" role="alert"></div>
       <div id="name-foot">
         <span>Remembered on this computer; change it under the gear.</span>
