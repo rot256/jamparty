@@ -521,11 +521,13 @@ pub(crate) fn commented(outcome: &Value) -> Option<String> {
     outcome["commented"]["id"].as_str().map(str::to_owned)
 }
 
-/// `messages` without presence and pings, which come at any time.
+/// `messages` without presence, pings and live-reload revisions, which
+/// come at any time (a shared directory's revision follows admission, so
+/// it may reach the joiner after a page's hello).
 pub(crate) fn about(messages: Vec<Value>) -> Vec<Value> {
     messages
         .into_iter()
-        .filter(|message| !matches!(kind(message), "people" | "ping"))
+        .filter(|message| !matches!(kind(message), "people" | "ping" | "reload"))
         .collect()
 }
 
