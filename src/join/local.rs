@@ -25,7 +25,7 @@ use tokio::{
 use crate::{
     Report,
     core::request::{
-        FRAME_ANCESTORS, Method, Refusal, RequestFacts, Route, Upgrade, is_navigation,
+        FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade, is_navigation,
     },
     join::{
         api,
@@ -41,8 +41,7 @@ use crate::{
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// What a page load gets while the share cannot be reached: a short note
-/// that retries by itself (the joiner opens the browser before it is
-/// connected, and reconnects after a drop).
+/// that retries by itself (the joiner reconnects after a drop).
 const UNREACHABLE_PAGE: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
 <meta http-equiv=\"refresh\" content=\"2\"><title>jampot: connecting</title>\
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:32em;margin:4em auto;padding:0 1em;color:#222}</style>\
@@ -50,9 +49,15 @@ const UNREACHABLE_PAGE: &str = "<!doctype html><html><head><meta charset=\"utf-8
 <p>jampot join cannot reach the share yet. This page retries every few seconds.</p>\
 <p>If it keeps failing, the share may have stopped; ask for a new token.</p></body></html>\n";
 
-/// Accepts browser connections until the task is dropped. A request for the
-/// share waits up to `connect_wait` for the connection to it.
-pub(crate) async fn serve(listener: TcpListener, session: Arc<Session>, connect_wait: Duration) {
+/// Accepts browser connections for `origin` until the task is dropped. A
+/// request for the share waits up to `connect_wait` for the connection to
+/// it.
+pub(crate) async fn serve(
+    listener: TcpListener,
+    session: Arc<Session>,
+    origin: Arc<LocalOrigin>,
+    connect_wait: Duration,
+) {
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(accepted) => accepted,
@@ -64,10 +69,14 @@ pub(crate) async fn serve(listener: TcpListener, session: Arc<Session>, connect_
             }
         };
         let session = Arc::clone(&session);
+        let origin = Arc::clone(&origin);
         tokio::spawn(async move {
             let service = service_fn(move |request| {
                 let session = Arc::clone(&session);
-                async move { Ok::<_, Infallible>(handle(request, &session, connect_wait).await) }
+                let origin = Arc::clone(&origin);
+                async move {
+                    Ok::<_, Infallible>(handle(request, &session, &origin, connect_wait).await)
+                }
             });
             let served = http1::Builder::new()
                 .timer(TokioTimer::new())
@@ -85,11 +94,12 @@ pub(crate) async fn serve(listener: TcpListener, session: Arc<Session>, connect_
 async fn handle(
     request: Request<Incoming>,
     session: &Arc<Session>,
+    origin: &LocalOrigin,
     connect_wait: Duration,
 ) -> Response<AppBody> {
     let request_facts = facts(&request);
     let page_load = is_navigation(&request_facts);
-    let decision = session.origin.decide(&request_facts);
+    let decision = origin.decide(&request_facts);
     let mut response = match decision {
         Ok(Route::Comments) => api::comment(request, session).await,
         Ok(Route::Status) => api::status(session),

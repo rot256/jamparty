@@ -22,7 +22,6 @@ use crate::{
     core::{
         ids::{CommentId, EndpointKey},
         name::JoinerName,
-        request::LocalOrigin,
         rng::{Rng, random_array},
         settings::{Corner, Keys, Settings, SettingsChange, Switch},
     },
@@ -441,7 +440,6 @@ pub(crate) enum CursorError {
 }
 
 pub(crate) struct Session {
-    pub(crate) origin: LocalOrigin,
     preferences: Mutex<Preferences>,
     view: watch::Sender<View>,
     control: Mutex<Option<Arc<Control>>>,
@@ -458,10 +456,9 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(origin: LocalOrigin, preferences: Preferences, epoch: Epoch) -> Self {
+    pub(crate) fn new(preferences: Preferences, epoch: Epoch) -> Self {
         let view = View::new(preferences.page(), epoch);
         Self {
-            origin,
             preferences: Mutex::new(preferences),
             view: watch::channel(view).0,
             control: Mutex::new(None),

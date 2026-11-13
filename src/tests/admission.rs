@@ -16,14 +16,15 @@ use crate::{
         rng::SystemRng,
         token::{PartySecret, PartyToken},
     },
+    join::Refused,
     protocol::{
         control::{Envelope, RefusedReason, ShareMessage, SiteInfo},
         presence::Support,
     },
     share::{REFUSED_CODE, Source, delivery::Target},
     tests::harness::{
-        config, connected, fixture_dir, get, joiner, net, raw_connection, share_files, share_proxy,
-        start, within,
+        config, connected, fixture_dir, joiner, net, raw_connection, share_files, share_proxy,
+        start, try_joiner, within,
     },
 };
 
@@ -154,15 +155,15 @@ async fn a_token_from_another_run_is_refused() {
         share: share.token().share,
         secret: earlier.token().secret.clone(),
     };
-    let joiner = joiner(stale, share.direct_addrs(), "late").await;
-    let mut view = joiner.watch();
-    let view = within("the refusal", view.wait_for(|view| view.refused.is_some()))
-        .await
-        .unwrap()
-        .clone();
-    assert_eq!(view.refused, Some(RefusedReason::WrongSecret));
-    assert!(!view.connected);
-    assert_eq!(get(&joiner, "/").await.status, 502);
+    // The joiner is admitted before it serves anything: a refusal is its
+    // start's error.
+    let Err(error) = try_joiner(stale, share.direct_addrs()).await else {
+        panic!("a stale token was admitted");
+    };
+    let refused = error
+        .iter_reports()
+        .find_map(|report| report.downcast_current_context::<Refused>().copied());
+    assert_eq!(refused, Some(Refused(RefusedReason::WrongSecret)));
     assert!(share.presence().is_empty());
 }
 

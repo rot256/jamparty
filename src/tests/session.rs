@@ -248,12 +248,21 @@ async fn a_full_share_is_retried_not_final() {
         connected(&joiner).await;
         joiners.push(joiner);
     }
-    let extra = joiner_with_key(share.token().clone(), share.direct_addrs(), "alice", key).await;
-    time::sleep(Duration::from_millis(500)).await;
-    assert!(!extra.watch().borrow().connected);
-    assert_eq!(extra.watch().borrow().refused, None);
+    // The extra one keeps trying, without a seat, until one frees up.
+    let mut extra = tokio::spawn(joiner_with_key(
+        share.token().clone(),
+        share.direct_addrs(),
+        "alice",
+        key,
+    ));
+    assert!(
+        time::timeout(Duration::from_millis(500), &mut extra)
+            .await
+            .is_err()
+    );
     assert_eq!(share.presence().len(), 1);
     joiners.pop().unwrap().stop().await;
+    let extra = within("the extra joiner", extra).await.unwrap();
     connected(&extra).await;
 }
 

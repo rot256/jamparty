@@ -8,14 +8,14 @@ use iroh::{
     endpoint::{ConnectionError, RecvStream, VarInt},
 };
 use rootcause::prelude::report;
-use tokio::{io::BufReader, time};
+use tokio::{io::BufReader, sync::oneshot, time};
 
 use crate::{
     Report,
     adapters::{endpoint, lines},
     core::{queue::backoff, token::PartyToken},
     join::session::{Control, Session},
-    protocol::control::{Envelope, JoinerMessage, RefusedReason, ShareMessage},
+    protocol::control::{Envelope, JoinerMessage, RefusedReason, ShareMessage, SiteInfo},
     share::REFUSED_CODE,
 };
 
@@ -30,6 +30,13 @@ pub(crate) struct Dial {
     pub(crate) share_addrs: Vec<SocketAddr>,
 }
 
+/// How the first admission went: what the share serves (none from an
+/// older share), or why it refused for good.
+pub(crate) type First = Result<Option<SiteInfo>, RefusedReason>;
+
+/// Who hears of the first admission (taken when told).
+type FirstWaiter = Option<oneshot::Sender<First>>;
+
 /// How one connection attempt ended.
 enum Ended {
     /// The share refused us; retrying would not help.
@@ -40,14 +47,20 @@ enum Ended {
     Failed(Report),
 }
 
-/// Keeps the session connected until the share refuses us.
-pub(crate) async fn run(dial: Dial, session: Arc<Session>) {
+/// Keeps the session connected until the share refuses us; `first` hears
+/// how the first admission went.
+pub(crate) async fn run(dial: Dial, session: Arc<Session>, first: oneshot::Sender<First>) {
+    let mut first = Some(first);
     let mut failures: u32 = 0;
     loop {
-        match attempt(&dial, &session).await {
+        match attempt(&dial, &session, &mut first).await {
             Ended::Refused(reason) => {
                 tracing::warn!(?reason, "the share refused this joiner");
                 session.disconnected(Some(reason));
+                if let Some(first) = first.take() {
+                    // Nobody waits any more if the start was given up.
+                    let _ = first.send(Err(reason));
+                }
                 return;
             }
             Ended::Lost => {
@@ -65,7 +78,7 @@ pub(crate) async fn run(dial: Dial, session: Arc<Session>) {
     }
 }
 
-async fn attempt(dial: &Dial, session: &Session) -> Ended {
+async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> Ended {
     let connection =
         match endpoint::connect(&dial.endpoint, dial.token.share, &dial.share_addrs).await {
             Ok(connection) => connection,
@@ -83,38 +96,42 @@ async fn attempt(dial: &Dial, session: &Session) -> Ended {
     if let Err(error) = lines::write(&mut send, &hello).await {
         return Ended::Failed(error);
     }
-    let (you, undelivered, presence) = match lines::read::<Envelope<ShareMessage>, _>(&mut recv)
-        .await
-    {
-        Ok(Some(Envelope {
-            version: _,
-            message:
-                ShareMessage::Admitted {
-                    you,
-                    undelivered,
-                    presence,
-                    site: _,
-                },
-        })) => (you, undelivered, presence),
-        Ok(Some(Envelope {
-            version: _,
-            message: ShareMessage::Refused { reason },
-        })) => {
-            connection.close(VarInt::from_u32(0), b"refused");
-            return refused(reason);
-        }
-        Ok(_) | Err(_) => {
-            let closed = time::timeout(CLOSE_WAIT, connection.closed()).await;
-            return match refusal(closed.ok()) {
-                Some(reason) => refused(reason),
-                None => Ended::Failed(report!("the share closed the connection during admission")),
-            };
-        }
-    };
+    let (you, undelivered, presence, site) =
+        match lines::read::<Envelope<ShareMessage>, _>(&mut recv).await {
+            Ok(Some(Envelope {
+                version: _,
+                message:
+                    ShareMessage::Admitted {
+                        you,
+                        undelivered,
+                        presence,
+                        site,
+                    },
+            })) => (you, undelivered, presence, site),
+            Ok(Some(Envelope {
+                version: _,
+                message: ShareMessage::Refused { reason },
+            })) => {
+                connection.close(VarInt::from_u32(0), b"refused");
+                return refused(reason);
+            }
+            Ok(_) | Err(_) => {
+                let closed = time::timeout(CLOSE_WAIT, connection.closed()).await;
+                return match refusal(closed.ok()) {
+                    Some(reason) => refused(reason),
+                    None => {
+                        Ended::Failed(report!("the share closed the connection during admission"))
+                    }
+                };
+            }
+        };
     let control = Arc::new(Control::new(connection, send, presence));
     session
         .connected(Arc::clone(&control), you, &undelivered)
         .await;
+    if let Some(first) = first.take() {
+        let _ = first.send(Ok(site));
+    }
     receive(&mut recv, &control, session).await;
     control.connection.close(VarInt::from_u32(0), b"bye");
     Ended::Lost

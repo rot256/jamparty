@@ -46,9 +46,10 @@ use crate::{
     core::{
         ids::{CommentId, Sid},
         name::JoinerName,
+        port::Port,
         token::{PartyToken, TokenError},
     },
-    join::{JoinConfig, Joiner},
+    join::{JoinConfig, Joiner, Refused},
     protocol::{agent::Addressee, control::AnswerText},
     share::{
         Share, ShareConfig, Source,
@@ -74,9 +75,8 @@ pub fn describe(error: &Report) -> String {
         .join(": ")
 }
 
-/// How long a page's request waits for the joiner to reach the share (it
-/// opens the browser before it is connected) before it is answered "not
-/// reachable".
+/// How long a page's request waits for the joiner to reach the share again
+/// (after a drop) before it is answered "not reachable".
 const CONNECT_WAIT: Duration = Duration::from_secs(15);
 
 /// How long a public share waits to reach a relay before printing its token.
@@ -130,10 +130,10 @@ enum Command {
         /// Dial the share at this address, without relays or address lookup.
         #[arg(long, hide = true)]
         share_addr: Vec<SocketAddr>,
-        /// Serve the session on this local port (the same origin as an
-        /// earlier run with this port and token).
-        #[arg(long, hide = true)]
-        port: Option<u16>,
+        /// Serve the site on this local port [default: the dev server's
+        /// port when it is free here, else any free port]
+        #[arg(long)]
+        port: Option<Port>,
     },
 
     /// List the guides for agents, or print one.
@@ -471,7 +471,7 @@ async fn join(
     name: Option<JoinerName>,
     open: Open,
     share_addrs: Vec<SocketAddr>,
-    port: Option<u16>,
+    port: Option<Port>,
 ) -> Result<(), Report> {
     let discovery = if share_addrs.is_empty() {
         Discovery::Public
@@ -479,7 +479,7 @@ async fn join(
         Discovery::Direct
     };
     let key = keyfile::load_or_create(&keyfile::default_path()?)?;
-    let joiner = Joiner::start(JoinConfig {
+    let config = JoinConfig {
         token,
         name,
         default_name: default_name(),
@@ -489,8 +489,15 @@ async fn join(
         share_addrs,
         port,
         connect_wait: CONNECT_WAIT,
-    })
-    .await?;
+    };
+    println!("jampot: connecting to the share…");
+    let joiner = tokio::select! {
+        joiner = Joiner::start(config) => joiner?,
+        signal = shutdown_signal() => return Ok(signal?),
+    };
+    if let Some(fallback) = joiner.fallback() {
+        println!("jampot: {fallback}");
+    }
     let url = joiner.url();
     println!("jampot: open {url}");
     match open {
@@ -509,9 +516,7 @@ async fn join(
     };
     joiner.stop().await;
     match refused {
-        Some(reason) => bail!(
-            "the share refused this joiner ({reason:?}): the token is wrong or from an earlier run"
-        ),
+        Some(reason) => Err(Refused(reason).into()),
         None => Ok(()),
     }
 }

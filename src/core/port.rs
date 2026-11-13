@@ -11,6 +11,11 @@ use crate::core::invalid::Invalid;
 #[serde(try_from = "u16", into = "u16")]
 pub(crate) struct Port(NonZeroU16);
 
+impl Port {
+    /// HTTP's default port, which origins leave out.
+    pub(crate) const HTTP: Self = Self(NonZeroU16::new(80).expect("80 is not 0"));
+}
+
 impl TryFrom<u16> for Port {
     type Error = Invalid;
 

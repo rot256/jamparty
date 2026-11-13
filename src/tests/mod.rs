@@ -8,6 +8,7 @@ mod delivery;
 mod fake_t3;
 mod harness;
 mod local_rules;
+mod mirror;
 mod presence;
 mod requests;
 mod session;

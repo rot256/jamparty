@@ -27,6 +27,7 @@ share stops.
 ```sh
 jampot join <token>
 jampot join -          # read the token from stdin
+jampot join <token> --port 8080  # serve on this port (default: the dev server's)
 ```
 
 ## Answer (agent)

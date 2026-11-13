@@ -16,8 +16,9 @@ use tokio::{net::TcpStream, time};
 use url::form_urlencoded;
 
 use crate::{
+    Report,
     adapters::endpoint::{Accept, Discovery, NetConfig, bind, connect, generate_key},
-    core::{rng::SystemRng, token::PartyToken},
+    core::{port::Port, rng::SystemRng, token::PartyToken},
     join::{JoinConfig, Joiner},
     share::{Share, ShareConfig, Source, delivery::Target, proxy::UpstreamUrl},
 };
@@ -115,9 +116,46 @@ pub(crate) async fn share_proxy(upstream: SocketAddr) -> TestShare {
     share(Source::Proxy(url)).await
 }
 
-/// A joiner with a fresh key, not yet necessarily admitted.
+/// A joiner with a fresh key, admitted.
 pub(crate) async fn joiner(token: PartyToken, addrs: Vec<SocketAddr>, name: &str) -> Joiner {
     joiner_with_key(token, addrs, name, generate_key(&SystemRng)).await
+}
+
+/// Starts a joiner of `share` on `port` (none: as `jampot join` without
+/// `--port`); fails if the share refuses it or the port cannot be had.
+pub(crate) async fn joiner_on(share: &Share, port: Option<Port>) -> Result<Joiner, Report> {
+    start_joiner(
+        share.token().clone(),
+        share.direct_addrs(),
+        "alice",
+        generate_key(&SystemRng),
+        port,
+    )
+    .await
+}
+
+async fn start_joiner(
+    token: PartyToken,
+    addrs: Vec<SocketAddr>,
+    name: &str,
+    key: SecretKey,
+    port: Option<Port>,
+) -> Result<Joiner, Report> {
+    within(
+        "the joiner to start",
+        Joiner::start(JoinConfig {
+            token,
+            name: Some(name.parse().unwrap()),
+            default_name: "joiner".parse().unwrap(),
+            settings: settings_path(),
+            key,
+            net: net(),
+            share_addrs: addrs,
+            port,
+            connect_wait: CONNECT_WAIT,
+        }),
+    )
+    .await
 }
 
 /// How long a test joiner's requests wait for the share: well inside
@@ -154,6 +192,14 @@ pub(crate) async fn joiner_waiting(
     })
     .await
     .unwrap()
+}
+
+/// Starts a joiner that may be refused: the start's outcome.
+pub(crate) async fn try_joiner(
+    token: PartyToken,
+    addrs: Vec<SocketAddr>,
+) -> Result<Joiner, Report> {
+    start_joiner(token, addrs, "alice", generate_key(&SystemRng), None).await
 }
 
 /// A settings file in a directory of its own, not created until saved.

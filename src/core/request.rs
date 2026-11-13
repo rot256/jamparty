@@ -2,7 +2,7 @@
 //! request carries to a route or a refusal.
 //!
 //! - `Host` must be exactly `<sid>.localhost:<port>` (defeats DNS
-//!   rebinding).
+//!   rebinding); `<sid>.localhost` on port 80.
 //! - Top-level document navigations (GET/HEAD, `Sec-Fetch-Mode: navigate`,
 //!   `Sec-Fetch-Dest: document`) are allowed from anywhere.
 //! - Every other request needs `Sec-Fetch-Site: same-origin`, or no
@@ -15,7 +15,7 @@
 //! only the exact reserved paths are the joiner's own, everything else
 //! goes to the share.
 
-use crate::core::ids::Sid;
+use crate::core::{ids::Sid, port::Port};
 
 /// Every response carries `Content-Security-Policy` with this value.
 pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
@@ -112,7 +112,8 @@ impl Refusal {
     }
 }
 
-/// The joiner's local origin: `<sid>.localhost:<port>`.
+/// The joiner's local origin: `<sid>.localhost:<port>`, or without the
+/// port when it is 80, as browsers write it.
 #[derive(Clone, Debug)]
 pub(crate) struct LocalOrigin {
     host: String,
@@ -121,8 +122,12 @@ pub(crate) struct LocalOrigin {
 
 impl LocalOrigin {
     #[must_use]
-    pub(crate) fn new(sid: &Sid, port: u16) -> Self {
-        let host = format!("{sid}.localhost:{port}");
+    pub(crate) fn new(sid: &Sid, port: Port) -> Self {
+        let host = if port == Port::HTTP {
+            format!("{sid}.localhost")
+        } else {
+            format!("{sid}.localhost:{port}")
+        };
         let origin = format!("http://{host}");
         Self { host, origin }
     }

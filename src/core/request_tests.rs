@@ -2,6 +2,7 @@ use proptest::prelude::*;
 
 use crate::core::{
     ids::EndpointKey,
+    port::Port,
     request::{
         COMMENTS_PATH, CURSOR_PATH, EVENTS_PATH, LocalOrigin, Method, PAGE_PATH, Refusal,
         RequestFacts, Route, SETTINGS_PATH, STATUS_PATH, Upgrade,
@@ -13,7 +14,7 @@ const ORIGIN: &str = "http://tzrjdfymwrg5sqai.localhost:4321";
 const OTHER_ORIGIN: &str = "https://evil.example";
 
 fn local() -> LocalOrigin {
-    LocalOrigin::new(&EndpointKey([0; 32]).sid(), 4321)
+    LocalOrigin::new(&EndpointKey([0; 32]).sid(), 4321.try_into().unwrap())
 }
 
 /// A same-origin `fetch` from the session's own page.
@@ -69,6 +70,30 @@ fn origin_and_host() {
     let local = local();
     assert_eq!(local.host(), HOST);
     assert_eq!(local.origin(), ORIGIN);
+}
+
+#[test]
+fn the_default_port_is_left_out() {
+    // As browsers write it: no `:80` in `Host` or `Origin`.
+    let local = LocalOrigin::new(&EndpointKey([0; 32]).sid(), Port::HTTP);
+    assert_eq!(local.host(), "tzrjdfymwrg5sqai.localhost");
+    assert_eq!(local.origin(), "http://tzrjdfymwrg5sqai.localhost");
+    let post = RequestFacts {
+        host: Some("tzrjdfymwrg5sqai.localhost"),
+        origin: Some("http://tzrjdfymwrg5sqai.localhost"),
+        ..fetch(Method::Post, COMMENTS_PATH)
+    };
+    assert_eq!(local.decide(&post), Ok(Route::Comments));
+    let explicit = RequestFacts {
+        host: Some("tzrjdfymwrg5sqai.localhost:80"),
+        ..post
+    };
+    assert_eq!(local.decide(&explicit), Err(Refusal::WrongHost));
+    let explicit_origin = RequestFacts {
+        origin: Some("http://tzrjdfymwrg5sqai.localhost:80"),
+        ..post
+    };
+    assert_eq!(local.decide(&explicit_origin), Err(Refusal::BadOrigin));
 }
 
 #[test]

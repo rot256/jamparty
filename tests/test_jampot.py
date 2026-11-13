@@ -97,12 +97,14 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def upstream_server() -> Iterator[str]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
+def upstream_server(
+    host: str = "127.0.0.1", handler: type[BaseHTTPRequestHandler] = FixtureHandler
+) -> Iterator[str]:
+    server = ThreadingHTTPServer((host, 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}"
+        yield f"http://{host}:{server.server_port}"
     finally:
         server.shutdown()
         server.server_close()
@@ -401,10 +403,54 @@ def test_a_wrong_token_is_refused(tmp_path: Path) -> None:
         # The share's own key with another secret.
         wrong = base58_encode(token[:32] + bytes(range(16)))
         with join_process(tmp_path, shared, wrong) as process:
-            _ = process.wait_for("jampot: open ")
+            _ = process.wait_for("jampot: connecting to the share")
+            # Refused before it serves anything: an error, no address.
             output = process.wait_for("jampot: the share refused")
             assert "token" in output
             assert process.process.wait(timeout=TIMEOUT) == 1
+            assert not any(line.startswith("jampot: open") for line in process.seen)
+
+
+# Dev servers on 127.0.0.2 stand for dev servers on another machine: the
+# joiner's 127.0.0.1 and [::1] are free on their port, and pages reach
+# them only through jampot.
+DEV_HOST = "127.0.0.2"
+
+
+def test_the_joiner_serves_on_the_dev_servers_port(tmp_path: Path, page: Page) -> None:
+    with (
+        upstream_server(DEV_HOST) as upstream,
+        share(tmp_path, "proxy", upstream) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        assert joined.port == urlsplit(upstream).port
+        _ = page.goto(joined.url)
+        expect(page.locator("h1")).to_have_text("Fixture page")
+        expect(page.locator("#jampot")).to_be_attached()
+
+
+def test_a_taken_port_falls_back_with_a_note(tmp_path: Path, page: Page) -> None:
+    with upstream_server(DEV_HOST) as upstream:
+        port = urlsplit(upstream).port
+        assert port is not None
+        with socket.socket(socket.AF_INET) as taken:
+            # Something else here has the dev server's port.
+            taken.bind(("127.0.0.1", port))
+            taken.listen()
+            with (
+                share(tmp_path, "proxy", upstream) as shared,
+                join_process(tmp_path, shared, shared.token) as process,
+            ):
+                note = process.wait_for("jampot: port ")
+                assert note.startswith(f"{port} is in use here; serving on "), note
+                assert "Live reload" in note
+                url = process.wait_for("jampot: open ")
+                served = urlsplit(url).port
+                assert served is not None and served != port
+                assert note.startswith(f"{port} is in use here; serving on {served}.")
+                _ = page.goto(url)
+                expect(page.locator("h1")).to_have_text("Fixture page")
+                expect(page.locator("#jampot")).to_be_attached()
 
 
 def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:
