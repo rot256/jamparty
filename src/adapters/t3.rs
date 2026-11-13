@@ -7,7 +7,7 @@
 //! `{"_tag":"OrchestratorMcpFailure","code","message"}` as the text of an
 //! `isError` result.
 
-use std::{fmt, mem, path::PathBuf};
+use std::{fmt, mem, net::IpAddr, path::PathBuf, str::FromStr};
 
 use data_encoding::HEXLOWER;
 use hyper::Uri;
@@ -18,7 +18,7 @@ use sha3::{Digest, Sha3_256};
 use crate::{
     Report,
     adapters::mcp::{McpClient, McpError, ToolFailure},
-    core::{invalid::Invalid, queue::DeliveryResult},
+    core::{invalid::Invalid, queue::Attempt},
     protocol::comment::Comment,
 };
 
@@ -26,6 +26,47 @@ use crate::{
 const MAX_MESSAGE: usize = 120_000;
 /// How many parents a child thread may have before jampot gives up.
 const MAX_DEPTH: usize = 8;
+
+/// T3's MCP URL: `https://`, or plain `http://` to this machine only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct T3Url(Uri);
+
+impl FromStr for T3Url {
+    type Err = Invalid;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let url = raw
+            .parse::<Uri>()
+            .ok()
+            .filter(|url| matches!(url.scheme_str(), Some("http" | "https")))
+            .ok_or_else(|| Invalid::new(format!("{raw} is not an http:// or https:// URL")))?;
+        if url.scheme_str() == Some("http") && !url.host().is_some_and(is_loopback) {
+            return Err(Invalid::new(format!(
+                "{url}: plain http:// only to this machine (localhost, 127.0.0.1, [::1]); use https://"
+            )));
+        }
+        Ok(Self(url))
+    }
+}
+
+impl From<T3Url> for Uri {
+    fn from(url: T3Url) -> Self {
+        url.0
+    }
+}
+
+impl fmt::Display for T3Url {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// Whether a URL's host is this machine.
+fn is_loopback(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
 
 /// A T3 thread's id, as T3 gives it (not empty).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +90,14 @@ impl TryFrom<String> for ThreadId {
         } else {
             Ok(Self(raw))
         }
+    }
+}
+
+impl FromStr for ThreadId {
+    type Err = Invalid;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        Self::try_from(raw.to_owned())
     }
 }
 
@@ -88,7 +137,7 @@ enum FailureCode {
 /// Where the t3 target delivers: the options, the thread resolved at start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct T3Target {
-    pub(crate) url: Uri,
+    pub(crate) url: T3Url,
     pub(crate) token_file: PathBuf,
     pub(crate) thread: ThreadId,
     /// What is shared (a directory or a URL), named in the header.
@@ -159,7 +208,7 @@ pub(crate) struct Thread {
 /// Reads the target's thread: an unknown or archived thread is an error; a
 /// subagent's thread is resolved to its top-level thread.
 pub(crate) async fn open(target: &T3Target) -> Result<Thread, Report> {
-    let client = McpClient::new(target.url.clone(), target.token_file.clone());
+    let client = McpClient::new(target.url.clone().into(), target.token_file.clone());
     let mut id = target.thread.clone();
     for _ in 0..MAX_DEPTH {
         let input = ReadInput {
@@ -218,23 +267,21 @@ impl T3Delivery {
             site,
         } = target;
         Self {
-            client: McpClient::new(url, token_file),
+            client: McpClient::new(url.into(), token_file),
             thread,
             header: header(&site),
         }
     }
 
-    /// Sends `batch` (as several messages if it is too long for one); the
-    /// string says what went wrong. A thread T3 no longer has, or no longer
-    /// takes messages for, is `Gone`.
-    pub(crate) async fn deliver(&self, batch: &[Comment]) -> (DeliveryResult, String) {
+    /// Sends `batch` (as several messages if it is too long for one). A
+    /// thread T3 no longer has, or no longer takes messages for, is gone.
+    pub(crate) async fn deliver(&self, batch: &[Comment]) -> Attempt {
         let messages = match messages(&self.header, batch) {
             Ok(messages) => messages,
             Err(error) => {
-                return (
-                    DeliveryResult::Error,
-                    format!("could not encode a comment: {error}"),
-                );
+                return Attempt::Failed {
+                    why: format!("could not encode a comment: {error}"),
+                };
             }
         };
         for (index, message) in messages.into_iter().enumerate() {
@@ -251,18 +298,22 @@ impl T3Delivery {
                 Ok(Ok(SendResult {})) => {}
                 Ok(Err(failure)) => {
                     let Failure { code, message } = Failure::from(failure);
-                    let result = match code {
+                    let why = format!("T3: {message}");
+                    return match code {
                         FailureCode::ThreadNotFound | FailureCode::ThreadNotSendable => {
-                            DeliveryResult::Gone
+                            Attempt::Gone { why }
                         }
-                        FailureCode::Other => DeliveryResult::Error,
+                        FailureCode::Other => Attempt::Failed { why },
                     };
-                    return (result, format!("T3: {message}"));
                 }
-                Err(error) => return (DeliveryResult::Error, format!("T3: {error}")),
+                Err(error) => {
+                    return Attempt::Failed {
+                        why: format!("T3: {error}"),
+                    };
+                }
             }
         }
-        (DeliveryResult::Ok, String::new())
+        Attempt::Delivered
     }
 }
 

@@ -11,26 +11,23 @@ use nix::{
 };
 use tokio::{io::AsyncWriteExt, process::Command, time};
 
-use crate::{core::queue::DeliveryResult, protocol::comment::Comment};
+use crate::{core::queue::Attempt, protocol::comment::Comment};
 
-/// Delivers `batch` to `argv`; the string says what went wrong, if
-/// anything. A command that cannot be started at all is `Gone`.
-pub(crate) async fn deliver(
-    argv: &[OsString],
-    timeout: Duration,
-    batch: &[Comment],
-) -> (DeliveryResult, String) {
+/// Delivers `batch` to `argv`. A command that cannot be started at all is
+/// gone.
+pub(crate) async fn deliver(argv: &[OsString], timeout: Duration, batch: &[Comment]) -> Attempt {
     let Some((program, args)) = argv.split_first() else {
-        return (DeliveryResult::Gone, "no command".to_owned());
+        return Attempt::Gone {
+            why: "no command".to_owned(),
+        };
     };
     let name = program.to_string_lossy();
     let mut input = Vec::new();
     for comment in batch {
         if let Err(error) = serde_json::to_writer(&mut input, comment) {
-            return (
-                DeliveryResult::Error,
-                format!("could not encode a comment: {error}"),
-            );
+            return Attempt::Failed {
+                why: format!("could not encode a comment: {error}"),
+            };
         }
         input.push(b'\n');
     }
@@ -47,12 +44,12 @@ pub(crate) async fn deliver(
                 error.kind(),
                 ErrorKind::NotFound | ErrorKind::PermissionDenied
             );
-            let result = if gone {
-                DeliveryResult::Gone
+            let why = format!("could not run {name}: {error}");
+            return if gone {
+                Attempt::Gone { why }
             } else {
-                DeliveryResult::Error
+                Attempt::Failed { why }
             };
-            return (result, format!("could not run {name}: {error}"));
         }
     };
     let group = child
@@ -70,24 +67,24 @@ pub(crate) async fn deliver(
     };
     let status = time::timeout(timeout, run).await;
     match status {
-        Ok(Ok(status)) if status.success() => (DeliveryResult::Ok, String::new()),
-        Ok(Ok(status)) => (
-            DeliveryResult::Error,
-            format!("{name} exited with {status}"),
-        ),
-        Ok(Err(error)) => (DeliveryResult::Error, format!("{name}: {error}")),
+        Ok(Ok(status)) if status.success() => Attempt::Delivered,
+        Ok(Ok(status)) => Attempt::Failed {
+            why: format!("{name} exited with {status}"),
+        },
+        Ok(Err(error)) => Attempt::Failed {
+            why: format!("{name}: {error}"),
+        },
         Err(_) => {
             if let Some(group) = group {
                 let _ = killpg(group, Signal::SIGKILL);
             }
             let _ = child.kill().await;
-            (
-                DeliveryResult::Error,
-                format!(
+            Attempt::Failed {
+                why: format!(
                     "{name} took longer than {}s and was killed",
                     timeout.as_secs()
                 ),
-            )
+            }
         }
     }
 }
@@ -102,7 +99,7 @@ mod tests {
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
     use tokio::time;
 
-    use crate::{adapters::command::deliver, core::queue::DeliveryResult};
+    use crate::{adapters::command::deliver, core::queue::Attempt};
 
     /// Whether `pid` still runs. A killed process whose parent died stays
     /// a zombie until init reaps it, and some inits (a container's node,
@@ -130,8 +127,8 @@ mod tests {
             r#"sleep 30 & echo $! > "$0"; wait"#.into(),
             pid.clone().into(),
         ];
-        let (result, detail) = deliver(&argv, Duration::from_millis(300), &[]).await;
-        assert_eq!(result, DeliveryResult::Error, "{detail}");
+        let attempt = deliver(&argv, Duration::from_millis(300), &[]).await;
+        assert!(matches!(attempt, Attempt::Failed { .. }), "{attempt:?}");
         let pid: i32 = fs::read_to_string(&pid).unwrap().trim().parse().unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while running(pid) {

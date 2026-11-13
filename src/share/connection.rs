@@ -2,6 +2,7 @@
 //! streams and the control loop until either side leaves.
 
 use std::{
+    fmt,
     io::Cursor,
     sync::{
         Arc,
@@ -97,7 +98,7 @@ pub(crate) async fn handle(
             )
             .await;
             tracing::info!(name = %author.name, fingerprint = %author.fingerprint, reason = %ended, "joiner left");
-            connection.close(VarInt::from_u32(DROPPED_CODE), ended.as_bytes());
+            connection.close(VarInt::from_u32(DROPPED_CODE), ended.as_str().as_bytes());
         }
         Ok(Admission::Refused { send, reason }) => {
             tracing::info!(fingerprint = %key.fingerprint(), reason = reason.as_str(), "joiner refused");
@@ -187,6 +188,40 @@ async fn refuse(connection: &Connection, mut send: SendStream, reason: RefusedRe
     connection.close(VarInt::from_u32(REFUSED_CODE), reason.as_str().as_bytes());
 }
 
+/// Why an admitted joiner's connection ended; sent as the close reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Left {
+    ControlStreamClosed,
+    ConnectionClosed,
+    InvalidControlLine,
+    CommentFlood,
+    PresenceFlood,
+    SecondHello,
+    FellBehind,
+    ShareStopped,
+}
+
+impl Left {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ControlStreamClosed => "control stream closed",
+            Self::ConnectionClosed => "connection closed",
+            Self::InvalidControlLine => "invalid control line",
+            Self::CommentFlood => "comment flood",
+            Self::PresenceFlood => "presence flood",
+            Self::SecondHello => "second hello",
+            Self::FellBehind => "fell behind",
+            Self::ShareStopped => "share stopped",
+        }
+    }
+}
+
+impl fmt::Display for Left {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Runs an admitted joiner until it leaves; returns why it ended.
 async fn joined(
     connection: &Connection,
@@ -196,7 +231,7 @@ async fn joined(
     seated: (Presence, Inbox),
     author: &Author,
     shared: &Arc<Shared>,
-) -> &'static str {
+) -> Left {
     // Presence is left when this returns.
     let (presence, mut inbox) = seated;
     let presence = &presence;
@@ -218,7 +253,7 @@ async fn joined(
             .await
             .is_err()
         {
-            return "control stream closed";
+            return Left::ControlStreamClosed;
         }
     }
 
@@ -229,7 +264,7 @@ async fn joined(
             // Reap finished requests so the set does not grow.
             while requests.try_join_next().is_some() {}
         }
-        "connection closed"
+        Left::ConnectionClosed
     };
 
     // Reading and writing run side by side so neither cancels the other
@@ -245,17 +280,17 @@ async fn joined(
                     version: _,
                     message,
                 })) => message,
-                Ok(None) => return "control stream closed",
+                Ok(None) => return Left::ControlStreamClosed,
                 Err(error) => {
                     tracing::debug!(%error, "invalid control line");
-                    return "invalid control line";
+                    return Left::InvalidControlLine;
                 }
             };
             match message {
                 JoinerMessage::Comment { reference, draft } => {
                     match presence.comment(&author, reference, draft) {
                         Ok(_) => {}
-                        Err(ignored) if ignored.disconnects() => return "comment flood",
+                        Err(ignored) if ignored.disconnects() => return Left::CommentFlood,
                         Err(ignored) => {
                             tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "comment ignored");
                         }
@@ -264,7 +299,7 @@ async fn joined(
                 JoinerMessage::Presence { name, url, cursor } => {
                     match presence.update(Whereabouts { name, url, cursor }) {
                         Ok(renamed) => author = renamed,
-                        Err(ignored) if ignored.disconnects() => return "presence flood",
+                        Err(ignored) if ignored.disconnects() => return Left::PresenceFlood,
                         Err(ignored) => {
                             tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "presence update ignored");
                         }
@@ -275,7 +310,7 @@ async fn joined(
                         tracing::debug!(fingerprint = %author.fingerprint, ?ignored, "cursor ignored");
                     }
                 }
-                JoinerMessage::Hello(_) => return "second hello",
+                JoinerMessage::Hello(_) => return Left::SecondHello,
             }
         }
     };
@@ -285,7 +320,7 @@ async fn joined(
                 biased;
                 ack = inbox.acks.recv() => match ack {
                     Some(ack) => ack,
-                    None => return "share stopped",
+                    None => return Left::ShareStopped,
                 },
                 message = broadcasts.recv() => match message {
                     // Answers and deliveries for someone else are not this
@@ -294,19 +329,19 @@ async fn joined(
                         continue;
                     }
                     Ok(Outgoing { message, .. }) => presence.redact(message),
-                    Err(RecvError::Lagged(_)) => return "fell behind",
-                    Err(RecvError::Closed) => return "share stopped",
+                    Err(RecvError::Lagged(_)) => return Left::FellBehind,
+                    Err(RecvError::Closed) => return Left::ShareStopped,
                 },
                 cursor = inbox.cursors.recv() => match cursor {
                     Some(cursor) => cursor,
-                    None => return "share stopped",
+                    None => return Left::ShareStopped,
                 },
             };
             if lines::write(&mut send, &Envelope::from(message))
                 .await
                 .is_err()
             {
-                return "control stream closed";
+                return Left::ControlStreamClosed;
             }
         }
     };

@@ -176,26 +176,21 @@ fn delivery_options_choose_the_target() {
     assert!(
         missing(&["--t3-url", "http://127.0.0.1:3773/mcp"], Some("t")).contains("--t3-token-file")
     );
-    let ftp = [
-        "--t3-url",
-        "ftp://t3",
-        "--t3-token-file",
-        "f",
-        "--thread",
-        "t",
-    ];
-    assert!(missing(&ftp, None).contains("http"));
-    // Plain http only to this machine.
-    let remote = |url: &str| {
-        let args = ["--t3-url", url, "--t3-token-file", "f", "--thread", "t"];
-        choose(&args, None).map(|_| ())
+    // The URL and the thread are checked as the options are parsed.
+    let parsed = |args: &[&str]| {
+        Cli::try_parse_from(["jampot", "serve"].iter().chain(args))
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     };
+    assert!(parsed(&["--thread", ""]).is_err());
     assert!(
-        remote("http://t3/mcp")
+        parsed(&["--t3-url", "ftp://t3"])
             .unwrap_err()
-            .to_string()
-            .contains("https://")
+            .contains("http")
     );
+    // Plain http only to this machine.
+    let remote = |url: &str| parsed(&["--t3-url", url]);
+    assert!(remote("http://t3/mcp").unwrap_err().contains("https://"));
     assert!(remote("http://10.0.0.1/mcp").is_err());
     assert!(remote("http://localhost.evil.test/mcp").is_err());
     for local in [

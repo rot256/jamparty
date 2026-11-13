@@ -7,7 +7,7 @@
 //! - `command`: the batch goes to the command's stdin.
 //! - `t3`: the batch is a message to a T3 thread.
 
-use std::{ffi::OsString, sync::Arc, time::Duration};
+use std::{ffi::OsString, fmt, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{mpsc, oneshot},
@@ -17,9 +17,9 @@ use tokio::{
 use crate::{
     adapters::{
         command,
-        t3::{T3Delivery, T3Target},
+        t3::{T3Delivery, T3Target, ThreadId},
     },
-    core::queue::DeliveryResult,
+    core::queue::Attempt,
     protocol::comment::Comment,
     share::hub::Hub,
 };
@@ -55,8 +55,26 @@ pub(crate) struct RecvRequest {
 pub(crate) enum RecvAccess {
     /// The target is `recv`: where clients queue up.
     Open(mpsc::Sender<RecvRequest>),
-    /// Comments go elsewhere, to the target named here.
-    Elsewhere(String),
+    /// Comments go elsewhere.
+    Elsewhere(Elsewhere),
+}
+
+/// Where comments go when not to `jampot recv`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Elsewhere {
+    /// A command, by its program.
+    Command(OsString),
+    /// A T3 thread.
+    T3(ThreadId),
+}
+
+impl fmt::Display for Elsewhere {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Command(program) => write!(f, "the command {}", program.to_string_lossy()),
+            Self::T3(thread) => write!(f, "the T3 thread {thread}"),
+        }
+    }
 }
 
 /// Starts delivery; returns what `jampot recv` clients get.
@@ -68,18 +86,14 @@ pub(crate) fn start(target: Target, hub: Arc<Hub>, tasks: &mut JoinSet<()>) -> R
             RecvAccess::Open(requests)
         }
         Target::Command(command) => {
-            let program = command
-                .argv
-                .first()
-                .map(|program| program.to_string_lossy().into_owned())
-                .unwrap_or_default();
+            let program = command.argv.first().cloned().unwrap_or_default();
             tasks.spawn(to_command(hub, command));
-            RecvAccess::Elsewhere(format!("the command {program}"))
+            RecvAccess::Elsewhere(Elsewhere::Command(program))
         }
         Target::T3(target) => {
-            let thread = format!("the T3 thread {}", target.thread);
+            let thread = target.thread.clone();
             tasks.spawn(to_t3(hub, T3Delivery::new(target)));
-            RecvAccess::Elsewhere(thread)
+            RecvAccess::Elsewhere(Elsewhere::T3(thread))
         }
     }
 }
@@ -91,12 +105,13 @@ async fn to_recv(hub: Arc<Hub>, mut requests: mpsc::Receiver<RecvRequest>) {
             () = batch.closed() => continue,
         };
         if batch.send(comments).is_err() {
-            hub.finish(DeliveryResult::Returned, "recv went away");
+            // The `jampot recv` went away.
+            hub.finish(Attempt::Returned);
             continue;
         }
         match printed.await {
-            Ok(()) => hub.finish(DeliveryResult::Ok, ""),
-            Err(_) => hub.finish(DeliveryResult::Returned, "recv went away"),
+            Ok(()) => hub.finish(Attempt::Delivered),
+            Err(_) => hub.finish(Attempt::Returned),
         }
     }
 }
@@ -104,15 +119,13 @@ async fn to_recv(hub: Arc<Hub>, mut requests: mpsc::Receiver<RecvRequest>) {
 async fn to_command(hub: Arc<Hub>, target: CommandTarget) {
     loop {
         let batch = hub.next_batch().await;
-        let (result, detail) = command::deliver(&target.argv, target.timeout, &batch).await;
-        hub.finish(result, &detail);
+        hub.finish(command::deliver(&target.argv, target.timeout, &batch).await);
     }
 }
 
 async fn to_t3(hub: Arc<Hub>, t3: T3Delivery) {
     loop {
         let batch = hub.next_batch().await;
-        let (result, detail) = t3.deliver(&batch).await;
-        hub.finish(result, &detail);
+        hub.finish(t3.deliver(&batch).await);
     }
 }

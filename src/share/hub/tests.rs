@@ -4,8 +4,7 @@ use jiff::{SignedDuration, Timestamp};
 
 use crate::{
     core::{
-        clock::ManualClock, ids::EndpointKey, queue::DeliveryResult, rng::SeededRng,
-        settings::Switch,
+        clock::ManualClock, ids::EndpointKey, queue::Attempt, rng::SeededRng, settings::Switch,
     },
     protocol::{
         comment::{Author, Draft},
@@ -96,7 +95,7 @@ async fn a_ref_sent_again_after_delivery_is_reported_delivered() {
         panic!("not queued");
     };
     hub.next_batch().await;
-    hub.finish(DeliveryResult::Ok, "");
+    hub.finish(Attempt::Delivered);
     assert_eq!(
         hub.comment(&alice, reference, draft()),
         AckOutcome::Delivered { id }
@@ -324,7 +323,7 @@ async fn the_ack_is_queued_for_its_connection_before_the_delivery() {
         panic!("not queued");
     };
     hub.next_batch().await;
-    hub.finish(DeliveryResult::Ok, "");
+    hub.finish(Attempt::Delivered);
     let ack = inbox.acks.try_recv().unwrap();
     assert_eq!(
         ack,

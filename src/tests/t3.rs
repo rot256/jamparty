@@ -16,7 +16,7 @@ use tokio::net::UnixStream;
 use crate::{
     adapters::t3::{self, T3Delivery, T3Target, Thread, ThreadId},
     agent,
-    core::{clock::ManualClock, queue::DeliveryResult},
+    core::{clock::ManualClock, queue::Attempt},
     protocol::comment::{Author, Comment, Draft},
     share::{
         delivery::Target,
@@ -295,14 +295,12 @@ async fn the_token_is_read_at_each_delivery_and_sessions_are_renewed() {
     let work = tempfile::tempdir().unwrap();
     let token = token_file(&work, "first-token");
     let t3 = T3Delivery::new(target(&fake, &token, "top"));
-    let (result, _) = t3.deliver(&[comment("one")]).await;
-    assert_eq!(result, DeliveryResult::Ok);
+    assert_eq!(t3.deliver(&[comment("one")]).await, Attempt::Delivered);
 
     token_file(&work, "renewed-token");
     // T3 restarted meanwhile: the old session is unknown.
     fake.forget_sessions();
-    let (result, detail) = t3.deliver(&[comment("two")]).await;
-    assert_eq!(result, DeliveryResult::Ok, "{detail}");
+    assert_eq!(t3.deliver(&[comment("two")]).await, Attempt::Delivered);
 
     let sends = fake.calls_to("t3_thread_send");
     let tokens: Vec<&str> = sends.iter().map(|call| call.token.as_str()).collect();
@@ -316,9 +314,11 @@ async fn the_token_is_read_at_each_delivery_and_sessions_are_renewed() {
     assert_eq!(initializes, 2);
 
     fs::remove_file(&token).unwrap();
-    let (result, detail) = t3.deliver(&[comment("three")]).await;
-    assert_eq!(result, DeliveryResult::Error);
-    assert!(detail.contains("token file"), "{detail}");
+    let attempt = t3.deliver(&[comment("three")]).await;
+    let Attempt::Failed { why } = attempt else {
+        panic!("{attempt:?}");
+    };
+    assert!(why.contains("token file"), "{why}");
 }
 
 /// Against a real T3: reads the thread and sends one message to it. Runs
@@ -345,8 +345,8 @@ async fn t3_contract() {
     let thread = t3::open(&target).await.unwrap();
     eprintln!("t3_contract: thread {:?} ({})", thread.title, thread.id);
     target.thread = thread.id;
-    let (result, detail) = T3Delivery::new(target)
+    let attempt = T3Delivery::new(target)
         .deliver(&[comment("jampot contract test: ignore this message.")])
         .await;
-    assert_eq!(result, DeliveryResult::Ok, "{detail}");
+    assert_eq!(attempt, Attempt::Delivered);
 }

@@ -12,7 +12,7 @@ use std::{
     ffi::OsString,
     fs,
     io::{self, BufRead, Read},
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     path::PathBuf,
     process::{Command as Process, Stdio},
     str::FromStr,
@@ -20,7 +20,6 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand};
-use hyper::Uri;
 use iroh::RelayUrl;
 use nix::unistd;
 use rootcause::{
@@ -40,7 +39,7 @@ use crate::{
     adapters::{
         endpoint::{Discovery, NetConfig},
         keyfile, runtime, settings,
-        t3::{self, T3Target, ThreadId},
+        t3::{self, T3Target, T3Url, ThreadId},
     },
     agent::guides::{self, Kind},
     core::{
@@ -179,10 +178,10 @@ struct ShareNet {
 struct Delivery {
     /// T3 thread to deliver comments to (default: $T3CODE_THREAD_ID with --t3-url).
     #[arg(long)]
-    thread: Option<String>,
-    /// T3's MCP URL (t3 target).
+    thread: Option<ThreadId>,
+    /// T3's MCP URL (t3 target): https://, or http:// to this machine.
     #[arg(long, value_name = "URL")]
-    t3_url: Option<String>,
+    t3_url: Option<T3Url>,
     /// File holding the T3 token (t3 target).
     #[arg(long, value_name = "FILE")]
     t3_token_file: Option<PathBuf>,
@@ -362,26 +361,15 @@ fn target(
     }
     if t3 {
         let url = t3_url.context("the t3 target needs T3's MCP URL: pass --t3-url")?;
-        let url = url
-            .parse::<Uri>()
-            .ok()
-            .filter(|url| matches!(url.scheme_str(), Some("http" | "https")))
-            .context_with(|| format!("--t3-url {url} is not an http:// or https:// URL"))?;
-        if url.scheme_str() == Some("http") && !url.host().is_some_and(is_loopback) {
-            bail!(
-                "--t3-url {url}: plain http:// only to this machine (localhost, 127.0.0.1, [::1]); use https://"
-            );
-        }
         let token_file = t3_token_file
             .context("the t3 target needs a file holding the T3 token: pass --t3-token-file")?;
         let thread = match thread {
             Some(thread) => thread,
             None => env_thread
                 .and_then(|thread| thread.into_string().ok())
-                .filter(|thread| !thread.is_empty())
+                .and_then(|thread| ThreadId::try_from(thread).ok())
                 .context("the t3 target needs a thread: pass --thread (or set T3CODE_THREAD_ID)")?,
         };
-        let thread = ThreadId::try_from(thread).context("--thread")?;
         let target = T3Target {
             url,
             token_file,
@@ -401,13 +389,6 @@ fn target(
         "T3CODE_THREAD_ID is set, but without --t3-url comments wait for jampot recv".to_owned()
     });
     Ok((Target::Recv, note))
-}
-
-/// Whether a URL's host is this machine.
-fn is_loopback(host: &str) -> bool {
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    host.eq_ignore_ascii_case("localhost")
-        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 fn net_config(discovery: Discovery) -> Result<NetConfig, Report> {

@@ -37,6 +37,34 @@ pub(crate) enum DeliveryResult {
     Gone,
 }
 
+/// How a delivery attempt ended; `why` says what went wrong, for the
+/// share's log only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Attempt {
+    Delivered,
+    /// A failure worth retrying.
+    Failed {
+        why: String,
+    },
+    /// The target reports itself gone (e.g. the thread was deleted).
+    Gone {
+        why: String,
+    },
+    /// The batch came back undelivered through no fault of the target.
+    Returned,
+}
+
+impl From<&Attempt> for DeliveryResult {
+    fn from(attempt: &Attempt) -> Self {
+        match attempt {
+            Attempt::Delivered => Self::Ok,
+            Attempt::Failed { .. } => Self::Error,
+            Attempt::Gone { .. } => Self::Gone,
+            Attempt::Returned => Self::Returned,
+        }
+    }
+}
+
 /// The queue's state, for the status line and the joiners.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeliveryState {

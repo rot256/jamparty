@@ -6,7 +6,7 @@ use tokio::time;
 use crate::{
     core::{
         ids::{CommentId, EndpointKey},
-        queue::{DeliveryResult, DeliveryState, QueueError},
+        queue::{Attempt, DeliveryResult, DeliveryState, QueueError},
     },
     protocol::{
         comment::{Author, Comment, Draft},
@@ -131,10 +131,11 @@ impl Hub {
         }
     }
 
-    /// Records the in-flight batch's result; `detail` says what went wrong
-    /// and goes only to the share's log. Delivered ids go to each comment's
+    /// Records how the in-flight batch's attempt ended; what went wrong
+    /// goes only to the share's log. Delivered ids go to each comment's
     /// author only; the status line follows the state.
-    pub(crate) fn finish(&self, result: DeliveryResult, detail: &str) {
+    pub(crate) fn finish(&self, attempt: Attempt) {
+        let result = DeliveryResult::from(&attempt);
         let now = self.clock.now();
         let (delivered, status) = {
             let mut inner = self.lock();
@@ -151,13 +152,13 @@ impl Hub {
             inner.status.clone_from(&status);
             (delivered, changed.then_some(status))
         };
-        match result {
-            DeliveryResult::Ok => {
+        match attempt {
+            Attempt::Delivered => {
                 tracing::info!(count = delivered.len(), "comments delivered");
             }
-            DeliveryResult::Error => tracing::warn!(%detail, "delivery failed; retrying"),
-            DeliveryResult::Gone => tracing::warn!(%detail, "the target is gone; holding comments"),
-            DeliveryResult::Returned => tracing::info!("comments returned undelivered"),
+            Attempt::Failed { why } => tracing::warn!(%why, "delivery failed; retrying"),
+            Attempt::Gone { why } => tracing::warn!(%why, "the target is gone; holding comments"),
+            Attempt::Returned => tracing::info!("comments returned undelivered"),
         }
         // Each author hears of its own comments only.
         let mut authors: Vec<(EndpointKey, Vec<CommentId>)> = Vec::new();
