@@ -19,6 +19,15 @@ export const styles = `
     pointer-events: none;
   }
 
+  #edit-highlight {
+    position: fixed;
+    display: none;
+    z-index: 2147483645;
+    border: 2px solid #2f80ed;
+    background: rgb(47 128 237 / 8%);
+    pointer-events: none;
+  }
+
   #bar {
     position: fixed;
     right: 14px;
@@ -58,7 +67,7 @@ export const styles = `
   .dot[data-state="amber"] { background: #e8a33d; }
   .dot[data-state="grey"] { background: #9a958e; }
 
-  #gear {
+  #gear, #edit {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -74,6 +83,8 @@ export const styles = `
   }
 
   #gear[aria-expanded="true"] { background: #2a2a2a; }
+  #edit[aria-pressed="true"] { border-color: #2f80ed; background: #2f80ed; }
+  #edit:disabled { opacity: 0.4; cursor: default; }
 
   #list {
     position: fixed;

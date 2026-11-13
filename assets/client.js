@@ -1370,6 +1370,115 @@ var CommentDialog = class {
   }
 };
 
+// client/src/edit.ts
+var PRESS_EVENTS = ["pointerdown", "mousedown", "pointerup", "mouseup", "dblclick"];
+var EditMode = class {
+  constructor(ui, dialog, allowed) {
+    this.ui = ui;
+    this.dialog = dialog;
+    this.allowed = allowed;
+    ui.edit.addEventListener("click", () => {
+      if (this.on) this.leave();
+      else this.enter();
+    });
+    for (const type of PRESS_EVENTS) {
+      window.addEventListener(type, (event) => {
+        this.swallow(event);
+      }, true);
+    }
+    window.addEventListener("click", (event) => {
+      this.select(event);
+    }, true);
+    document.addEventListener("pointermove", (event) => {
+      this.hover(event);
+    }, true);
+    document.addEventListener("pointerleave", () => {
+      this.outline(null);
+    }, true);
+    window.addEventListener("scroll", () => {
+      this.outline(this.hovered);
+    }, true);
+    window.addEventListener("resize", () => {
+      this.outline(this.hovered);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (!this.on || event.key !== "Escape" || this.dialog.open) return;
+      event.preventDefault();
+      this.leave();
+    }, true);
+  }
+  ui;
+  dialog;
+  allowed;
+  on = false;
+  hovered = null;
+  /**
+   * Called on each press edit mode takes from the page: the document's own
+   * listeners (closing the panel and the list on outside presses) do not
+   * see it.
+   */
+  onPagePress = () => void 0;
+  /** Follows whether edit mode may be on; leaves it when it may not. */
+  refresh() {
+    const allowed = this.allowed();
+    this.ui.edit.disabled = !allowed;
+    if (!allowed && this.on) this.leave();
+  }
+  enter() {
+    if (!this.allowed()) return;
+    this.on = true;
+    this.ui.edit.setAttribute("aria-pressed", "true");
+  }
+  leave() {
+    this.on = false;
+    this.ui.edit.setAttribute("aria-pressed", "false");
+    this.outline(null);
+  }
+  /** The page element an event is about, or null for jampot's own overlay. */
+  pageTarget(event) {
+    if (event.composedPath().includes(this.ui.host)) return null;
+    return event.target instanceof Element ? event.target : null;
+  }
+  primary(event) {
+    return !(event instanceof MouseEvent) || event.button === 0;
+  }
+  /** Keeps a left press from reaching the page: no focus, no selection. */
+  swallow(event) {
+    if (!this.on || !this.primary(event) || this.pageTarget(event) === null) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.type === "pointerdown") this.onPagePress();
+  }
+  /** A left click on the page comments on what was clicked. */
+  select(event) {
+    if (!this.on || event.button !== 0) return;
+    const target = this.pageTarget(event);
+    if (target === null) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.outline(null);
+    this.dialog.openElement(target, event.clientX, event.clientY);
+  }
+  hover(event) {
+    if (!this.on || this.dialog.open) return;
+    this.outline(this.pageTarget(event));
+  }
+  outline(target) {
+    this.hovered = target;
+    const box = this.ui.editHighlight;
+    if (!this.on || target === null || !target.isConnected) {
+      box.style.display = "none";
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    box.style.display = "block";
+    box.style.left = `${rect.left}px`;
+    box.style.top = `${rect.top}px`;
+    box.style.width = `${rect.width}px`;
+    box.style.height = `${rect.height}px`;
+  }
+};
+
 // client/src/list.ts
 function shortSelector(selector) {
   if (selector === "") return "page";
@@ -1675,6 +1784,15 @@ var styles = `
     pointer-events: none;
   }
 
+  #edit-highlight {
+    position: fixed;
+    display: none;
+    z-index: 2147483645;
+    border: 2px solid #2f80ed;
+    background: rgb(47 128 237 / 8%);
+    pointer-events: none;
+  }
+
   #bar {
     position: fixed;
     right: 14px;
@@ -1714,7 +1832,7 @@ var styles = `
   .dot[data-state="amber"] { background: #e8a33d; }
   .dot[data-state="grey"] { background: #9a958e; }
 
-  #gear {
+  #gear, #edit {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1730,6 +1848,8 @@ var styles = `
   }
 
   #gear[aria-expanded="true"] { background: #2a2a2a; }
+  #edit[aria-pressed="true"] { border-color: #2f80ed; background: #2f80ed; }
+  #edit:disabled { opacity: 0.4; cursor: default; }
 
   #list {
     position: fixed;
@@ -2261,16 +2381,19 @@ var styles = `
 
 // client/src/ui.ts
 var GEAR_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>`;
+var SELECT_ICON = `<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3l7.5 18 2.5-7.5L21.5 11z"></path></svg>`;
 var MARKUP = `
   <style>${styles}</style>
   <div id="cursors" aria-hidden="true"></div>
   <div id="highlight" aria-hidden="true"></div>
+  <div id="edit-highlight" aria-hidden="true"></div>
   <div id="message-highlight" aria-hidden="true"></div>
   <div id="bar">
     <button id="pill" type="button" aria-expanded="false" aria-controls="list">
       <span id="connection" class="dot" data-state="amber" role="img" aria-label="Connecting" title="Connecting"></span>
       <span id="badge" role="status" aria-live="polite">0 queued</span>
     </button>
+    <button id="edit" type="button" aria-label="Edit mode" aria-pressed="false" title="Edit mode: click an element to comment on it (Esc leaves)">${SELECT_ICON}</button>
     <button id="gear" type="button" aria-label="Settings" aria-expanded="false" aria-controls="panel">${GEAR_ICON}</button>
   </div>
   <section id="list" aria-label="Your comments" hidden>
@@ -2350,6 +2473,8 @@ var Ui = class _Ui {
   shadow;
   cursors;
   highlight;
+  editHighlight;
+  edit;
   messageHighlight;
   bar;
   pill;
@@ -2412,6 +2537,8 @@ var Ui = class _Ui {
     this.shadow = shadow;
     this.cursors = find("#cursors", HTMLDivElement);
     this.highlight = find("#highlight", HTMLDivElement);
+    this.editHighlight = find("#edit-highlight", HTMLDivElement);
+    this.edit = find("#edit", HTMLButtonElement);
     this.messageHighlight = find("#message-highlight", HTMLDivElement);
     this.bar = find("#bar", HTMLDivElement);
     this.pill = find("#pill", HTMLButtonElement);
@@ -2484,6 +2611,15 @@ function install() {
   const registration = new Registration();
   let reloadRevision = LIVE_REVISION;
   let connectionView = { colour: "amber", text: "", incompatible: null };
+  const editMode = new EditMode(
+    ui,
+    dialog,
+    () => connectionView.incompatible === null && panel.commentMode
+  );
+  editMode.onPagePress = () => {
+    panel.close();
+    list.close();
+  };
   let url = pageUrl();
   let you = null;
   let here = [];
@@ -2507,6 +2643,7 @@ function install() {
   const applySettings = (settings) => {
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
+    editMode.refresh();
   };
   panel.onSettings = applySettings;
   const showPeople = (people) => {
@@ -2526,6 +2663,7 @@ function install() {
       list.showState(view);
       ui.notice.hidden = view.incompatible === null;
       ui.notice.textContent = view.incompatible ?? "";
+      editMode.refresh();
       if (view.colour !== "green") layer.clear();
       if (!connection.streaming) sender.suspend();
       if (recovered) void outbox.resendAll();

@@ -790,6 +790,143 @@ def switch(page: Page, name: str) -> Locator:
     return overlay(page, f"#{name}")
 
 
+def test_edit_mode(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = page.evaluate(
+            """() => {
+                window.pressed = 0;
+                window.delegated = 0;
+                document.querySelector("#action").addEventListener("click", () => {
+                    window.pressed += 1;
+                });
+                document.addEventListener("click", (event) => {
+                    if (event.target.closest("#action")) window.delegated += 1;
+                }, true);
+                const link = document.createElement("a");
+                link.id = "away";
+                link.href = "/elsewhere.html";
+                link.textContent = "Elsewhere";
+                document.querySelector("main").append(link);
+            }"""
+        )
+        button = overlay(page, "#edit")
+        outline = overlay(page, "#edit-highlight")
+        dialog = overlay(page, "#jampot-dialog")
+        expect(button).to_have_attribute("aria-pressed", "false")
+
+        # On: the button turns blue; hovering outlines the element.
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(button).to_have_css("background-color", "rgb(47, 128, 237)")
+        intro = page.locator("#intro")
+        intro.hover()
+        expect(outline).to_be_visible()
+        box = intro.bounding_box()
+        drawn = outline.bounding_box()
+        assert box is not None and drawn is not None
+        assert abs(box["x"] - drawn["x"]) < 2 and abs(box["width"] - drawn["width"]) < 2
+
+        # A left click comments instead of pressing the button, also for a
+        # handler the page delegates from the document in the capture phase.
+        page.locator("#action").click()
+        expect(dialog).to_be_visible()
+        expect(overlay(page, "#dialog-label")).to_have_text("Comment:")
+        assert page.evaluate("() => window.pressed") == 0
+        assert page.evaluate("() => window.delegated") == 0
+        textarea = overlay(page, "textarea")
+        textarea.fill("Make this button say what it does.")
+        textarea.press("Enter")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        # Still in edit mode; a link does not navigate.
+        expect(button).to_have_attribute("aria-pressed", "true")
+        page.locator("#away").click()
+        expect(dialog).to_be_visible()
+        assert page.url == joined.url
+
+        # Escape closes the dialog first, then leaves edit mode.
+        page.keyboard.press("Escape")
+        expect(dialog).not_to_be_visible()
+        expect(button).to_have_attribute("aria-pressed", "true")
+        page.keyboard.press("Escape")
+        expect(button).to_have_attribute("aria-pressed", "false")
+        expect(outline).to_be_hidden()
+
+        # Off again: clicks are the page's.
+        page.locator("#action").click()
+        assert page.evaluate("() => window.pressed") == 1
+        assert page.evaluate("() => window.delegated") == 1
+        expect(dialog).not_to_be_visible()
+
+        # The button also leaves it; the overlay works while it is on.
+        button.click()
+        overlay(page, "#pill").click()
+        expect(overlay(page, "#list")).to_be_visible()
+        expect(overlay(page, "#outbox-list li")).to_have_count(1)
+        overlay(page, "#collapse").click()
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "false")
+        page.locator("#action").click()
+        assert page.evaluate("() => window.pressed") == 2
+
+
+def test_edit_mode_follows_comment_mode(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = page.evaluate(
+            """() => {
+                window.pressed = 0;
+                document.querySelector("#action").addEventListener("click", () => {
+                    window.pressed += 1;
+                });
+            }"""
+        )
+        button = overlay(page, "#edit")
+        panel = overlay(page, "#panel")
+        dialog = overlay(page, "#jampot-dialog")
+
+        # In edit mode a press on the page still closes the open panel.
+        overlay(page, "#gear").click()
+        expect(panel).to_be_visible()
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "true")
+        page.locator("#intro").click()
+        expect(panel).to_be_hidden()
+        page.keyboard.press("Escape")
+        expect(dialog).not_to_be_visible()
+
+        # Turning comment mode off leaves edit mode: clicks are the page's.
+        page.keyboard.press("c")
+        expect(switch(page, "comment-mode")).to_have_attribute("aria-checked", "false")
+        expect(button).to_have_attribute("aria-pressed", "false")
+        expect(button).to_be_disabled()
+        page.locator("#action").click()
+        assert page.evaluate("() => window.pressed") == 1
+        expect(dialog).not_to_be_visible()
+        # While it is off, edit mode cannot be entered.
+        button.click(force=True)
+        expect(button).to_have_attribute("aria-pressed", "false")
+        page.locator("#action").click()
+        assert page.evaluate("() => window.pressed") == 2
+
+        # Comment mode on again: available again.
+        page.keyboard.press("c")
+        expect(button).to_be_enabled()
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "true")
+        page.locator("#action").click()
+        expect(dialog).to_be_visible()
+        assert page.evaluate("() => window.pressed") == 2
+
+
 def test_outside_clicks_close_the_panel_and_the_list(
     tmp_path: Path, page: Page
 ) -> None:

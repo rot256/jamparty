@@ -39,6 +39,23 @@ joiner's local endpoints and the share; nothing in the site itself.
 - Title `Comment:` for element and page comments (done, `d4b01b4`);
   `Comment on agent response:` stays for replies to answers.
 
+## Edit mode
+
+- A select button (arrow icon) sits between the pill and the gear. Clicking
+  it turns it blue (`#2f80ed`) and enters edit mode, as in a design tool.
+- In edit mode the element under the pointer is outlined in that blue, and
+  a left click comments on it (the `Comment:` dialog, as a right-click
+  does) instead of reaching the page: links do not navigate, buttons do not
+  fire, nothing gets focus or a text selection. jampot's own overlay keeps
+  working normally.
+- It stays on after a comment. Escape leaves it (when a comment dialog is
+  open, Escape closes the dialog first), as does clicking the button again.
+- Only while comment mode is on: with comment mode off the button is
+  disabled, and turning comment mode off leaves edit mode.
+- Presses are taken before the page's own listeners (on the window, in the
+  capture phase), so delegated handlers on the document do not run either.
+- Not saved: every page starts with it off.
+
 ## Control panel (gear)
 
 Compact dark panel (about 232 px wide, faint border, light shadow), no hint

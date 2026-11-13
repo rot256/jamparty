@@ -7,6 +7,7 @@ import { AGENT_TARGET_PREFIX, LIVE_REVISION } from "./config";
 import { Connection, type ConnectionView } from "./connection";
 import { CursorLayer, CursorSender } from "./cursors";
 import { ANSWER_LABEL, CommentDialog } from "./dialog";
+import { EditMode } from "./edit";
 import type { PageSettings, Person } from "./generated/api";
 import { CommentList } from "./list";
 import { Registration, TAB_ID, pageUrl, watchUrl } from "./location";
@@ -29,6 +30,15 @@ function install(): void {
   const registration = new Registration();
   let reloadRevision = LIVE_REVISION;
   let connectionView: ConnectionView = { colour: "amber", text: "", incompatible: null };
+  const editMode = new EditMode(
+    ui,
+    dialog,
+    () => connectionView.incompatible === null && panel.commentMode,
+  );
+  editMode.onPagePress = () => {
+    panel.close();
+    list.close();
+  };
   let url = pageUrl();
   let you: string | null = null;
   let here: Person[] = [];
@@ -50,6 +60,7 @@ function install(): void {
   const applySettings = (settings: PageSettings): void => {
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
+    editMode.refresh();
   };
   panel.onSettings = applySettings;
 
@@ -72,6 +83,8 @@ function install(): void {
       list.showState(view);
       ui.notice.hidden = view.incompatible === null;
       ui.notice.textContent = view.incompatible ?? "";
+      // A joiner this page cannot talk to takes no comments.
+      editMode.refresh();
       if (view.colour !== "green") layer.clear();
       // The joiner forgets this tab when the stream goes: no cursor until
       // it is registered again.
