@@ -104,6 +104,45 @@ def test_connection_indicator_and_unsent_comments(tmp_path: Path, page: Page) ->
         expect(entry.locator("button")).to_have_text("send again")
 
 
+FILL_OUTBOX = """(count) => {
+    const entries = Array.from({ length: count }, (_, index) => ({
+        draft: { page: location.href, selector: "#intro", selectedText: null, comment: `old ${index}` },
+        ref: `old-${index}`,
+        id: null,
+        state: "unsent",
+        at: Date.now(),
+    }));
+    sessionStorage.setItem("jampot-outbox-v1", JSON.stringify(entries));
+}"""
+
+
+def test_a_full_outbox_refuses_a_new_comment(tmp_path: Path, page: Page) -> None:
+    """Comments still to send are never dropped: with the outbox full of
+    them, a new one is refused, visibly, and stays a draft."""
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        # Sent again on load, but never answered: all still to send.
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = page.evaluate(FILL_OUTBOX, 20)
+        tap.hold = {"comment_reply"}
+        _ = page.reload()
+        rows = overlay(page, "#outbox-list li")
+        expect(rows).to_have_count(20)
+        page.locator("#intro").click(button="right")
+        textarea = overlay(page, "textarea")
+        textarea.press_sequentially("One too many")
+        textarea.press("Enter")
+        expect(overlay(page, "#status")).to_contain_text("waiting to be sent")
+        expect(overlay(page, "#jampot-dialog")).to_be_visible()
+        expect(textarea).to_have_value("One too many")
+        expect(rows).to_have_count(20)
+        expect(rows.filter(has_text="old 0")).to_have_count(1)
+
+
 def test_a_comment_draft_survives_reloads(tmp_path: Path, page: Page) -> None:
     site = tmp_path / "site"
     _ = shutil.copytree(SITE, site)

@@ -1514,14 +1514,31 @@ var Outbox = class {
   /** Persists the list (bounded) and redraws. */
   changed() {
     while (this.entries.length > MAX_OUTBOX) {
-      const delivered = this.entries.findIndex((entry) => entry.state === "delivered");
-      this.entries.splice(delivered === -1 ? 0 : delivered, 1);
+      const index = this.droppable();
+      if (index === -1) break;
+      this.entries.splice(index, 1);
     }
     try {
       sessionStorage.setItem(OUTBOX_KEY, JSON.stringify(this.entries));
     } catch {
     }
     this.onChange();
+  }
+  /**
+   * The oldest entry the page may forget: a delivered one, else a queued
+   * one (the share holds it); -1 if every entry is still to be sent.
+   */
+  droppable() {
+    const delivered = this.entries.findIndex((entry) => entry.state === "delivered");
+    if (delivered !== -1) return delivered;
+    return this.entries.findIndex((entry) => entry.state === "queued");
+  }
+  /** Whether the outbox holds as many comments still to send as it keeps. */
+  get full() {
+    const unsent = this.entries.filter(
+      (entry) => entry.state === "unsent" || entry.state === "sending"
+    );
+    return unsent.length >= MAX_OUTBOX;
   }
   /** A queued entry the share no longer holds was delivered. */
   settle(entry) {
@@ -1541,9 +1558,17 @@ var Outbox = class {
    * Sends `draft` under `ref`, kept first: a reload before the joiner's
    * answer sends it again under the same ref, so it is queued once.
    * Resolves with the outcome once the entry reflects it; a refused
-   * comment is taken out again (it goes back to the dialog).
+   * comment is taken out again (it goes back to the dialog). Refused
+   * without sending while the outbox is full of comments still to send.
    */
   async submit(draft, ref) {
+    if (this.full) {
+      return {
+        refused: {
+          error: `${MAX_OUTBOX} comments are waiting to be sent; this one can go once they have`
+        }
+      };
+    }
     const entry = { draft, ref, id: null, state: "sending", at: Date.now() };
     this.entries.push(entry);
     this.changed();

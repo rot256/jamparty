@@ -1,6 +1,9 @@
 // The comments this page sent or could not send: `queued` (with the
 // share's id), `delivered`, or `unsent` (kept, sent again when the
-// connection is back). Kept in sessionStorage across reloads.
+// connection is back). Kept in sessionStorage across reloads, at most
+// MAX_OUTBOX: delivered ones go first, then queued ones (the share has
+// those); unsent ones are never dropped, so a new comment is refused
+// while the outbox is full of them.
 
 import { MAX_OUTBOX, OUTBOX_KEY } from "./config";
 import type { Outcome, Submission } from "./generated/api";
@@ -89,8 +92,9 @@ export class Outbox {
   /** Persists the list (bounded) and redraws. */
   changed(): void {
     while (this.entries.length > MAX_OUTBOX) {
-      const delivered = this.entries.findIndex((entry) => entry.state === "delivered");
-      this.entries.splice(delivered === -1 ? 0 : delivered, 1);
+      const index = this.droppable();
+      if (index === -1) break;
+      this.entries.splice(index, 1);
     }
     try {
       sessionStorage.setItem(OUTBOX_KEY, JSON.stringify(this.entries));
@@ -98,6 +102,24 @@ export class Outbox {
       // The list stays in this document if storage is unavailable.
     }
     this.onChange();
+  }
+
+  /**
+   * The oldest entry the page may forget: a delivered one, else a queued
+   * one (the share holds it); -1 if every entry is still to be sent.
+   */
+  private droppable(): number {
+    const delivered = this.entries.findIndex((entry) => entry.state === "delivered");
+    if (delivered !== -1) return delivered;
+    return this.entries.findIndex((entry) => entry.state === "queued");
+  }
+
+  /** Whether the outbox holds as many comments still to send as it keeps. */
+  get full(): boolean {
+    const unsent = this.entries.filter(
+      (entry) => entry.state === "unsent" || entry.state === "sending",
+    );
+    return unsent.length >= MAX_OUTBOX;
   }
 
   /** A queued entry the share no longer holds was delivered. */
@@ -120,9 +142,17 @@ export class Outbox {
    * Sends `draft` under `ref`, kept first: a reload before the joiner's
    * answer sends it again under the same ref, so it is queued once.
    * Resolves with the outcome once the entry reflects it; a refused
-   * comment is taken out again (it goes back to the dialog).
+   * comment is taken out again (it goes back to the dialog). Refused
+   * without sending while the outbox is full of comments still to send.
    */
   async submit(draft: Draft, ref: string): Promise<Outcome> {
+    if (this.full) {
+      return {
+        refused: {
+          error: `${MAX_OUTBOX} comments are waiting to be sent; this one can go once they have`,
+        },
+      };
+    }
     const entry: OutboxEntry = { draft, ref, id: null, state: "sending", at: Date.now() };
     this.entries.push(entry);
     this.changed();
