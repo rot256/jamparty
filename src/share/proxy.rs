@@ -183,7 +183,11 @@ impl Proxy {
             .then(|| upgrade::on(&mut request));
         let session = SessionOrigin::new(&self.sid, request.headers());
         let (mut parts, body) = request.into_parts();
-        strip_hop_by_hop(&mut parts.headers, downstream_upgrade.is_some());
+        let hop = match downstream_upgrade {
+            Some(_) => Hop::Upgrade,
+            None => Hop::Plain,
+        };
+        strip_hop_by_hop(&mut parts.headers, hop);
         let request_method = parts.method.clone();
         parts.uri = upstream_uri(upstream, &parts.uri)?;
         parts.headers.insert(
@@ -204,8 +208,12 @@ impl Proxy {
         })?;
 
         translate_response(response.headers_mut(), session.as_ref(), upstream);
-        let upgraded = response.status() == StatusCode::SWITCHING_PROTOCOLS;
-        strip_hop_by_hop(response.headers_mut(), upgraded);
+        let hop = if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            Hop::Upgrade
+        } else {
+            Hop::Plain
+        };
+        strip_hop_by_hop(response.headers_mut(), hop);
 
         if response.status() == StatusCode::SWITCHING_PROTOCOLS {
             if let Some(downstream_upgrade) = downstream_upgrade {
@@ -268,10 +276,22 @@ fn upstream_uri(upstream: &Url, incoming: &Uri) -> Result<Uri, RequestError> {
         .map_err(|_| RequestError::new(StatusCode::BAD_GATEWAY, "could not construct upstream URL"))
 }
 
+/// Whether a message's `Upgrade` survives [`strip_hop_by_hop`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hop {
+    /// Everything hop-by-hop goes.
+    Plain,
+    /// An upgrade in progress: `Upgrade` and `Connection: upgrade` stay.
+    Upgrade,
+}
+
 /// Removes hop-by-hop headers (RFC 9110, 7.6.1) and those `Connection`
-/// names; `upgrade` keeps `Upgrade` and `Connection: upgrade`.
-fn strip_hop_by_hop(headers: &mut HeaderMap, upgrade: bool) {
-    let kept = headers.get(UPGRADE).cloned().filter(|_| upgrade);
+/// names; [`Hop::Upgrade`] keeps `Upgrade` and `Connection: upgrade`.
+fn strip_hop_by_hop(headers: &mut HeaderMap, hop: Hop) {
+    let kept = match hop {
+        Hop::Plain => None,
+        Hop::Upgrade => headers.get(UPGRADE).cloned(),
+    };
     let named: Vec<HeaderName> = headers
         .get_all(CONNECTION)
         .iter()
@@ -417,7 +437,7 @@ mod tests {
     use crate::{
         core::ids::{EndpointKey, Sid},
         share::proxy::{
-            SessionOrigin, UpstreamUrl, rewrite_redirect, strip_hop_by_hop, translate_request,
+            Hop, SessionOrigin, UpstreamUrl, rewrite_redirect, strip_hop_by_hop, translate_request,
             translate_response, upstream_uri,
         },
     };
@@ -593,11 +613,11 @@ mod tests {
             headers.insert(name, HeaderValue::from_static(value));
         }
         let mut plain = headers.clone();
-        strip_hop_by_hop(&mut plain, false);
+        strip_hop_by_hop(&mut plain, Hop::Plain);
         let names: Vec<&str> = plain.keys().map(|name| name.as_str()).collect();
         assert_eq!(names, ["x-kept"]);
 
-        strip_hop_by_hop(&mut headers, true);
+        strip_hop_by_hop(&mut headers, Hop::Upgrade);
         assert_eq!(headers.get("upgrade").unwrap(), "websocket");
         assert_eq!(headers.get("connection").unwrap(), "upgrade");
         assert!(headers.get("x-private").is_none());
