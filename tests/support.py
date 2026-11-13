@@ -13,14 +13,16 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
 
 import pytest
+from playwright.sync_api import Browser, Locator, Page, WebSocketRoute, expect
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
@@ -302,3 +304,196 @@ def hello(joined: Joined) -> dict[str, object]:
         return first
     finally:
         page.close()
+
+
+# What the browser tests share: the fixture sites and dev servers, the
+# overlay, comments and pages.
+
+SITE = ROOT / "tests/fixtures/site"
+
+
+SPA = ROOT / "tests/fixtures/spa"
+
+
+FIXTURE_HTML = (SITE / "index.html").read_bytes()
+
+
+class FixtureHandler(BaseHTTPRequestHandler):
+    """A dev server: the fixture page and a WebSocket echo."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format: str, *_args: object) -> None:
+        del format
+
+    def do_GET(self) -> None:
+        if self.path == "/socket":
+            self.handle_websocket()
+            return
+        page = urlsplit(self.path).path == "/"
+        status, body = (200, FIXTURE_HTML) if page else (404, b"missing")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        _ = self.wfile.write(body)
+
+    def handle_websocket(self) -> None:
+        key = self.headers["Sec-WebSocket-Key"]
+        accept = base64.b64encode(
+            hashlib.sha1(
+                (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()
+            ).digest()
+        ).decode()
+        self.send_response(101)
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        self.wfile.flush()
+        header = self.rfile.read(2)
+        if len(header) != 2:
+            return
+        length = header[1] & 0x7F
+        mask = self.rfile.read(4)
+        encoded = self.rfile.read(length)
+        payload = bytes(value ^ mask[index % 4] for index, value in enumerate(encoded))
+        _ = self.wfile.write(bytes([0x81, len(payload)]) + payload)
+        self.wfile.flush()
+        self.close_connection = True
+
+
+@contextmanager
+def upstream_server(
+    host: str = "127.0.0.1", handler: type[BaseHTTPRequestHandler] = FixtureHandler
+) -> Iterator[str]:
+    server = ThreadingHTTPServer((host, 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def comment_on_intro(page: Page, text: str) -> None:
+    page.locator("#intro").click(button="right")
+    textarea = page.locator("#jampot textarea")
+    expect(textarea).to_be_focused()
+    textarea.fill(text)
+    textarea.press("Enter")
+    # Closed once the joiner answered.
+    expect(page.locator("#jampot #jampot-dialog")).not_to_be_visible()
+
+
+def recv_all(home: Path) -> list[dict[str, object]]:
+    """Every comment the share holds, as `jampot recv` prints them."""
+    return [
+        cast(dict[str, object], json.loads(line))
+        for line in jampot(home, "recv").splitlines()
+    ]
+
+
+@contextmanager
+def pages(browser: Browser, *joined: Joined) -> Iterator[list[Page]]:
+    """One browser context (its own storage) and page per joiner, opened."""
+    contexts = [
+        browser.new_context(viewport={"width": 1280, "height": 720}) for _ in joined
+    ]
+    try:
+        opened: list[Page] = []
+        for context, one in zip(contexts, joined, strict=True):
+            page = context.new_page()
+            _ = page.goto(one.url)
+            opened.append(page)
+        yield opened
+    finally:
+        for context in contexts:
+            context.close()
+
+
+class SocketTap:
+    """Routes a page's sockets to its joiner through the test, so messages
+    from the joiner of the types in `hold` can be held back."""
+
+    def __init__(self, page: Page) -> None:
+        self.hold: set[str] = set()
+        self.held: list[tuple[WebSocketRoute, str]] = []
+        self.sockets: list[WebSocketRoute] = []
+        page.route_web_socket("**/_jampot/api/socket", self._route)
+
+    def _route(self, route: WebSocketRoute) -> None:
+        self.sockets.append(route)
+        server = route.connect_to_server()
+
+        def from_joiner(message: str | bytes) -> None:
+            kind = cast(dict[str, object], json.loads(message))["type"]
+            if kind in self.hold:
+                self.held.append((route, str(message)))
+            else:
+                route.send(message)
+
+        server.on_message(from_joiner)
+        route.on_message(server.send)
+
+    def release(self) -> None:
+        self.hold.clear()
+        for route, message in self.held:
+            route.send(message)
+        self.held.clear()
+
+
+def overlay(page: Page, selector: str) -> Locator:
+    return page.locator(f"#jampot {selector}")
+
+
+def switch(page: Page, name: str) -> Locator:
+    return overlay(page, f"#{name}")
+
+
+def settings_file(home: Path) -> dict[str, object]:
+    path = home / "config/jampot/settings.json"
+    assert path.stat().st_mode & 0o777 == 0o600
+    return cast(dict[str, object], json.loads(path.read_text()))
+
+
+def eventually(what: str, check: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        if check():
+            return
+        time.sleep(0.05)
+    pytest.fail(f"timed out waiting for {what}")
+
+
+def cursors(page: Page) -> Locator:
+    return overlay(page, ".cursor")
+
+
+def waiting(page: Page, what: str, check: Callable[[], bool]) -> None:
+    """Like `eventually`, letting `page` handle its events meanwhile."""
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        if check():
+            return
+        page.wait_for_timeout(50)
+    pytest.fail(f"timed out waiting for {what}")
+
+
+RECORD_SENT = """() => {
+    window.jampotSent = [];
+    const original = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (data) {
+        window.jampotSent.push(JSON.parse(data));
+        return original.call(this, data);
+    };
+}"""
+
+
+def sent(page: Page, kind: str) -> list[dict[str, object]]:
+    """The messages of type `kind` `page` sent its joiner since
+    `RECORD_SENT`."""
+    messages = cast(list[dict[str, object]], page.evaluate("window.jampotSent"))
+    return [message for message in messages if message["type"] == kind]
