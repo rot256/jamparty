@@ -8,8 +8,13 @@ HTML with a rendered PNG each: `docs/ui/1-idle` … `docs/ui/9-cursor-options`
 mockups differ, this file wins. The sample page in them stands in for any
 shared site; only the overlay is jampot's.
 
-Everything here lives in the injected client (`assets/client.js`), the
-joiner's local endpoints and the share; nothing in the site itself.
+Everything here lives in the client (`assets/client.js`), the joiner's
+local endpoints and the share; nothing in the site itself. The share
+injects the client's script tag into each HTML page; the joiner serves
+the client itself (`/_jampot/client.js`, no-store), so a page always runs
+its own joiner's client. A page that outlived its joiner, restarted as
+another jampot, learns so from the version in the socket's `hello`: grey,
+with a notice to reload.
 
 ## Pill (bottom right)
 
