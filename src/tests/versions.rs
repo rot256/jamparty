@@ -2,7 +2,13 @@
 //! which run where, gives up when the protocols differ, and goes on with
 //! a note when only the versions do.
 
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use iroh::Endpoint;
 use tokio::task::JoinHandle;
@@ -17,24 +23,28 @@ use crate::{
     },
     describe,
     protocol::control::{Envelope, RefusedReason, ShareMessage},
-    tests::harness::{fixture_dir, net, raw_connection, share_files, try_joiner, within},
+    tests::harness::{fixture_dir, net, raw_connection, share_files, try_joiner, until, within},
 };
 
-/// A share that answers every joiner's hello with `line`, and keeps the
-/// connection open.
+/// A share that answers every joiner's hello with `line` (none: not at
+/// all), and keeps the connection open.
 struct FakeShare {
     token: PartyToken,
     addrs: Vec<SocketAddr>,
+    /// Hellos read so far.
+    hellos: Arc<AtomicUsize>,
     _endpoint: Endpoint,
     _task: JoinHandle<()>,
 }
 
-async fn fake_share(line: String) -> FakeShare {
+async fn fake_share(line: Option<String>) -> FakeShare {
     let key = generate_key(&SystemRng);
     let share = EndpointKey::from(key.public());
     let endpoint = bind(&net(), key, Accept::Jampot).await.unwrap();
     let addrs = direct_addrs(&endpoint);
     let accepting = endpoint.clone();
+    let hellos = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&hellos);
     let task = tokio::spawn(async move {
         let mut kept = Vec::new();
         while let Some(incoming) = accepting.accept().await {
@@ -47,7 +57,10 @@ async fn fake_share(line: String) -> FakeShare {
             // The hello, up to its newline.
             let mut byte = [0];
             while recv.read_exact(&mut byte).await.is_ok() && byte != *b"\n" {}
-            let _ = send.write_all(format!("{line}\n").as_bytes()).await;
+            counted.fetch_add(1, Ordering::Relaxed);
+            if let Some(line) = &line {
+                let _ = send.write_all(format!("{line}\n").as_bytes()).await;
+            }
             kept.push((connection, send, recv));
         }
     });
@@ -57,6 +70,7 @@ async fn fake_share(line: String) -> FakeShare {
             secret: PartySecret::generate(&SystemRng),
         },
         addrs,
+        hellos,
         _endpoint: endpoint,
         _task: task,
     }
@@ -64,7 +78,7 @@ async fn fake_share(line: String) -> FakeShare {
 
 /// What `jampot join` fails with against a share that greets it so.
 async fn refusal(line: &str) -> String {
-    let share = fake_share(line.to_owned()).await;
+    let share = fake_share(Some(line.to_owned())).await;
     let error = within(
         "the joiner to give up",
         try_joiner(share.token.clone(), share.addrs.clone()),
@@ -123,9 +137,9 @@ async fn a_share_that_refuses_this_protocol_names_its_version() {
 #[tokio::test(flavor = "multi_thread")]
 async fn another_version_of_the_same_protocol_goes_on_with_a_note() {
     let key = "ab".repeat(32);
-    let share = fake_share(format!(
+    let share = fake_share(Some(format!(
         r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jampot":"{AHEAD}"}}}}"#
-    ))
+    )))
     .await;
     let joiner = within(
         "the joiner",
@@ -173,4 +187,18 @@ async fn a_joiner_of_another_protocol_is_told_the_shares_version() {
             jampot: Some(JampotVersion::current()),
         }
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_share_that_never_answers_the_hello_is_tried_again() {
+    let share = fake_share(None).await;
+    let joining = tokio::spawn(try_joiner(share.token.clone(), share.addrs.clone()));
+    // The first attempt gives up on the silent share, and the joiner
+    // tries again.
+    until("a second hello", || {
+        share.hellos.load(Ordering::Relaxed) >= 2
+    })
+    .await;
+    assert!(!joining.is_finished());
+    joining.abort();
 }

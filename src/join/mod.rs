@@ -77,6 +77,9 @@ pub(crate) struct JoinConfig {
     /// How long a page's request waits for the connection to the share
     /// (while reconnecting) before it is answered "not reachable".
     pub(crate) connect_wait: Duration,
+    /// How long the share has to answer the hello before the attempt
+    /// counts as failed (and is retried).
+    pub(crate) admission_wait: Duration,
 }
 
 /// The share refused this joiner for good.
@@ -272,6 +275,7 @@ impl Joiner {
             share_addrs,
             port,
             connect_wait,
+            admission_wait,
         } = config;
         let preferences = Preferences {
             saved: settings::load(&path)?,
@@ -286,6 +290,7 @@ impl Joiner {
             endpoint: endpoint.clone(),
             token,
             share_addrs,
+            admission_wait,
         };
         let mut tasks = JoinSet::new();
         let (first, admitted) = oneshot::channel();

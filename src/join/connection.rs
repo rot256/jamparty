@@ -35,6 +35,8 @@ pub(crate) struct Dial {
     pub(crate) token: PartyToken,
     /// Direct addresses of the share; empty to use address lookup.
     pub(crate) share_addrs: Vec<SocketAddr>,
+    /// How long the share has to answer the hello.
+    pub(crate) admission_wait: Duration,
 }
 
 /// What the share said when it first admitted this joiner.
@@ -131,11 +133,17 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
     }
     // Leniently first: a share of another protocol says which jampot it
     // runs even if the rest of its line means nothing here.
-    let line = lines::read_with(&mut recv, |line| {
+    let read = lines::read_with(&mut recv, |line| {
         let greeting = decode_line::<Greeting>(line).ok();
         Ok((greeting, decode_line::<Envelope<ShareMessage>>(line)))
-    })
-    .await;
+    });
+    let Ok(line) = time::timeout(dial.admission_wait, read).await else {
+        connection.close(VarInt::from_u32(0), b"no answer");
+        return Ended::Failed(report!(
+            "the share did not answer the hello within {} s",
+            dial.admission_wait.as_secs()
+        ));
+    };
     let (you, undelivered, presence, welcome) = match line {
         Ok(Some((Some(greeting), _))) if greeting.version != PROTOCOL => {
             connection.close(VarInt::from_u32(0), b"incompatible");

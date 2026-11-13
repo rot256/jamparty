@@ -10,7 +10,9 @@ use crate::{
     core::{rng::SystemRng, settings::Switch},
     join::{JoinConfig, Joiner},
     share::Share,
-    tests::harness::{CONNECT_WAIT, PageSocket, about, connected, fixture_dir, net, share_files},
+    tests::harness::{
+        ADMISSION_WAIT, CONNECT_WAIT, PageSocket, about, connected, fixture_dir, net, share_files,
+    },
 };
 
 async fn joiner(share: &Share, name: Option<&str>, settings: &Path) -> Joiner {
@@ -24,6 +26,7 @@ async fn joiner(share: &Share, name: Option<&str>, settings: &Path) -> Joiner {
         share_addrs: share.direct_addrs(),
         port: None,
         connect_wait: CONNECT_WAIT,
+        admission_wait: ADMISSION_WAIT,
     })
     .await
     .unwrap();

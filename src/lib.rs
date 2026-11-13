@@ -78,6 +78,8 @@ pub fn describe(error: &Report) -> String {
 /// How long a page's request waits for the joiner to reach the share again
 /// (after a drop) before it is answered "not reachable".
 const CONNECT_WAIT: Duration = Duration::from_secs(15);
+/// How long `jampot join` waits for the share to answer its hello.
+const ADMISSION_WAIT: Duration = Duration::from_secs(10);
 
 /// How long a public share waits to reach a relay before printing its token.
 const ONLINE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -517,6 +519,7 @@ async fn join(
         share_addrs,
         port,
         connect_wait: CONNECT_WAIT,
+        admission_wait: ADMISSION_WAIT,
     };
     println!("jampot: connecting to the share…");
     let joiner = tokio::select! {

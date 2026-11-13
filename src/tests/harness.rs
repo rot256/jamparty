@@ -182,6 +182,7 @@ fn join_config(
         share_addrs: addrs,
         port: None,
         connect_wait: CONNECT_WAIT,
+        admission_wait: ADMISSION_WAIT,
     }
 }
 
@@ -202,6 +203,8 @@ async fn start_joiner(
 /// How long a test joiner's requests wait for the share: well inside
 /// [`PATIENCE`], so a test sees the answer rather than its own timeout.
 pub(crate) const CONNECT_WAIT: Duration = Duration::from_secs(5);
+/// How long a test joiner waits for the share to answer its hello.
+pub(crate) const ADMISSION_WAIT: Duration = Duration::from_secs(2);
 
 pub(crate) async fn joiner_with_key(
     token: PartyToken,
