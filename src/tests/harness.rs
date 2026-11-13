@@ -29,12 +29,14 @@ pub(crate) const PATIENCE: Duration = Duration::from_secs(15);
 pub(crate) const FIXTURE_HTML: &str =
     "<!doctype html><html><body><h1 id=\"title\">Fixture</h1></body></html>";
 
-/// Short keep-alive and idle timeout so lost peers show quickly.
+/// Timeouts with room for a loaded machine, well inside [`PATIENCE`]: the
+/// tests that drop a connection close it (the peer hears at once), so none
+/// waits for the idle timeout.
 pub(crate) fn net() -> NetConfig {
     NetConfig {
         discovery: Discovery::Direct,
-        keep_alive: Duration::from_millis(200),
-        idle_timeout: Duration::from_secs(2),
+        keep_alive: Duration::from_secs(1),
+        idle_timeout: Duration::from_secs(15),
         relay: None,
     }
 }
