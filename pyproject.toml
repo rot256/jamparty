@@ -11,6 +11,10 @@ dev = [
   "pytest>=8.4",
   "ruff>=0.16.8",
 ]
+frameworks = [
+  "django==6.1.2",
+  "mkdocs==1.6.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -21,3 +25,29 @@ markers = ["frameworks: real dev servers through jampot (uv run pytest -m framew
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
+
+[tool.uv]
+default-groups = ["dev", "frameworks"]
+
+# The framework tests' dev servers and what they pull in: releases at
+# least 14 days old.
+[tool.uv.exclude-newer-package]
+asgiref = "14 days"
+click = "14 days"
+django = "14 days"
+ghp-import = "14 days"
+jinja2 = "14 days"
+markdown = "14 days"
+markupsafe = "14 days"
+mergedeep = "14 days"
+mkdocs = "14 days"
+mkdocs-get-deps = "14 days"
+pathspec = "14 days"
+platformdirs = "14 days"
+python-dateutil = "14 days"
+pyyaml = "14 days"
+pyyaml-env-tag = "14 days"
+six = "14 days"
+sqlparse = "14 days"
+tzdata = "14 days"
+watchdog = "14 days"

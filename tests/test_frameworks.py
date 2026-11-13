@@ -107,6 +107,14 @@ def tool(download: Download) -> Path:
     return binary
 
 
+class Sockets(enum.Enum):
+    """How the dev server's client hears of changes."""
+
+    WEBSOCKET = enum.auto()
+    # MkDocs long-polls over plain HTTP.
+    POLLING = enum.auto()
+
+
 class Address(enum.Enum):
     """Where the dev server listens."""
 
@@ -126,6 +134,9 @@ class Framework:
     command: Command
     # The file holding the marker.
     source: str
+    sockets: Sockets = Sockets.WEBSOCKET
+    # Requests that stay open until a change (long polls), not waited for.
+    long_lived: tuple[str, ...] = ()
     address: Address = Address.DEV_HOST
     env: dict[str, str] = field(default_factory=dict)
 
@@ -200,6 +211,22 @@ FRAMEWORKS = [
         bin_("eleventy"),
         "index.html",
         address=Address.EVERYWHERE,
+    ),
+    Framework(
+        "mkdocs",
+        lambda site, port: [
+            sys.executable,
+            "-m",
+            "mkdocs",
+            "serve",
+            "--config-file",
+            str(site / "mkdocs.yml"),
+            "--dev-addr",
+            f"{DEV_HOST}:{port}",
+        ],
+        "docs/index.md",
+        sockets=Sockets.POLLING,
+        long_lived=("/livereload/",),
     ),
 ]
 
@@ -399,7 +426,7 @@ def test_live_reload_through_jampot(
                 assert joined.port == port
             case Address.EVERYWHERE:
                 assert joined.port != port
-        watched = watch(page)
+        watched = watch(page, framework.long_lived)
         _ = page.goto(joined.url, timeout=LOAD)
         expect(page.locator("#jampot")).to_be_attached(timeout=LOAD)
         marker = page.locator("#marker")
@@ -414,10 +441,45 @@ def test_live_reload_through_jampot(
         edit(changed)
         expect(marker).to_have_text(changed, timeout=UPDATE)
 
-        assert watched.sockets, "the page opened no WebSocket"
+        match framework.sockets:
+            case Sockets.WEBSOCKET:
+                assert watched.sockets, "the page opened no WebSocket"
+            case Sockets.POLLING:
+                pass
         own = own_host(page)
         for url in watched.sockets:
             assert urlsplit(url).netloc == own, f"{url} is not {own}"
+        complaints = [error for error in watched.errors if COMPLAINT.search(error)]
+        assert not complaints, complaints
+
+
+def test_a_django_form_post_through_jampot(
+    sites: Callable[[str], Path], tmp_path: Path, page: Page
+) -> None:
+    """Django's CSRF check compares Origin with the host it serves: the
+    dev server must see its own origin."""
+    site = sites("django")
+    port = free_port()
+    command = [
+        sys.executable,
+        str(site / "app.py"),
+        "runserver",
+        f"{DEV_HOST}:{port}",
+        "--noreload",
+    ]
+    with (
+        dev_server(command, site, port, tmp_path / "django.log", {}) as upstream,
+        share(tmp_path, "proxy", upstream) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        assert joined.port == port
+        watched = watch(page)
+        _ = page.goto(joined.url, timeout=LOAD)
+        expect(page.locator("#jampot")).to_be_attached()
+        expect(page.locator("#marker")).to_have_text("form")
+        page.locator("#post").click()
+        # Django answered the POST: its CSRF check passed.
+        expect(page.locator("#marker")).to_have_text("posted hello")
         complaints = [error for error in watched.errors if COMPLAINT.search(error)]
         assert not complaints, complaints
 
