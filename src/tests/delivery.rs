@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 use tempfile::TempDir;
 use tokio::net::UnixStream;
 
@@ -18,18 +18,14 @@ use crate::{
     agent,
     core::{clock::ManualClock, queue::DeliveryState},
     share::{
-        Source,
         delivery::{CommandTarget, Target},
         hub::{HELD, RETRYING},
     },
     tests::harness::{
-        DRAFT, TestShare, commented, config, fixture_dir, join, post_comment, start, until, within,
+        DRAFT, TestShare, commented, fixture_dir, join, post_comment, share_files_to, t0, until,
+        within,
     },
 };
-
-fn t0() -> Timestamp {
-    Timestamp::from_second(1_800_000_000).unwrap()
-}
 
 async fn share_to(
     dir: &TempDir,
@@ -37,11 +33,8 @@ async fn share_to(
     timeout: Duration,
     clock: Arc<ManualClock>,
 ) -> TestShare {
-    let root = fs::canonicalize(dir.path()).unwrap();
     let command = CommandTarget { argv, timeout };
-    let mut config = config(Source::Files(root), Target::Command(command));
-    config.clock = clock;
-    start(config).await
+    share_files_to(dir, Target::Command(command), clock).await
 }
 
 /// `sh -c <script> <log> <flag>`: appends stdin to `log`, fails while

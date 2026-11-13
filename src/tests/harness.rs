@@ -1,7 +1,9 @@
 //! In-process shares and joiners over iroh with direct addresses, a
 //! fixture site and a small HTTP client.
 
-use std::{env, fs, future::Future, net::SocketAddr, ops::Deref, path::PathBuf, time::Duration};
+use std::{
+    env, fs, future::Future, net::SocketAddr, ops::Deref, path::PathBuf, sync::Arc, time::Duration,
+};
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -15,6 +17,7 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use iroh::{Endpoint, SecretKey, endpoint::Connection};
+use jiff::Timestamp;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::{
@@ -26,7 +29,7 @@ use tokio_websockets::{ClientBuilder, Message, WebSocketStream};
 use crate::{
     Report,
     adapters::endpoint::{Accept, Discovery, NetConfig, bind, connect, generate_key},
-    core::{port::Port, rng::SystemRng, token::PartyToken},
+    core::{clock::ManualClock, port::Port, rng::SystemRng, token::PartyToken},
     join::{JoinConfig, Joiner},
     share::{Share, ShareConfig, Source, delivery::Target, proxy::UpstreamUrl},
 };
@@ -121,6 +124,23 @@ pub(crate) async fn share_files(dir: &TempDir) -> TestShare {
     share(Source::Files(root)).await
 }
 
+/// A share of `dir` that delivers to `target`, on `clock`.
+pub(crate) async fn share_files_to(
+    dir: &TempDir,
+    target: Target,
+    clock: Arc<ManualClock>,
+) -> TestShare {
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let mut config = config(Source::Files(root), target);
+    config.clock = clock;
+    start(config).await
+}
+
+/// When the tests on a manual clock start.
+pub(crate) fn t0() -> Timestamp {
+    Timestamp::from_second(1_800_000_000).unwrap()
+}
+
 pub(crate) async fn share_proxy(upstream: SocketAddr) -> TestShare {
     let url: UpstreamUrl = format!("http://{upstream}").parse().unwrap();
     share(Source::Proxy(url)).await
@@ -144,6 +164,27 @@ pub(crate) async fn joiner_on(share: &Share, port: Option<Port>) -> Result<Joine
     .await
 }
 
+/// A test joiner's configuration: a settings file of its own, any port,
+/// requests waiting [`CONNECT_WAIT`] for the share.
+fn join_config(
+    token: PartyToken,
+    addrs: Vec<SocketAddr>,
+    name: &str,
+    key: SecretKey,
+) -> JoinConfig {
+    JoinConfig {
+        token,
+        name: Some(name.parse().unwrap()),
+        default_name: "joiner".parse().unwrap(),
+        settings: settings_path(),
+        key,
+        net: net(),
+        share_addrs: addrs,
+        port: None,
+        connect_wait: CONNECT_WAIT,
+    }
+}
+
 async fn start_joiner(
     token: PartyToken,
     addrs: Vec<SocketAddr>,
@@ -151,21 +192,11 @@ async fn start_joiner(
     key: SecretKey,
     port: Option<Port>,
 ) -> Result<Joiner, Report> {
-    within(
-        "the joiner to start",
-        Joiner::start(JoinConfig {
-            token,
-            name: Some(name.parse().unwrap()),
-            default_name: "joiner".parse().unwrap(),
-            settings: settings_path(),
-            key,
-            net: net(),
-            share_addrs: addrs,
-            port,
-            connect_wait: CONNECT_WAIT,
-        }),
-    )
-    .await
+    let config = JoinConfig {
+        port,
+        ..join_config(token, addrs, name, key)
+    };
+    within("the joiner to start", Joiner::start(config)).await
 }
 
 /// How long a test joiner's requests wait for the share: well inside
@@ -189,19 +220,11 @@ pub(crate) async fn joiner_waiting(
     key: SecretKey,
     connect_wait: Duration,
 ) -> Joiner {
-    Joiner::start(JoinConfig {
-        token,
-        name: Some(name.parse().unwrap()),
-        default_name: "joiner".parse().unwrap(),
-        settings: settings_path(),
-        key,
-        net: net(),
-        share_addrs: addrs,
-        port: None,
+    let config = JoinConfig {
         connect_wait,
-    })
-    .await
-    .unwrap()
+        ..join_config(token, addrs, name, key)
+    };
+    Joiner::start(config).await.unwrap()
 }
 
 /// Starts a joiner that may be refused: the start's outcome.
