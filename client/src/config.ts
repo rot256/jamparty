@@ -12,8 +12,6 @@ export const SOCKET_URL = ((): URL => {
 
 /** The live-reload revision this page was served at (shared directories only). */
 export const LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
-/** The share's jampot version: this client came from it. */
-export const SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
 
 export const HOST_ID = "jampot";
 export const DISMISSED_KEY = "jampot-dismissed-v1";

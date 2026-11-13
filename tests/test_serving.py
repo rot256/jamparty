@@ -204,7 +204,7 @@ def test_streamed_html_gets_the_overlay(tmp_path: Path, page: Page) -> None:
         status, body = request(joined, "/")
         assert status == 200
         assert body.startswith(b"<!doctype html><html><body><h1>Streamed page</h1>")
-        assert b"/_jampot/client.js?version=" in body
+        assert b'/_jampot/client.js"' in body
         _ = page.goto(joined.url)
         expect(page.locator("h1")).to_have_text("Streamed page")
         expect(page.locator("#jampot #connection")).to_have_attribute(

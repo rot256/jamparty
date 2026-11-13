@@ -91,7 +91,6 @@ var SOCKET_URL = (() => {
   return url;
 })();
 var LIVE_REVISION = SCRIPT_URL.searchParams.get("live");
-var SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
 var HOST_ID = "jampot";
 var DISMISSED_KEY = "jampot-dismissed-v1";
 var OUTBOX_KEY = "jampot-outbox-v1";
