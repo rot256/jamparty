@@ -17,6 +17,7 @@ use crate::{
         ids::{CommentId, EndpointKey},
         invalid::Invalid,
         name::JoinerName,
+        port::Port,
         settings::Switch,
         text::{check_line, check_text},
         token::PartySecret,
@@ -96,6 +97,9 @@ pub(crate) enum ShareMessage {
         /// Whether the share takes `presence` (and `cursor`) messages.
         #[serde(default)]
         presence: Support,
+        /// What the share serves (none from an older share).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        site: Option<SiteInfo>,
     },
     /// The hello was refused; the share closes the connection after this.
     Refused { reason: RefusedReason },
@@ -139,6 +143,22 @@ pub(crate) enum ShareMessage {
         #[serde(default)]
         position: Option<Position>,
     },
+}
+
+/// What the share serves, as far as joiners care.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum SiteInfo {
+    /// A dev server (`jampot proxy`) on `port`, its URL's effective port.
+    /// Joiners serve the site on that port when it is free on their
+    /// machine, so the dev server's own scripts that dial that port (live
+    /// reload) reach it through them.
+    Proxy { port: Port },
+    /// A directory (`jampot serve`).
+    Files,
+    /// A kind from a newer share.
+    #[serde(other)]
+    Other,
 }
 
 /// The comment an answer replies to, with where it was made so pages can

@@ -11,11 +11,14 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use iroh::endpoint::{RecvStream, SendStream};
 use tokio::io;
 
-use crate::share::{
-    body::{AppBody, RequestError, javascript_response},
-    files::Files,
-    live::ReloadState,
-    proxy::Proxy,
+use crate::{
+    protocol::control::SiteInfo,
+    share::{
+        body::{AppBody, RequestError, javascript_response},
+        files::Files,
+        live::ReloadState,
+        proxy::Proxy,
+    },
 };
 
 /// How long a request's head may take to arrive, here and on the joiner's
@@ -39,6 +42,15 @@ impl Site {
         match self {
             Self::Proxy(_) => None,
             Self::Files { reload, .. } => Some(reload),
+        }
+    }
+
+    /// What joiners are told about it.
+    #[must_use]
+    pub(crate) fn info(&self) -> SiteInfo {
+        match self {
+            Self::Proxy(proxy) => SiteInfo::Proxy { port: proxy.port() },
+            Self::Files { .. } => SiteInfo::Files,
         }
     }
 }

@@ -174,6 +174,7 @@ async fn joined(
         you: author.clone(),
         undelivered: shared.hub.undelivered_by(author),
         presence: Support::Supported,
+        site: Some(shared.site.info()),
     }];
     if let Some(reload) = shared.site.reload() {
         greeting.push(ShareMessage::Reload {

@@ -5,7 +5,7 @@ use crate::{
         comment::{Author, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT, MAX_SELECTOR},
         control::{
             AckOutcome, Anchor, CommentRef, Envelope, JoinerMessage, MAX_COMMENT_REF,
-            MAX_STATUS_LINE, RefusedReason, ShareMessage, StatusLine,
+            MAX_STATUS_LINE, RefusedReason, ShareMessage, SiteInfo, StatusLine,
         },
         decode_line, encode_line,
         presence::{MAX_CURSOR_SELECTOR, MAX_PAGE_PATH, Person, Support},
@@ -142,8 +142,16 @@ fn share_messages() {
     let reference = |raw: &str| CommentRef::try_from(raw.to_owned()).unwrap();
     let cases = [
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported },
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported, site: None },
             format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"presence":"supported"}}"#),
+        ),
+        (
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: Some(SiteInfo::Proxy { port: 1313.try_into().unwrap() }) },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"proxy","port":1313}}}}"#),
+        ),
+        (
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: Some(SiteInfo::Files) },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}}}}"#),
         ),
         (
             ShareMessage::Refused { reason: RefusedReason::WrongSecret },
@@ -226,13 +234,14 @@ fn share_messages() {
         r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{key}"}}}}}}"#
     );
     let Envelope {
-        message: ShareMessage::Admitted { presence, .. },
+        message: ShareMessage::Admitted { presence, site, .. },
         ..
     } = decode_line::<Envelope<ShareMessage>>(older.as_bytes()).unwrap()
     else {
         panic!("not admitted");
     };
     assert_eq!(presence, Support::Unsupported);
+    assert_eq!(site, None);
     let older = r#"{"version":1,"message":{"type":"presence","joiners":[]}}"#;
     assert!(decode_line::<Envelope<ShareMessage>>(older.as_bytes()).is_ok());
     // A newer share may add fields.
@@ -248,4 +257,43 @@ fn text_limits() {
     let answer =
         format!(r#"{{"version":1,"message":{{"type":"answer","id":"{ID}","message":""}}}}"#);
     assert!(decode_line::<Envelope<ShareMessage>>(answer.as_bytes()).is_err());
+}
+
+#[test]
+fn site_announcements() {
+    let admitted = |site: &str| {
+        let line = format!(
+            r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{}"}},"site":{site}}}}}"#,
+            "ab".repeat(32)
+        );
+        decode_line::<Envelope<ShareMessage>>(line.as_bytes()).map(|envelope| {
+            let ShareMessage::Admitted { site, .. } = envelope.message else {
+                panic!("not admitted: {:?}", envelope.message);
+            };
+            site
+        })
+    };
+    assert_eq!(
+        admitted(r#"{"kind":"proxy","port":80,"tls":true}"#).unwrap(),
+        Some(SiteInfo::Proxy {
+            port: 80.try_into().unwrap()
+        })
+    );
+    assert_eq!(
+        admitted(r#"{"kind":"files"}"#).unwrap(),
+        Some(SiteInfo::Files)
+    );
+    // A kind from a newer share is not this joiner's to mirror.
+    assert_eq!(
+        admitted(r#"{"kind":"tunnel","port":22}"#).unwrap(),
+        Some(SiteInfo::Other)
+    );
+    for bad in [
+        r#"{"kind":"proxy"}"#,
+        r#"{"kind":"proxy","port":0}"#,
+        r#"{"kind":"proxy","port":65536}"#,
+        r#"{"kind":"proxy","port":"1313"}"#,
+    ] {
+        assert!(admitted(bad).is_err(), "{bad}");
+    }
 }

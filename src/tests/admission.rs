@@ -17,13 +17,13 @@ use crate::{
         token::{PartySecret, PartyToken},
     },
     protocol::{
-        control::{Envelope, RefusedReason, ShareMessage},
+        control::{Envelope, RefusedReason, ShareMessage, SiteInfo},
         presence::Support,
     },
     share::{REFUSED_CODE, Source, delivery::Target},
     tests::harness::{
-        config, connected, fixture_dir, get, joiner, net, raw_connection, share_files, start,
-        within,
+        config, connected, fixture_dir, get, joiner, net, raw_connection, share_files, share_proxy,
+        start, within,
     },
 };
 
@@ -131,6 +131,7 @@ async fn right_secret_is_admitted_then_served() {
         you,
         undelivered,
         presence,
+        site,
     } = admitted.message
     else {
         panic!("expected admission, got {admitted:?}");
@@ -138,6 +139,7 @@ async fn right_secret_is_admitted_then_served() {
     assert_eq!(you.name.to_string(), "mallory");
     assert!(undelivered.is_empty());
     assert_eq!(presence, Support::Supported);
+    assert_eq!(site, Some(SiteInfo::Files));
     let answered = String::from_utf8(try_request(&connection).await).unwrap();
     assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
     assert!(answered.contains("Fixture"));
@@ -293,4 +295,29 @@ async fn connections_waiting_for_admission_are_capped() {
     assert!(matches!(admitted.message, ShareMessage::Admitted { .. }));
     let joiner = joiner(share.token().clone(), share.direct_addrs(), "alice").await;
     connected(&joiner).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_proxy_share_announces_its_dev_server_port() {
+    // Nothing needs to listen there: the share only names the port.
+    let upstream = "127.0.0.1:1313".parse().unwrap();
+    let share = share_proxy(upstream).await;
+    let (_endpoint, connection) = raw_connection(&share).await;
+    let (mut send, recv) = connection.open_bi().await.unwrap();
+    send.write_all(&hello(&share.token().secret.to_string()))
+        .await
+        .unwrap();
+    let admitted = lines::read::<Envelope<ShareMessage>, _>(&mut BufReader::new(recv))
+        .await
+        .unwrap()
+        .unwrap();
+    let ShareMessage::Admitted { site, .. } = admitted.message else {
+        panic!("expected admission, got {admitted:?}");
+    };
+    assert_eq!(
+        site,
+        Some(SiteInfo::Proxy {
+            port: 1313.try_into().unwrap()
+        })
+    );
 }

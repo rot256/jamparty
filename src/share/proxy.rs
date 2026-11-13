@@ -19,15 +19,30 @@ use hyper_util::{
 use tokio::io::copy_bidirectional;
 use url::Url;
 
-use crate::share::{
-    body::{AppBody, RequestError, incoming_body, map_incoming_response},
-    inject::{ClientMode, maybe_inject_client},
+use crate::{
+    core::port::Port,
+    share::{
+        body::{AppBody, RequestError, incoming_body, map_incoming_response},
+        inject::{ClientMode, maybe_inject_client},
+    },
 };
 
 /// An `http://` or `https://` base URL without credentials, query or
-/// fragment; its path always ends with `/`.
+/// fragment, on a port other than 0; its path always ends with `/`.
 #[derive(Clone, Debug)]
-pub(crate) struct UpstreamUrl(Url);
+pub(crate) struct UpstreamUrl {
+    url: Url,
+    /// The effective port (the scheme's default if the URL names none).
+    port: Port,
+}
+
+impl UpstreamUrl {
+    /// The port the dev server listens on.
+    #[must_use]
+    pub(crate) fn port(&self) -> Port {
+        self.port
+    }
+}
 
 /// Why a string is not an [`UpstreamUrl`].
 #[derive(Debug)]
@@ -37,6 +52,7 @@ pub(crate) enum UpstreamUrlError {
     NoHost,
     Credentials,
     QueryOrFragment,
+    PortZero,
 }
 
 impl fmt::Display for UpstreamUrlError {
@@ -47,6 +63,7 @@ impl fmt::Display for UpstreamUrlError {
             Self::NoHost => f.write_str("upstream must include a host"),
             Self::Credentials => f.write_str("upstream credentials are not supported"),
             Self::QueryOrFragment => f.write_str("upstream must not include a query or fragment"),
+            Self::PortZero => f.write_str("upstream port must not be 0"),
         }
     }
 }
@@ -70,23 +87,31 @@ impl FromStr for UpstreamUrl {
         if upstream.query().is_some() || upstream.fragment().is_some() {
             return Err(UpstreamUrlError::QueryOrFragment);
         }
+        let port = upstream
+            .port_or_known_default()
+            .and_then(|port| Port::try_from(port).ok())
+            .ok_or(UpstreamUrlError::PortZero)?;
         if !upstream.path().ends_with('/') {
             let path = format!("{}/", upstream.path());
             upstream.set_path(&path);
         }
-        Ok(Self(upstream))
+        Ok(Self {
+            url: upstream,
+            port,
+        })
     }
 }
 
 impl fmt::Display for UpstreamUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        self.url.fmt(f)
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct Proxy {
     upstream: Url,
+    port: Port,
     client: Client<HttpsConnector<HttpConnector>, AppBody>,
 }
 
@@ -98,9 +123,16 @@ impl Proxy {
             .enable_http1()
             .build();
         Self {
-            upstream: upstream.0,
+            port: upstream.port(),
+            upstream: upstream.url,
             client: Client::builder(TokioExecutor::new()).build(connector),
         }
+    }
+
+    /// The dev server's port.
+    #[must_use]
+    pub(crate) fn port(&self) -> Port {
+        self.port
     }
 
     pub(crate) async fn handle(
@@ -360,6 +392,16 @@ mod tests {
                 .to_string(),
             "http://localhost:3000/app/"
         );
+        assert!("http://localhost:0".parse::<UpstreamUrl>().is_err());
+    }
+
+    #[test]
+    fn the_upstream_port_is_its_effective_port() {
+        let port = |raw: &str| u16::from(raw.parse::<UpstreamUrl>().unwrap().port());
+        assert_eq!(port("http://localhost:3000/app"), 3000);
+        assert_eq!(port("http://localhost"), 80);
+        assert_eq!(port("https://localhost/"), 443);
+        assert_eq!(port("http://127.0.0.1:443"), 443);
     }
 
     #[test]
