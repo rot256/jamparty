@@ -1,0 +1,8 @@
+{
+  "name": "jampot-fixture-astro",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "astro": "7.4.4"
+  }
+}

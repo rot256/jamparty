@@ -7,11 +7,14 @@ overlay, editing a source file updates the page by itself, every
 WebSocket the page opens goes to the page's own host and port, and no
 console error is about origins, hosts or blocking.
 
-Run with `uv run pytest -m frameworks` (Linux x86-64). Each fixture is
-copied out first; Hugo and Zola are downloaded once, checked against their
-release's SHA-256, into $JAMPOT_TOOLS_DIR (default: ~/.cache/jampot-tests).
+Run with `uv run pytest -m frameworks` (Linux x86-64; Node.js 22.23 or
+later and npm on PATH). npm projects are installed from their lockfiles
+into a copy of the fixture; Hugo and Zola are downloaded once, checked
+against their release's SHA-256, into $JAMPOT_TOOLS_DIR (default:
+~/.cache/jampot-tests).
 """
 
+import enum
 import errno
 import hashlib
 import io
@@ -104,6 +107,15 @@ def tool(download: Download) -> Path:
     return binary
 
 
+class Address(enum.Enum):
+    """Where the dev server listens."""
+
+    DEV_HOST = enum.auto()
+    # Eleventy's dev server takes no host: it listens on every address, so
+    # the joiner cannot have its port and serves on another.
+    EVERYWHERE = enum.auto()
+
+
 Command = Callable[[Path, int], list[str]]
 
 
@@ -114,8 +126,27 @@ class Framework:
     command: Command
     # The file holding the marker.
     source: str
+    address: Address = Address.DEV_HOST
     env: dict[str, str] = field(default_factory=dict)
 
+
+def bin_(name: str) -> Command:
+    """An npm package's command, run from the site's node_modules."""
+    return lambda site, port: (
+        [str(site / "node_modules/.bin" / name)]
+        + [argument.format(host=DEV_HOST, port=port) for argument in COMMANDS[name]]
+    )
+
+
+COMMANDS = {
+    "vite": ["--host", "{host}", "--port", "{port}", "--strictPort"],
+    "next": ["dev", "--hostname", "{host}", "--port", "{port}"],
+    # In the foreground, always: Astro runs a detached server when it
+    # detects a coding agent, which `--ignore-lock` turns off.
+    "astro": ["dev", "--host", "{host}", "--port", "{port}", "--ignore-lock"],
+    "webpack": ["serve"],
+    "eleventy": ["--serve", "--port", "{port}"],
+}
 
 FRAMEWORKS = [
     Framework(
@@ -140,6 +171,35 @@ FRAMEWORKS = [
             *["--port", str(port)],
         ],
         "templates/index.html",
+    ),
+    Framework("vite", bin_("vite"), "label.js"),
+    Framework(
+        "next",
+        bin_("next"),
+        "app/page.js",
+        env={"NEXT_TELEMETRY_DISABLED": "1"},
+    ),
+    Framework(
+        "astro",
+        bin_("astro"),
+        "src/pages/index.astro",
+        env={"ASTRO_TELEMETRY_DISABLED": "1"},
+    ),
+    Framework(
+        "sveltekit",
+        lambda site, port: [
+            str(site / "node_modules/.bin/vite"),
+            "dev",
+            *["--host", DEV_HOST, "--port", str(port), "--strictPort"],
+        ],
+        "src/routes/+page.svelte",
+    ),
+    Framework("webpack", bin_("webpack"), "src/label.js"),
+    Framework(
+        "eleventy",
+        bin_("eleventy"),
+        "index.html",
+        address=Address.EVERYWHERE,
     ),
 ]
 
@@ -175,6 +235,13 @@ def sites(tmp_path_factory: pytest.TempPathFactory) -> Callable[[str], Path]:
         if name not in installed:
             target = tmp_path_factory.mktemp(name) / "site"
             _ = shutil.copytree(FIXTURES / name, target)
+            if (target / "package-lock.json").exists():
+                _ = subprocess.run(
+                    ["npm", "ci", "--no-audit", "--no-fund", "--loglevel=error"],
+                    cwd=target,
+                    check=True,
+                    timeout=600,
+                )
             installed[name] = target
         return installed[name]
 
@@ -326,8 +393,12 @@ def test_live_reload_through_jampot(
         share(tmp_path, "proxy", upstream) as shared,
         join(tmp_path, shared) as joined,
     ):
-        # The joiner serves on the dev server's port.
-        assert joined.port == port
+        match framework.address:
+            case Address.DEV_HOST:
+                # The joiner serves on the dev server's port.
+                assert joined.port == port
+            case Address.EVERYWHERE:
+                assert joined.port != port
         watched = watch(page)
         _ = page.goto(joined.url, timeout=LOAD)
         expect(page.locator("#jampot")).to_be_attached(timeout=LOAD)

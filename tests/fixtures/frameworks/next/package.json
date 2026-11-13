@@ -1,0 +1,9 @@
+{
+  "name": "jampot-fixture-next",
+  "private": true,
+  "dependencies": {
+    "next": "16.4.3",
+    "react": "19.2.9",
+    "react-dom": "19.2.9"
+  }
+}

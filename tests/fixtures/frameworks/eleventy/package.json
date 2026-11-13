@@ -1,0 +1,7 @@
+{
+  "name": "jampot-fixture-eleventy",
+  "private": true,
+  "devDependencies": {
+    "@11ty/eleventy": "3.1.7"
+  }
+}
