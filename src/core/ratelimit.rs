@@ -6,8 +6,6 @@
 //! run up to `n` requests ahead of the steady rate.
 
 use std::{collections::HashMap, hash::Hash};
-#[cfg(test)]
-use std::{error::Error, fmt};
 
 use jiff::{SignedDuration, Timestamp};
 
@@ -16,7 +14,8 @@ use crate::core::clock::Clock;
 /// Entries are swept when the map grows past this many joiners.
 const SWEEP_THRESHOLD: usize = 1024;
 
-/// `capacity` requests per `period`.
+/// `n` requests per `period`, as one per `interval` (`period / n`) with
+/// up to `burst` (`period - interval`) taken ahead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RateLimit {
     interval: SignedDuration,
@@ -24,34 +23,11 @@ pub(crate) struct RateLimit {
 }
 
 #[cfg(test)]
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct InvalidRateLimit;
-
-#[cfg(test)]
-impl fmt::Display for InvalidRateLimit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("rate limit needs a positive capacity and period")
-    }
-}
-
-#[cfg(test)]
-impl Error for InvalidRateLimit {}
-
-#[cfg(test)]
 impl RateLimit {
     /// The steady-state time between two requests.
     #[must_use]
     pub(crate) fn interval(self) -> SignedDuration {
         self.interval
-    }
-
-    pub(crate) fn new(capacity: u16, period: SignedDuration) -> Result<Self, InvalidRateLimit> {
-        let interval = period
-            .checked_div(i32::from(capacity))
-            .filter(|interval| interval.is_positive())
-            .ok_or(InvalidRateLimit)?;
-        let burst = period.checked_sub(interval).ok_or(InvalidRateLimit)?;
-        Ok(Self { interval, burst })
     }
 }
 
@@ -186,26 +162,6 @@ mod tests {
         for _ in 0..10 {
             assert_eq!(limiter.check(key(1), &clock), Ok(()));
         }
-    }
-
-    #[test]
-    fn configurable_and_validated() {
-        assert_eq!(
-            RateLimit::new(10, SignedDuration::from_secs(60)),
-            Ok(RateLimit::PER_JOINER)
-        );
-        assert_eq!(
-            RateLimit::new(60, SignedDuration::from_secs(60)),
-            Ok(RateLimit::GLOBAL)
-        );
-        assert!(RateLimit::new(0, SignedDuration::from_secs(60)).is_err());
-        assert!(RateLimit::new(1, SignedDuration::ZERO).is_err());
-        let clock = clock();
-        let mut limiter =
-            RateLimiter::new(RateLimit::new(2, SignedDuration::from_secs(10)).unwrap());
-        assert!(limiter.check(key(1), &clock).is_ok());
-        assert!(limiter.check(key(1), &clock).is_ok());
-        assert!(limiter.check(key(1), &clock).is_err());
     }
 
     #[test]
