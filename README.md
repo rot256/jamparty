@@ -7,7 +7,7 @@ browser and the comments reach your agent. Peer to peer over
 ## Install
 
 ```sh
-cargo install --locked --git https://github.com/rot256/jampot jampot
+cargo install --locked jampot
 ```
 
 ## Share
