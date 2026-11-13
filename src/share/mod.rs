@@ -34,6 +34,7 @@ use crate::{
         token::{PartySecret, PartyToken},
     },
     share::{
+        connection::VersionLog,
         delivery::Target,
         files::Files,
         http::Site,
@@ -98,6 +99,8 @@ pub(crate) struct Shared {
     site: Site,
     hub: Arc<Hub>,
     admission_timeout: Duration,
+    /// Joiners of another protocol, said once.
+    versions: VersionLog,
 }
 
 /// A running share. Dropping it stops serving; [`Share::stop`] also tells
@@ -145,6 +148,7 @@ impl Share {
             site,
             hub: Hub::new(clock, Arc::new(SystemRng)),
             admission_timeout,
+            versions: VersionLog::default(),
         });
         let mut tasks = JoinSet::new();
         let recv = delivery::start(target, Arc::clone(&shared.hub), &mut tasks);

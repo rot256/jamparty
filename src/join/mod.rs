@@ -42,8 +42,19 @@ use crate::{
         endpoint::{Accept, NetConfig, bind},
         settings,
     },
-    core::{name::JoinerName, port::Port, request::LocalOrigin, token::PartyToken},
-    join::{connection::Dial, preferences::Preferences, session::Session, state::Snapshot},
+    core::{
+        name::JoinerName,
+        port::Port,
+        request::LocalOrigin,
+        token::PartyToken,
+        version::{Incompatible, JampotVersion, mismatch_note},
+    },
+    join::{
+        connection::{Dial, Final, Welcome},
+        preferences::Preferences,
+        session::Session,
+        state::Snapshot,
+    },
     protocol::control::{RefusedReason, SiteInfo},
 };
 
@@ -236,6 +247,8 @@ async fn with_ipv6(v4: TcpListener) -> io::Result<Vec<TcpListener>> {
 pub(crate) struct Joiner {
     endpoint: Endpoint,
     session: Arc<Session>,
+    /// The share's jampot, as it said on admission.
+    share_version: Option<JampotVersion>,
     origin: Arc<LocalOrigin>,
     #[cfg(test)]
     port: Port,
@@ -278,11 +291,14 @@ impl Joiner {
         let (first, admitted) = oneshot::channel();
         tasks.spawn(connection::run(dial, Arc::clone(&session), first));
         tasks.spawn(uplink::run(Arc::clone(&session)));
-        let site = match admitted.await {
-            Ok(Ok(site)) => site,
-            Ok(Err(reason)) => {
+        let Welcome { site, jampot } = match admitted.await {
+            Ok(Ok(welcome)) => welcome,
+            Ok(Err(ended)) => {
                 endpoint.close().await;
-                return Err(Refused(reason).into());
+                return Err(match ended {
+                    Final::Refused(reason) => Refused(reason).into(),
+                    Final::Incompatible(incompatible) => incompatible.into(),
+                });
             }
             Err(_) => bail!("the connection to the share ended before admission"),
         };
@@ -306,12 +322,27 @@ impl Joiner {
         Ok(Self {
             endpoint,
             session,
+            share_version: jampot,
             origin,
             #[cfg(test)]
             port,
             fallback,
             _tasks: tasks,
         })
+    }
+
+    /// A line to say when the share runs another jampot of the same
+    /// protocol.
+    #[must_use]
+    pub(crate) fn version_note(&self) -> Option<String> {
+        self.share_version.as_ref().and_then(mismatch_note)
+    }
+
+    /// Why the share's protocol turned out not to be this joiner's, after
+    /// it reconnected.
+    #[must_use]
+    pub(crate) fn incompatibility(&self) -> Option<Incompatible> {
+        self.session.incompatibility()
     }
 
     /// Why the joiner does not serve on the dev server's port, if it

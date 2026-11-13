@@ -10,6 +10,7 @@ use tokio::io::BufReader;
 
 use crate::{
     adapters::lines::{self, MAX_HELLO},
+    core::version::JampotVersion,
     protocol::control::{AckOutcome, Envelope, RefusedReason, ShareMessage},
     share::Share,
     tests::harness::{fixture_dir, raw_connection, share_files, within},
@@ -66,7 +67,8 @@ async fn the_hello_is_read_whole_into_a_fixed_buffer() {
     assert_eq!(
         reply,
         ShareMessage::Refused {
-            reason: RefusedReason::BadHello
+            reason: RefusedReason::BadHello,
+            jampot: Some(JampotVersion::current()),
         }
     );
 
@@ -78,7 +80,8 @@ async fn the_hello_is_read_whole_into_a_fixed_buffer() {
     assert_eq!(
         reply,
         ShareMessage::Refused {
-            reason: RefusedReason::BadHello
+            reason: RefusedReason::BadHello,
+            jampot: Some(JampotVersion::current()),
         }
     );
 

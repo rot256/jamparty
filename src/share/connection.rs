@@ -1,7 +1,14 @@
 //! One joiner's connection: admission on the control stream, then request
 //! streams and the control loop until either side leaves.
 
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::{
+    io::Cursor,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use iroh::endpoint::{Connection, Incoming, RecvStream, SendStream, VarInt};
 use rootcause::prelude::report;
@@ -19,10 +26,15 @@ use tokio::{
 use crate::{
     Report,
     adapters::{endpoint, lines},
-    core::{ids::EndpointKey, name::JoinerName},
+    core::{
+        ids::EndpointKey,
+        name::JoinerName,
+        version::{JampotVersion, PROTOCOL},
+    },
     protocol::{
         comment::Author,
-        control::{Envelope, JoinerMessage, RefusedReason, ShareMessage},
+        control::{Envelope, Greeting, JoinerMessage, RefusedReason, ShareMessage},
+        decode_line,
         presence::{Support, Whereabouts},
     },
     share::{
@@ -123,8 +135,24 @@ async fn admission(
     // The hello is read without a buffered reader, into a fixed buffer
     // that is wiped (see `lines::read_hello`); what follows it goes on
     // through a buffered reader.
-    let (first, leftover) = match timeout_at(deadline, lines::read_hello(&mut recv)).await {
-        Ok(Ok((first, leftover))) => (Ok(first), leftover),
+    let read = lines::read_hello_with(&mut recv, |line| {
+        // Leniently first: a joiner of another protocol is told so, with
+        // this share's version.
+        let greeting = decode_line::<Greeting>(line).ok();
+        Ok((greeting, decode_line::<Envelope<JoinerMessage>>(line)))
+    });
+    let (first, leftover) = match timeout_at(deadline, read).await {
+        Ok(Ok((Some((Some(greeting), _)), _))) if greeting.version != PROTOCOL => {
+            shared.versions.incompatible(&greeting);
+            return Ok(Admission::Refused {
+                send,
+                reason: RefusedReason::Incompatible,
+            });
+        }
+        Ok(Ok((first, leftover))) => {
+            let first = first.map(|(_, hello)| hello).transpose();
+            (first.map_err(Report::from), leftover)
+        }
         Ok(Err(error)) => (Err(error), Vec::new()),
         Err(_) => (
             Err(report!("no hello before the admission deadline")),
@@ -145,7 +173,10 @@ async fn admission(
 }
 
 async fn refuse(connection: &Connection, mut send: SendStream, reason: RefusedReason) {
-    let refused = Envelope::from(ShareMessage::Refused { reason });
+    let refused = Envelope::from(ShareMessage::Refused {
+        reason,
+        jampot: Some(JampotVersion::current()),
+    });
     if lines::write(&mut send, &refused).await.is_ok() && send.finish().is_ok() {
         // Let the joiner read it and hang up; the close below carries the
         // reason too in case it does not.
@@ -175,6 +206,7 @@ async fn joined(
         undelivered: shared.hub.undelivered_by(author),
         presence: Support::Supported,
         site: Some(shared.site.info()),
+        jampot: Some(JampotVersion::current()),
     }];
     if let Some(reload) = shared.site.reload() {
         greeting.push(ShareMessage::Reload {
@@ -287,5 +319,30 @@ pub(crate) async fn forward_reloads(shared: Arc<Shared>) {
     while revisions.changed().await.is_ok() {
         let revision = *revisions.borrow_and_update();
         shared.hub.broadcast(ShareMessage::Reload { revision });
+    }
+}
+
+/// Says once, on the share's log, that a joiner of another protocol came;
+/// later ones only at debug level, so joiners cannot flood the log.
+#[derive(Default)]
+pub(crate) struct VersionLog {
+    said: AtomicBool,
+}
+
+impl VersionLog {
+    fn incompatible(&self, greeting: &Greeting) {
+        let version = greeting.jampot().map_or_else(
+            || "another jampot".to_owned(),
+            |jampot| format!("jampot {jampot}"),
+        );
+        let protocol = greeting.version;
+        if self.said.swap(true, Ordering::Relaxed) {
+            tracing::debug!(%version, protocol, "joiner refused: another protocol");
+        } else {
+            tracing::warn!(
+                "a joiner runs {version} (protocol {protocol}); this share runs jampot {} (protocol {PROTOCOL}) and refused it",
+                JampotVersion::current()
+            );
+        }
     }
 }

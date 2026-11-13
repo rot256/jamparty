@@ -15,6 +15,7 @@ use crate::{
         ids::EndpointKey,
         rng::SystemRng,
         token::{PartySecret, PartyToken},
+        version::JampotVersion,
     },
     join::Refused,
     protocol::{
@@ -69,7 +70,13 @@ async fn first_line(first: &[u8]) -> (Option<ShareMessage>, Vec<u8>, ConnectionE
 }
 
 fn assert_refused(reply: Option<ShareMessage>, closed: &ConnectionError, reason: RefusedReason) {
-    assert_eq!(reply, Some(ShareMessage::Refused { reason }));
+    assert_eq!(
+        reply,
+        Some(ShareMessage::Refused {
+            reason,
+            jampot: Some(JampotVersion::current())
+        })
+    );
     let ConnectionError::ApplicationClosed(close) = closed else {
         panic!("expected an application close, got {closed}");
     };
@@ -133,6 +140,7 @@ async fn right_secret_is_admitted_then_served() {
         undelivered,
         presence,
         site,
+        jampot,
     } = admitted.message
     else {
         panic!("expected admission, got {admitted:?}");
@@ -141,6 +149,7 @@ async fn right_secret_is_admitted_then_served() {
     assert!(undelivered.is_empty());
     assert_eq!(presence, Support::Supported);
     assert_eq!(site, Some(SiteInfo::Files));
+    assert_eq!(jampot, Some(JampotVersion::current()));
     let answered = String::from_utf8(try_request(&connection).await).unwrap();
     assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
     assert!(answered.contains("Fixture"));

@@ -25,6 +25,7 @@ pub(crate) fn admit(first: FirstLine, secret: &PartySecret) -> Result<JoinerName
                 JoinerMessage::Hello {
                     secret: presented,
                     name,
+                    jampot: _,
                 },
         })) => {
             if secret.matches(&presented) {
@@ -54,6 +55,7 @@ pub(crate) fn reason_text(reason: RefusedReason) -> &'static str {
         RefusedReason::WrongSecret => "wrong_secret",
         RefusedReason::BadHello => "bad_hello",
         RefusedReason::Full => "full",
+        RefusedReason::Incompatible => "incompatible",
     }
 }
 
@@ -65,6 +67,7 @@ impl TryFrom<&[u8]> for RefusedReason {
             b"wrong_secret" => Ok(Self::WrongSecret),
             b"bad_hello" => Ok(Self::BadHello),
             b"full" => Ok(Self::Full),
+            b"incompatible" => Ok(Self::Incompatible),
             other => Err(Invalid::new(format!(
                 "unknown refusal reason {:?}",
                 String::from_utf8_lossy(other)
@@ -90,6 +93,7 @@ mod tests {
         JoinerMessage::Hello {
             secret: secret.clone(),
             name: "alice".parse().unwrap(),
+            jampot: None,
         }
         .into()
     }
@@ -134,6 +138,7 @@ mod tests {
             RefusedReason::WrongSecret,
             RefusedReason::BadHello,
             RefusedReason::Full,
+            RefusedReason::Incompatible,
         ] {
             assert_eq!(
                 RefusedReason::try_from(reason_text(reason).as_bytes()),

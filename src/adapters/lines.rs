@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// A read line's buffer starts this large. The share reads the hello (the
-/// line with the party secret) with [`read_hello`] instead; the joiner's
+/// line with the party secret) with [`read_hello_with`] instead; the joiner's
 /// lines from the share carry no secret.
 const LINE_CAPACITY: usize = 1024;
 
@@ -26,6 +26,19 @@ pub(crate) const MAX_HELLO: usize = 1024;
 pub(crate) async fn read<T, R>(reader: &mut R) -> Result<Option<T>, Report>
 where
     T: DeserializeOwned,
+    R: AsyncBufRead + Unpin,
+{
+    read_with(reader, |line| Ok(decode_line(line)?)).await
+}
+
+/// Reads one line and hands it to `parse` (which may read it more than one
+/// way); `None` at a clean end of stream. The line's buffer is wiped once
+/// it is parsed.
+pub(crate) async fn read_with<T, R>(
+    reader: &mut R,
+    parse: impl FnOnce(&[u8]) -> Result<T, Report>,
+) -> Result<Option<T>, Report>
+where
     R: AsyncBufRead + Unpin,
 {
     let mut line = Zeroizing::new(Vec::with_capacity(LINE_CAPACITY));
@@ -40,7 +53,7 @@ where
     if !line.ends_with(b"\n") {
         bail!("control line too long or cut off");
     }
-    Ok(Some(decode_line(&line)?))
+    Ok(Some(parse(&line)?))
 }
 
 /// Reads the first line of a control stream, the hello that carries the
@@ -53,9 +66,22 @@ where
 /// ever borrowed from ours. Returns the parsed line (`None` at a clean end
 /// of stream) and the bytes that came after it in the same read, which
 /// belong to the next lines.
+#[cfg(test)]
 pub(crate) async fn read_hello<T, R>(reader: &mut R) -> Result<(Option<T>, Vec<u8>), Report>
 where
     T: DeserializeOwned,
+    R: AsyncRead + Unpin,
+{
+    read_hello_with(reader, |line| Ok(decode_line(line)?)).await
+}
+
+/// [`read_hello`], the line handed to `parse` (which may read it more than
+/// one way).
+pub(crate) async fn read_hello_with<T, R>(
+    reader: &mut R,
+    parse: impl FnOnce(&[u8]) -> Result<T, Report>,
+) -> Result<(Option<T>, Vec<u8>), Report>
+where
     R: AsyncRead + Unpin,
 {
     let mut buffer = Zeroizing::new([0_u8; MAX_HELLO]);
@@ -86,7 +112,7 @@ where
         if line.contains(&b'\\') {
             bail!("the hello has an escape");
         }
-        return Ok((Some(decode_line(line)?), leftover));
+        return Ok((Some(parse(line)?), leftover));
     }
 }
 

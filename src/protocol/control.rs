@@ -23,7 +23,7 @@ use crate::{
         settings::Switch,
         text::{check_line, check_text},
         token::PartySecret,
-        version::Version1,
+        version::{JampotVersion, Version1},
     },
     protocol::{
         comment::{Author, CommentPage, CommentSelector, Draft},
@@ -58,6 +58,9 @@ pub(crate) enum JoinerMessage {
     Hello {
         secret: PartySecret,
         name: JoinerName,
+        /// The joiner's jampot (none from an older joiner).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        jampot: Option<JampotVersion>,
     },
     /// A comment; `ref` is the page's own id for it, echoed in the
     /// acknowledgement. The share queues a `ref` once per joiner: sending
@@ -102,9 +105,17 @@ pub(crate) enum ShareMessage {
         /// What the share serves (none from an older share).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         site: Option<SiteInfo>,
+        /// The share's jampot (none from an older share).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        jampot: Option<JampotVersion>,
     },
     /// The hello was refused; the share closes the connection after this.
-    Refused { reason: RefusedReason },
+    Refused {
+        reason: RefusedReason,
+        /// The share's jampot (none from an older share).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        jampot: Option<JampotVersion>,
+    },
     /// What became of the joiner's comment `ref`.
     CommentAck {
         #[serde(rename = "ref")]
@@ -211,6 +222,36 @@ pub(crate) enum RefusedReason {
     /// The share has as many joiners as it takes (in all, or with this
     /// key); the joiner retries later.
     Full,
+    /// The joiner speaks another protocol version than the share.
+    Incompatible,
+}
+
+/// The first line on a control stream, from either side, read leniently
+/// before it is parsed as this protocol: its protocol version, and the
+/// sender's jampot version if it says (a newer jampot's first line may
+/// carry other things this one cannot parse).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(crate) struct Greeting {
+    pub(crate) version: u32,
+    #[serde(default)]
+    message: GreetingMessage,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+struct GreetingMessage {
+    #[serde(default)]
+    jampot: Option<String>,
+}
+
+impl Greeting {
+    /// The sender's jampot, if it said a valid one.
+    #[must_use]
+    pub(crate) fn jampot(&self) -> Option<JampotVersion> {
+        self.message
+            .jampot
+            .clone()
+            .and_then(|jampot| JampotVersion::try_from(jampot).ok())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

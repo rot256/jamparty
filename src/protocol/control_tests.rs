@@ -49,12 +49,15 @@ fn joiner_messages_round_trip() {
     let JoinerMessage::Hello {
         secret: presented,
         name,
+        jampot,
     } = hello.message
     else {
         panic!("not a hello");
     };
     assert!(presented.matches(&secret.parse().unwrap()));
     assert_eq!(name.as_str(), "alice@laptop");
+    // A hello without a jampot version (an older joiner's) still parses.
+    assert_eq!(jampot, None);
 }
 
 #[test]
@@ -144,24 +147,28 @@ fn share_messages() {
     let reference = |raw: &str| CommentRef::try_from(raw.to_owned()).unwrap();
     let cases = [
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported, site: None },
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported, site: None, jampot: None },
             format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"presence":"supported"}}"#),
         ),
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: Some(SiteInfo::Proxy { port: 1313.try_into().unwrap() }) },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"proxy","port":1313}}}}"#),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: Some(SiteInfo::Proxy { port: 1313.try_into().unwrap() }), jampot: Some("0.1.0".to_owned().try_into().unwrap()) },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"proxy","port":1313}},"jampot":"0.1.0"}}"#),
         ),
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: Some(SiteInfo::Files) },
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: Some(SiteInfo::Files), jampot: None },
             format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}}}}"#),
         ),
         (
-            ShareMessage::Refused { reason: RefusedReason::WrongSecret },
+            ShareMessage::Refused { reason: RefusedReason::WrongSecret, jampot: None },
             r#"{"type":"refused","reason":"wrong_secret"}"#.to_owned(),
         ),
         (
-            ShareMessage::Refused { reason: RefusedReason::Full },
+            ShareMessage::Refused { reason: RefusedReason::Full, jampot: None },
             r#"{"type":"refused","reason":"full"}"#.to_owned(),
+        ),
+        (
+            ShareMessage::Refused { reason: RefusedReason::Incompatible, jampot: Some("0.2.0".to_owned().try_into().unwrap()) },
+            r#"{"type":"refused","reason":"incompatible","jampot":"0.2.0"}"#.to_owned(),
         ),
         (
             ShareMessage::CommentAck { reference: reference("7"), outcome: AckOutcome::Queued { id: ID.parse().unwrap() } },

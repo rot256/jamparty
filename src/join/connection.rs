@@ -13,9 +13,16 @@ use tokio::{io::BufReader, sync::oneshot, time};
 use crate::{
     Report,
     adapters::{endpoint, lines},
-    core::{queue::backoff, token::PartyToken},
+    core::{
+        queue::backoff,
+        token::PartyToken,
+        version::{Incompatible, JampotVersion, PROTOCOL},
+    },
     join::{control::Control, session::Session},
-    protocol::control::{Envelope, JoinerMessage, RefusedReason, ShareMessage, SiteInfo},
+    protocol::{
+        control::{Envelope, Greeting, JoinerMessage, RefusedReason, ShareMessage, SiteInfo},
+        decode_line,
+    },
     share::REFUSED_CODE,
 };
 
@@ -30,17 +37,35 @@ pub(crate) struct Dial {
     pub(crate) share_addrs: Vec<SocketAddr>,
 }
 
-/// How the first admission went: what the share serves (none from an
-/// older share), or why it refused for good.
-pub(crate) type First = Result<Option<SiteInfo>, RefusedReason>;
+/// What the share said when it first admitted this joiner.
+#[derive(Clone, Debug)]
+pub(crate) struct Welcome {
+    /// What the share serves (none from an older share).
+    pub(crate) site: Option<SiteInfo>,
+    /// The share's jampot (none from an older share).
+    pub(crate) jampot: Option<JampotVersion>,
+}
+
+/// Why the joiner gives up on the share for good.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Final {
+    /// The share refused it.
+    Refused(RefusedReason),
+    /// The share speaks another protocol.
+    Incompatible(Incompatible),
+}
+
+/// How the first admission went.
+pub(crate) type First = Result<Welcome, Final>;
 
 /// Who hears of the first admission (taken when told).
 type FirstWaiter = Option<oneshot::Sender<First>>;
 
 /// How one connection attempt ended.
 enum Ended {
-    /// The share refused us; retrying would not help.
-    Refused(RefusedReason),
+    /// The share refused us, or speaks another protocol; retrying would
+    /// not help.
+    Final(Final),
     /// Admitted, then lost.
     Lost,
     /// Never admitted.
@@ -54,12 +79,19 @@ pub(crate) async fn run(dial: Dial, session: Arc<Session>, first: oneshot::Sende
     let mut failures: u32 = 0;
     loop {
         match attempt(&dial, &session, &mut first).await {
-            Ended::Refused(reason) => {
-                tracing::warn!(?reason, "the share refused this joiner");
+            Ended::Final(ended) => {
+                tracing::warn!(?ended, "the joiner gives up on the share");
+                let reason = match &ended {
+                    Final::Refused(reason) => *reason,
+                    Final::Incompatible(incompatible) => {
+                        session.incompatible(incompatible.clone());
+                        RefusedReason::Incompatible
+                    }
+                };
                 session.disconnected(Some(reason));
                 if let Some(first) = first.take() {
                     // Nobody waits any more if the start was given up.
-                    let _ = first.send(Err(reason));
+                    let _ = first.send(Err(ended));
                 }
                 return;
             }
@@ -92,43 +124,76 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
     let hello = Envelope::from(JoinerMessage::Hello {
         secret: dial.token.secret.clone(),
         name: session.name(),
+        jampot: Some(JampotVersion::current()),
     });
     if let Err(error) = lines::write(&mut send, &hello).await {
         return Ended::Failed(error);
     }
-    let (you, undelivered, presence, site) =
-        match lines::read::<Envelope<ShareMessage>, _>(&mut recv).await {
-            Ok(Some(Envelope {
+    // Leniently first: a share of another protocol says which jampot it
+    // runs even if the rest of its line means nothing here.
+    let line = lines::read_with(&mut recv, |line| {
+        let greeting = decode_line::<Greeting>(line).ok();
+        Ok((greeting, decode_line::<Envelope<ShareMessage>>(line)))
+    })
+    .await;
+    let (you, undelivered, presence, welcome) = match line {
+        Ok(Some((Some(greeting), _))) if greeting.version != PROTOCOL => {
+            connection.close(VarInt::from_u32(0), b"incompatible");
+            return Ended::Final(Final::Incompatible(Incompatible {
+                share: greeting.jampot(),
+                protocol: greeting.version,
+            }));
+        }
+        Ok(Some((
+            _,
+            Ok(Envelope {
                 version: _,
-                message:
-                    ShareMessage::Admitted {
-                        you,
-                        undelivered,
-                        presence,
-                        site,
-                    },
-            })) => (you, undelivered, presence, site),
-            Ok(Some(Envelope {
-                version: _,
-                message: ShareMessage::Refused { reason },
-            })) => {
+                message,
+            }),
+        ))) => match message {
+            ShareMessage::Admitted {
+                you,
+                undelivered,
+                presence,
+                site,
+                jampot,
+            } => (you, undelivered, presence, Welcome { site, jampot }),
+            ShareMessage::Refused {
+                reason: RefusedReason::Incompatible,
+                jampot,
+            } => {
+                connection.close(VarInt::from_u32(0), b"refused");
+                return Ended::Final(Final::Incompatible(Incompatible {
+                    share: jampot,
+                    protocol: PROTOCOL,
+                }));
+            }
+            ShareMessage::Refused { reason, jampot: _ } => {
                 connection.close(VarInt::from_u32(0), b"refused");
                 return refused(reason);
             }
-            Ok(_) | Err(_) => {
-                let closed = time::timeout(CLOSE_WAIT, connection.closed()).await;
-                return match refusal(closed.ok()) {
-                    Some(reason) => refused(reason),
-                    None => {
-                        Ended::Failed(report!("the share closed the connection during admission"))
-                    }
-                };
+            ShareMessage::CommentAck { .. }
+            | ShareMessage::Answer { .. }
+            | ShareMessage::Delivered { .. }
+            | ShareMessage::Reload { .. }
+            | ShareMessage::Status { .. }
+            | ShareMessage::Presence { .. }
+            | ShareMessage::Cursor { .. } => {
+                return Ended::Failed(report!("the share did not start with admission"));
             }
-        };
+        },
+        Ok(Some((_, Err(_)))) | Ok(None) | Err(_) => {
+            let closed = time::timeout(CLOSE_WAIT, connection.closed()).await;
+            return match refusal(closed.ok()) {
+                Some(reason) => refused(reason),
+                None => Ended::Failed(report!("the share closed the connection during admission")),
+            };
+        }
+    };
     let control = Arc::new(Control::new(connection, send, presence));
     session.connected(Arc::clone(&control), you, &undelivered);
     if let Some(first) = first.take() {
-        let _ = first.send(Ok(site));
+        let _ = first.send(Ok(welcome));
     }
     receive(&mut recv, &control, session).await;
     control.connection.close(VarInt::from_u32(0), b"bye");
@@ -139,7 +204,13 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
 fn refused(reason: RefusedReason) -> Ended {
     match reason {
         RefusedReason::Full => Ended::Failed(report!("the share is full")),
-        RefusedReason::WrongSecret | RefusedReason::BadHello => Ended::Refused(reason),
+        RefusedReason::Incompatible => Ended::Final(Final::Incompatible(Incompatible {
+            share: None,
+            protocol: PROTOCOL,
+        })),
+        RefusedReason::WrongSecret | RefusedReason::BadHello => {
+            Ended::Final(Final::Refused(reason))
+        }
     }
 }
 

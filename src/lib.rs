@@ -523,6 +523,9 @@ async fn join(
         joiner = Joiner::start(config) => joiner?,
         signal = shutdown_signal() => return Ok(signal?),
     };
+    if let Some(note) = joiner.version_note() {
+        eprintln!("jampot: {note}");
+    }
     if let Some(fallback) = joiner.fallback() {
         println!("jampot: {fallback}");
     }
@@ -542,10 +545,12 @@ async fn join(
             None
         }
     };
+    let incompatible = joiner.incompatibility();
     joiner.stop().await;
-    match refused {
-        Some(reason) => Err(Refused(reason).into()),
-        None => Ok(()),
+    match (refused, incompatible) {
+        (Some(_), Some(incompatible)) => Err(incompatible.into()),
+        (Some(reason), None) => Err(Refused(reason).into()),
+        (None, _) => Ok(()),
     }
 }
 

@@ -1560,6 +1560,7 @@ dependencies = [
  "proptest",
  "pulldown-cmark",
  "rootcause",
+ "semver",
  "serde",
  "serde_json",
  "sha1_smol",

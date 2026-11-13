@@ -32,7 +32,7 @@ export type JoinerName = string;
 
 export type StatusLine = string;
 
-export type RefusedReason = "wrong_secret" | "bad_hello" | "full";
+export type RefusedReason = "wrong_secret" | "bad_hello" | "full" | "incompatible";
 
 export type Switch = "on" | "off";
 

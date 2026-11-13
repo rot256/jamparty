@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::watch;
 
 use crate::{
-    core::settings::Switch,
+    core::{settings::Switch, version::Incompatible},
     describe,
     join::{
         api::{Change, Hello, Outcome, RequestNumber, Submission, ToPage},
@@ -39,6 +39,8 @@ pub(crate) struct Session {
     control: Mutex<Option<Arc<Control>>>,
     /// The state after each commit, for the local server and tests.
     snapshot: watch::Sender<Snapshot>,
+    /// Set when the share turned out to speak another protocol.
+    incompatible: Mutex<Option<Incompatible>>,
     uplink: Uplink,
 }
 
@@ -60,6 +62,7 @@ impl Session {
                 preferences,
             }),
             control: Mutex::new(None),
+            incompatible: Mutex::new(None),
             uplink: Uplink::default(),
         }
     }
@@ -267,6 +270,22 @@ impl Session {
         *self.control.lock().unwrap_or_else(PoisonError::into_inner) = Some(control);
         self.commit(|inner| inner.state.admitted(you, undelivered), None);
         self.uplink.changed();
+    }
+
+    /// The share speaks another protocol: the joiner gives up.
+    pub(crate) fn incompatible(&self, incompatible: Incompatible) {
+        *self
+            .incompatible
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(incompatible);
+    }
+
+    /// Why the share's protocol is not this joiner's, if it is not.
+    pub(crate) fn incompatibility(&self) -> Option<Incompatible> {
+        self.incompatible
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The connection is gone (or never came up).
