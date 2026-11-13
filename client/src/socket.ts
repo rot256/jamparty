@@ -74,8 +74,7 @@ export class PageSocket {
     const checked = await probe();
     this.probing = false;
     if (checked === null) {
-      this.reconnect(this.wait);
-      this.wait = Math.min(this.wait * 2, RECONNECT_MAX_MS);
+      this.backOff();
       return;
     }
     if (checked !== "") {
@@ -168,6 +167,11 @@ export class PageSocket {
   /** The socket closed or went silent: shown at once, opened again soon. */
   private lost(): void {
     this.drop();
+    this.backOff();
+  }
+
+  /** Tries again after the current wait, and doubles it for the next. */
+  private backOff(): void {
     this.reconnect(this.wait);
     this.wait = Math.min(this.wait * 2, RECONNECT_MAX_MS);
   }

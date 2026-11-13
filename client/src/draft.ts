@@ -4,6 +4,7 @@
 // dialog closes.
 
 import { DRAFT_KEY } from "./config";
+import { isRecord } from "./json";
 
 /** What the dialog was opened on. */
 export type DraftKind = "element" | "page" | "answer";
@@ -23,10 +24,6 @@ export interface SavedDraft {
   unavailable: boolean;
   selectedText: string | null;
   comment: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function parseKind(value: unknown): DraftKind | null {

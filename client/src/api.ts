@@ -6,10 +6,7 @@
 
 import { SHARE_VERSION, STATUS_URL } from "./config";
 import { API_VERSION, type ToPage } from "./generated/api";
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+import { isRecord } from "./json";
 
 /** Why the joiner cannot serve this page, or null when it can. */
 export function incompatibility(api: unknown, version: unknown): string | null {
@@ -34,8 +31,8 @@ export async function probe(): Promise<string | null> {
     if (!response.ok) return null;
     const body: unknown = await response.json();
     return incompatibility(
-      isObject(body) ? body.api : undefined,
-      isObject(body) ? body.version : undefined,
+      isRecord(body) ? body.api : undefined,
+      isRecord(body) ? body.version : undefined,
     ) ?? "";
   } catch {
     return null;
@@ -47,7 +44,7 @@ export function parseMessage(data: unknown): ToPage | null {
   if (typeof data !== "string") return null;
   try {
     const message: unknown = JSON.parse(data);
-    return isObject(message) && typeof message.type === "string" ? (message as ToPage) : null;
+    return isRecord(message) && typeof message.type === "string" ? (message as ToPage) : null;
   } catch {
     return null;
   }

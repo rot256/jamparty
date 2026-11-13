@@ -4,6 +4,7 @@
 
 import { MAX_OUTBOX, OUTBOX_KEY } from "./config";
 import type { Outcome, Submission } from "./generated/api";
+import { isRecord } from "./json";
 
 /** A comment as the page hands it to the joiner, without its ref. */
 export type Draft = Omit<Submission, "ref" | "n">;
@@ -21,10 +22,6 @@ export interface OutboxEntry {
   state: OutboxState;
   /** When it was written (ms since the epoch). */
   at: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function parseDraft(value: unknown): Draft | null {

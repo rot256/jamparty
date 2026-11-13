@@ -858,10 +858,12 @@ var CursorLayer = class {
   }
 };
 
-// client/src/draft.ts
+// client/src/json.ts
 function isRecord(value) {
   return typeof value === "object" && value !== null;
 }
+
+// client/src/draft.ts
 function parseKind(value) {
   switch (value) {
     case "element":
@@ -1457,11 +1459,8 @@ var NamePrompt = class {
 };
 
 // client/src/outbox.ts
-function isRecord2(value) {
-  return typeof value === "object" && value !== null;
-}
 function parseDraft(value) {
-  if (!isRecord2(value)) return null;
+  if (!isRecord(value)) return null;
   const { page, selector, selectedText, comment } = value;
   if (typeof page !== "string" || typeof selector !== "string" || typeof comment !== "string") {
     return null;
@@ -1483,7 +1482,7 @@ function parseState(value) {
   }
 }
 function parseEntry(value) {
-  if (!isRecord2(value)) return null;
+  if (!isRecord(value)) return null;
   const draft = parseDraft(value.draft);
   if (draft === null) return null;
   return {
@@ -1589,9 +1588,6 @@ var Outbox = class {
 };
 
 // client/src/api.ts
-function isObject(value) {
-  return typeof value === "object" && value !== null;
-}
 function incompatibility(api, version) {
   if (api === API_VERSION) return null;
   const share = SHARE_VERSION ?? "unknown";
@@ -1604,8 +1600,8 @@ async function probe() {
     if (!response.ok) return null;
     const body = await response.json();
     return incompatibility(
-      isObject(body) ? body.api : void 0,
-      isObject(body) ? body.version : void 0
+      isRecord(body) ? body.api : void 0,
+      isRecord(body) ? body.version : void 0
     ) ?? "";
   } catch {
     return null;
@@ -1615,7 +1611,7 @@ function parseMessage(data) {
   if (typeof data !== "string") return null;
   try {
     const message = JSON.parse(data);
-    return isObject(message) && typeof message.type === "string" ? message : null;
+    return isRecord(message) && typeof message.type === "string" ? message : null;
   } catch {
     return null;
   }
@@ -1662,8 +1658,7 @@ var PageSocket = class {
     const checked = await probe();
     this.probing = false;
     if (checked === null) {
-      this.reconnect(this.wait);
-      this.wait = Math.min(this.wait * 2, RECONNECT_MAX_MS);
+      this.backOff();
       return;
     }
     if (checked !== "") {
@@ -1750,6 +1745,10 @@ var PageSocket = class {
   /** The socket closed or went silent: shown at once, opened again soon. */
   lost() {
     this.drop();
+    this.backOff();
+  }
+  /** Tries again after the current wait, and doubles it for the next. */
+  backOff() {
     this.reconnect(this.wait);
     this.wait = Math.min(this.wait * 2, RECONNECT_MAX_MS);
   }
