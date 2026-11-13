@@ -24,6 +24,16 @@ uv run pytest
 cargo build --release
 ```
 
+After changing what the proxy sends or injects, the joiner, the request
+rules, the protocol or the browser client (the paths
+`.github/workflows/frameworks.yml` watches), also run the framework tests:
+real dev servers through jampot, in both browsers (Linux; Node.js 22.23 or
+later on PATH; they download Hugo and Zola):
+
+```sh
+uv run pytest -m frameworks
+```
+
 Do not add production integration hooks. Preserve the version-1
 newline-delimited JSON schema unless a breaking format change is explicitly
 requested.

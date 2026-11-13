@@ -62,11 +62,19 @@ jobs:
       contents: read # the checks only read the repository
     uses: $/.github/workflows/ci.yml
 
+  frameworks:
+    name: Framework tests
+    needs: version
+    permissions:
+      contents: read # the tests only read the repository
+    uses: $/.github/workflows/frameworks.yml
+
   build:
     name: Build ${{ matrix.name }}
     needs:
       - version
       - checks
+      - frameworks
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -137,6 +145,7 @@ jobs:
     needs:
       - version
       - checks
+      - frameworks
       - build
     runs-on: ubuntu-24.04
     # The registry token is an environment secret, so only this job, under

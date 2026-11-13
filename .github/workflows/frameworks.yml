@@ -1,0 +1,91 @@
+name: Frameworks
+
+# Real dev servers (Hugo, Vite, Next.js, Astro, SvelteKit,
+# webpack-dev-server, Eleventy, Zola, MkDocs, Django) through jampot
+# proxy and jampot join, in Chromium and Firefox (tests/test_frameworks.py).
+# Slow, so not on every push: nightly, on pull requests that touch what it
+# guards, by hand, and before a release (release.yml calls it).
+on:
+  pull_request:
+    paths:
+      # Startup and the request path: the CLI, the endpoint, the share's
+      # connections and responses, the joiner, the rules and the protocol.
+      - src/main.rs
+      - src/lib.rs
+      - src/adapters/endpoint.rs
+      - src/share/mod.rs
+      - src/share/connection.rs
+      - src/share/http.rs
+      - src/share/proxy.rs
+      - src/share/inject.rs
+      - src/share/body.rs
+      - src/join/**
+      - src/core/request.rs
+      - src/core/port.rs
+      - src/protocol/**
+      - client/**
+      - assets/client.js
+      - Cargo.toml
+      - Cargo.lock
+      # The tests, their harness, fixtures and Python dependencies.
+      - tests/test_frameworks.py
+      - tests/support.py
+      - tests/conftest.py
+      - tests/fixtures/frameworks/**
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/frameworks.yml
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  # Not github.workflow: when release.yml calls this, that is "Release",
+  # and a group matching the caller's would wait on the caller forever.
+  group: frameworks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  frameworks:
+    name: Framework tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the repository
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The npm fixtures install from their lockfiles (npm ci) in the tests.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.22.2
+          package-manager-cache: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+
+      # MkDocs and Django come from the frameworks dependency group.
+      - name: Install dependencies and browsers
+        run: |
+          uv sync --locked
+          uv run --locked playwright install --with-deps chromium firefox
+
+      # The tests build the binary themselves (cargo build), and download
+      # Hugo and Zola, checked against pinned SHA-256 digests.
+      - name: Run framework tests
+        env:
+          JAMPOT_TOOLS_DIR: ${{ runner.temp }}/tools
+        run: uv run --locked pytest -m frameworks
