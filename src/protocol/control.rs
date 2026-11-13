@@ -23,7 +23,7 @@ use crate::{
         settings::Switch,
         text::{check_line, check_text},
         token::PartySecret,
-        version::{JampotVersion, Version1},
+        version::{JampotVersion, ProtocolVersion, Version1},
     },
     protocol::{
         comment::{Author, CommentPage, CommentSelector, Draft},
@@ -232,7 +232,7 @@ pub(crate) enum RefusedReason {
 /// carry other things this one cannot parse).
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct Greeting {
-    pub(crate) version: u32,
+    pub(crate) version: ProtocolVersion,
     #[serde(default)]
     message: GreetingMessage,
 }

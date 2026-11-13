@@ -337,7 +337,7 @@ impl VersionLog {
         );
         let protocol = greeting.version;
         if self.said.swap(true, Ordering::Relaxed) {
-            tracing::debug!(%version, protocol, "joiner refused: another protocol");
+            tracing::debug!(%version, %protocol, "joiner refused: another protocol");
         } else {
             tracing::warn!(
                 "a joiner runs {version} (protocol {protocol}); this share runs jampot {} (protocol {PROTOCOL}) and refused it",

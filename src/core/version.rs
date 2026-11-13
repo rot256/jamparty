@@ -32,8 +32,19 @@ impl From<Version1> for u32 {
     }
 }
 
+/// A protocol version as a first line says it, whatever it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct ProtocolVersion(u32);
+
+impl fmt::Display for ProtocolVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// The protocol version this jampot speaks.
-pub(crate) const PROTOCOL: u32 = 1;
+pub(crate) const PROTOCOL: ProtocolVersion = ProtocolVersion(1);
 
 pub(crate) const MAX_JAMPOT_VERSION: usize = 64;
 
@@ -88,7 +99,7 @@ pub(crate) struct Incompatible {
     /// The share's jampot, if it said.
     pub(crate) share: Option<JampotVersion>,
     /// The share's protocol version.
-    pub(crate) protocol: u32,
+    pub(crate) protocol: ProtocolVersion,
 }
 
 impl fmt::Display for Incompatible {
@@ -164,7 +175,9 @@ impl fmt::Display for JampotVersion {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::version::{Incompatible, JampotVersion, Version1, mismatch_note};
+    use crate::core::version::{
+        Incompatible, JampotVersion, ProtocolVersion, Version1, mismatch_note,
+    };
 
     fn version(text: &str) -> JampotVersion {
         JampotVersion::try_from(text.to_owned()).unwrap()
@@ -180,7 +193,7 @@ mod tests {
         // The joiner is behind: install the share's version.
         let behind = Incompatible {
             share: Some(version(AHEAD)),
-            protocol: 2,
+            protocol: ProtocolVersion(2),
         };
         assert_eq!(
             behind.to_string(),
@@ -192,7 +205,7 @@ mod tests {
         // Ahead: the share is to update.
         let ahead = Incompatible {
             share: Some(version(BEHIND)),
-            protocol: 0,
+            protocol: ProtocolVersion(0),
         };
         assert_eq!(
             ahead.to_string(),
@@ -204,7 +217,7 @@ mod tests {
         // Unknown, or not semver: no advice either way.
         let unknown = Incompatible {
             share: None,
-            protocol: 2,
+            protocol: ProtocolVersion(2),
         };
         assert_eq!(
             unknown.to_string(),
@@ -214,7 +227,7 @@ mod tests {
         );
         let odd = Incompatible {
             share: Some(version("nightly")),
-            protocol: 2,
+            protocol: ProtocolVersion(2),
         };
         assert!(odd.to_string().ends_with("(protocol 1)."), "{odd}");
     }
