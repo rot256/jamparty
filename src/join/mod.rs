@@ -30,10 +30,10 @@ use crate::{
         endpoint::{Accept, NetConfig, bind},
         settings,
     },
-    core::{name::JoinerName, request::LocalOrigin, token::PartyToken},
+    core::{name::JoinerName, request::LocalOrigin, rng::SystemRng, token::PartyToken},
     join::{
         connection::Dial,
-        session::{Preferences, Session, View},
+        session::{Epoch, Preferences, Session, View},
     },
 };
 
@@ -121,6 +121,7 @@ impl Joiner {
         let session = Arc::new(Session::new(
             LocalOrigin::new(&token.share.sid(), port),
             preferences,
+            Epoch::generate(&SystemRng),
         ));
         let endpoint = bind(&net, key, Accept::Nothing).await?;
         let dial = Dial {

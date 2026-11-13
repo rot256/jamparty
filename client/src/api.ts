@@ -14,8 +14,8 @@ import {
 } from "./config";
 import {
   API_VERSION,
-  type Event,
-  type PageSettings,
+  type Stamped,
+  type Saved,
   type Pointer,
   type Queued,
   type SettingsChange,
@@ -25,7 +25,7 @@ import {
 } from "./generated/api";
 
 /** What `api/events` sends: the joiner's events and its keep-alive. */
-export type ServerEvent = Event | { type: "ping" };
+export type ServerEvent = Stamped | { type: "ping" };
 
 /** A failed submission; `unsent` when the comment may not have reached the share. */
 export class SubmitError extends Error {
@@ -112,7 +112,7 @@ async function post(url: URL, body: unknown): Promise<Response> {
 }
 
 /** Changes the joiner's settings; the settings as they are now, or why not. */
-export async function changeSettings(change: SettingsChange): Promise<PageSettings> {
+export async function changeSettings(change: SettingsChange): Promise<Saved> {
   let response: Response;
   try {
     response = await post(SETTINGS_URL, change);
@@ -121,7 +121,7 @@ export async function changeSettings(change: SettingsChange): Promise<PageSettin
   }
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) throw new Error(errorMessage(body, `request failed (${response.status})`));
-  return body as PageSettings;
+  return body as Saved;
 }
 
 /** Tells the joiner this tab is on `visit.url` now (null: it cannot say); false if it did not take it. */

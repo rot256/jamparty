@@ -22,7 +22,7 @@ use crate::{
     core::{ids::CommentId, settings::SettingsChange},
     describe,
     join::{
-        session::{CursorError, Event, Session, View},
+        session::{CursorError, Epoch, Event, PageSettings, Session, Stamped, View},
         tabs::{TabError, TabId},
     },
     protocol::{
@@ -77,6 +77,10 @@ struct Submission {
 struct Queued {
     id: CommentId,
     pending: usize,
+    /// The joiner process the revision counts in.
+    epoch: Epoch,
+    /// The joiner's view revision that has this comment (see `View::rev`).
+    rev: u64,
 }
 
 #[derive(Serialize)]
@@ -149,8 +153,18 @@ async fn submit(
         .comment(reference, draft)
         .await
         .map_err(|_| not_sent())?;
-    let queued =
-        |id: CommentId, pending| json_response(StatusCode::ACCEPTED, &Queued { id, pending });
+    let epoch = session.epoch();
+    let queued = |id: CommentId, (pending, rev): (usize, u64)| {
+        json_response(
+            StatusCode::ACCEPTED,
+            &Queued {
+                id,
+                pending,
+                epoch,
+                rev,
+            },
+        )
+    };
     Ok(match outcome {
         AckOutcome::Queued { id } => queued(id, session.queued(id)),
         AckOutcome::Delivered { id } => queued(id, session.already_delivered(id)),
@@ -184,13 +198,30 @@ pub(crate) async fn settings(request: Request<Incoming>, session: &Session) -> R
         Err(error) => Err(error),
     };
     match changed {
-        Ok(settings) => {
+        Ok((settings, rev)) => {
             // A new name or cursor switch is news for the share.
             session.report();
-            json_response(StatusCode::OK, &settings)
+            let saved = Saved {
+                epoch: session.epoch(),
+                rev,
+                settings,
+            };
+            json_response(StatusCode::OK, &saved)
         }
         Err(error) => error.into(),
     }
+}
+
+/// `api/settings`' answer: the settings now, stamped like the `settings`
+/// event it sent, so a page applies whichever is newer.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+struct Saved {
+    epoch: Epoch,
+    rev: u64,
+    #[serde(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    settings: PageSettings,
 }
 
 /// What a page posts to `api/page`: it moved (a single-page app's route,
@@ -327,8 +358,13 @@ pub(crate) fn events(session: &Arc<Session>, query: Option<&str>) -> Response<Ap
         None => None,
     };
     let receiver = session.subscribe();
-    let first = Event::Share {
-        connected: session.view().connected,
+    let view = session.view();
+    let first = Stamped {
+        epoch: view.epoch,
+        rev: view.rev,
+        event: Event::Share {
+            connected: view.connected,
+        },
     };
     let mut keep_alive = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     keep_alive.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -412,16 +448,16 @@ impl Drop for OpenTab {
 
 struct Stream {
     session: Arc<Session>,
-    first: Option<Event>,
-    receiver: Receiver<Event>,
+    first: Option<Stamped>,
+    receiver: Receiver<Stamped>,
     keep_alive: Interval,
     tab: Option<OpenTab>,
 }
 
 impl Stream {
     /// Cursors go only to tabs on their page; everything else to all.
-    fn wants(&self, event: &Event) -> bool {
-        match event {
+    fn wants(&self, stamped: &Stamped) -> bool {
+        match &stamped.event {
             Event::Cursor { url, .. } => self
                 .tab
                 .as_ref()
@@ -461,7 +497,7 @@ async fn next_frame(mut state: Stream) -> Option<(Result<Frame<Bytes>, Infallibl
     }
 }
 
-fn event_frame(event: &Event) -> Frame<Bytes> {
+fn event_frame(event: &Stamped) -> Frame<Bytes> {
     let data = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_owned());
     Frame::data(Bytes::from(format!("data: {data}\n\n")))
 }
@@ -483,8 +519,8 @@ mod bindings {
             settings::{KeyBinding, Keys, KeysFields, SettingsChange, Switch},
         },
         join::{
-            api::{API_VERSION, Limited429, Pointer, Queued, Status, Submission, Visit},
-            session::{Answer, Event, PageSettings, View},
+            api::{API_VERSION, Limited429, Pointer, Queued, Saved, Status, Submission, Visit},
+            session::{Answer, Epoch, Event, PageSettings, Stamped, View},
             tabs::TabId,
         },
         protocol::{
@@ -526,6 +562,9 @@ mod bindings {
             View::decl(&cfg),
             Status::decl(&cfg),
             Event::decl(&cfg),
+            Epoch::decl(&cfg),
+            Stamped::decl(&cfg),
+            Saved::decl(&cfg),
             Submission::decl(&cfg),
             Queued::decl(&cfg),
             Limited429::decl(&cfg),

@@ -3,7 +3,7 @@
 
 import { changeSettings } from "./api";
 import { PALETTE, RESERVED_KEYS } from "./config";
-import type { Keys, PageSettings, Person } from "./generated/api";
+import type { Keys, PageSettings, Person, Saved } from "./generated/api";
 import type { Ui } from "./ui";
 
 type Action = keyof Keys;
@@ -50,6 +50,8 @@ export class Panel {
   onOpen: () => void = () => undefined;
   /** Called with the settings whenever they change. */
   onSettings: (settings: PageSettings) => void = () => undefined;
+  /** Whether a saved answer is newer than what the page has applied. */
+  fresh: (saved: Saved) => boolean = () => true;
 
   constructor(private readonly ui: Ui) {
     ui.gear.addEventListener("click", () => { this.toggle(); });
@@ -118,7 +120,9 @@ export class Panel {
 
   private async change(change: Parameters<typeof changeSettings>[0]): Promise<void> {
     try {
-      this.show(await changeSettings(change));
+      const saved = await changeSettings(change);
+      // A `settings` event may have brought newer settings meanwhile.
+      if (this.fresh(saved)) this.show(saved);
     } catch (error) {
       this.message(error instanceof Error ? error.message : "could not save");
     }

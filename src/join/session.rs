@@ -23,6 +23,7 @@ use crate::{
         ids::{CommentId, EndpointKey},
         name::JoinerName,
         request::LocalOrigin,
+        rng::{Rng, random_array},
         settings::{Keys, Settings, SettingsChange, Switch},
     },
     join::{
@@ -67,10 +68,37 @@ pub(crate) struct View {
     /// Recent answers, oldest first.
     pub(crate) answers: Vec<Answer>,
     pub(crate) settings: PageSettings,
+    /// Counts the changes to this view and the events sent to pages (each
+    /// event carries the count after it): a page applies a status only if
+    /// it is no older than the newest event it has applied.
+    pub(crate) rev: u64,
+    /// This joiner process: revisions count within it (a joiner restarted
+    /// on the same port starts counting again).
+    pub(crate) epoch: Epoch,
+}
+
+/// A joiner process's random id, which revisions belong to (64 bits, as 16
+/// lowercase hex characters).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(into = "String")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
+pub(crate) struct Epoch(u64);
+
+impl Epoch {
+    #[must_use]
+    pub(crate) fn generate(rng: &dyn Rng) -> Self {
+        Self(u64::from_le_bytes(random_array(rng)))
+    }
+}
+
+impl From<Epoch> for String {
+    fn from(epoch: Epoch) -> Self {
+        format!("{:016x}", epoch.0)
+    }
 }
 
 impl View {
-    fn new(settings: PageSettings) -> Self {
+    fn new(settings: PageSettings, epoch: Epoch) -> Self {
         Self {
             connected: false,
             refused: None,
@@ -83,6 +111,8 @@ impl View {
             undelivered: Vec::new(),
             answers: Vec::new(),
             settings,
+            rev: 0,
+            epoch,
         }
     }
 }
@@ -190,6 +220,18 @@ pub(crate) enum Event {
         url: PagePath,
         position: Option<Position>,
     },
+}
+
+/// An event as pages get it: with the view's revision after it, in this
+/// joiner's epoch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct Stamped {
+    pub(crate) epoch: Epoch,
+    pub(crate) rev: u64,
+    #[serde(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub(crate) event: Event,
 }
 
 /// How long to wait for the share to acknowledge a comment.
@@ -363,7 +405,7 @@ pub(crate) struct Session {
     preferences: Mutex<Preferences>,
     view: watch::Sender<View>,
     control: Mutex<Option<Arc<Control>>>,
-    events: broadcast::Sender<Event>,
+    events: broadcast::Sender<Stamped>,
     /// Ids of this joiner's comments the share has not delivered yet.
     mine: Mutex<HashSet<CommentId>>,
     tabs: Mutex<Tabs>,
@@ -376,8 +418,8 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(origin: LocalOrigin, preferences: Preferences) -> Self {
-        let view = View::new(preferences.page());
+    pub(crate) fn new(origin: LocalOrigin, preferences: Preferences, epoch: Epoch) -> Self {
+        let view = View::new(preferences.page(), epoch);
         Self {
             origin,
             preferences: Mutex::new(preferences),
@@ -535,7 +577,11 @@ impl Session {
 
     /// Saves a change from the page and tells every page. A name chosen in
     /// the page replaces `--name` for the rest of the run.
-    pub(crate) fn change_settings(&self, change: SettingsChange) -> Result<PageSettings, Report> {
+    /// Returns the settings now and the revision of the event that says so.
+    pub(crate) fn change_settings(
+        &self,
+        change: SettingsChange,
+    ) -> Result<(PageSettings, u64), Report> {
         let page = {
             let mut preferences = self.preferences();
             let named = change.name.is_some();
@@ -548,10 +594,9 @@ impl Session {
             }
             preferences.page()
         };
-        self.view
-            .send_modify(|view| view.settings.clone_from(&page));
-        self.emit(Event::Settings(page.clone()));
-        Ok(page)
+        self.modify(|view| view.settings.clone_from(&page));
+        let rev = self.emit(Event::Settings(page.clone()));
+        Ok((page, rev))
     }
 
     pub(crate) fn view(&self) -> View {
@@ -562,13 +607,33 @@ impl Session {
         self.view.subscribe()
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Event> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Stamped> {
         self.events.subscribe()
     }
 
-    fn emit(&self, event: Event) {
+    /// Changes the view; returns its new revision.
+    fn modify(&self, change: impl FnOnce(&mut View)) -> u64 {
+        let mut rev = 0;
+        self.view.send_modify(|view| {
+            change(view);
+            view.rev = view.rev.wrapping_add(1);
+            rev = view.rev;
+        });
+        rev
+    }
+
+    /// Sends `event` to every page; returns its revision.
+    fn emit(&self, event: Event) -> u64 {
+        let rev = self.modify(|_| {});
+        let epoch = self.view.borrow().epoch;
         // No receivers means no open pages.
-        let _ = self.events.send(event);
+        let _ = self.events.send(Stamped { epoch, rev, event });
+        rev
+    }
+
+    /// This joiner process's epoch.
+    pub(crate) fn epoch(&self) -> Epoch {
+        self.view.borrow().epoch
     }
 
     pub(crate) fn control(&self) -> Option<Arc<Control>> {
@@ -602,7 +667,7 @@ impl Session {
                 held
             });
         });
-        self.view.send_modify(|view| {
+        self.modify(|view| {
             view.connected = true;
             view.you = Some(you);
         });
@@ -624,7 +689,7 @@ impl Session {
             control.abandon();
         }
         let was_connected = self.view.borrow().connected;
-        self.view.send_modify(|view| {
+        self.modify(|view| {
             view.connected = false;
             view.refused = refused;
             view.joiners.clear();
@@ -636,8 +701,8 @@ impl Session {
     }
 
     /// One of our comments, sent again, was delivered already as `id`;
-    /// returns how many are pending.
-    pub(crate) fn already_delivered(&self, id: CommentId) -> usize {
+    /// returns how many are pending, and the view's revision.
+    pub(crate) fn already_delivered(&self, id: CommentId) -> (usize, u64) {
         self.emit(Event::Delivered { ids: vec![id] });
         self.update_mine(|mine| {
             mine.remove(&id);
@@ -645,26 +710,27 @@ impl Session {
     }
 
     /// One of our comments was queued under `id`; returns how many are
-    /// pending.
-    pub(crate) fn queued(&self, id: CommentId) -> usize {
+    /// pending, and the view's revision that has it.
+    pub(crate) fn queued(&self, id: CommentId) -> (usize, u64) {
         self.update_mine(|mine| {
             mine.insert(id);
         })
     }
 
-    /// Changes the set of our undelivered comments; returns its size.
-    fn update_mine(&self, change: impl FnOnce(&mut HashSet<CommentId>)) -> usize {
+    /// Changes the set of our undelivered comments; returns its size and
+    /// the view's revision.
+    fn update_mine(&self, change: impl FnOnce(&mut HashSet<CommentId>)) -> (usize, u64) {
         let undelivered: Vec<CommentId> = {
             let mut mine = self.mine.lock().unwrap_or_else(PoisonError::into_inner);
             change(&mut mine);
             mine.iter().copied().collect()
         };
         let pending = undelivered.len();
-        self.view.send_modify(|view| {
+        let rev = self.modify(|view| {
             view.pending = pending;
             view.undelivered = undelivered;
         });
-        pending
+        (pending, rev)
     }
 
     /// Applies a message from the share after admission.
@@ -674,7 +740,7 @@ impl Session {
                 control.acknowledge(&reference, outcome);
             }
             ShareMessage::Reload { revision } => {
-                self.view.send_modify(|view| view.revision = Some(revision));
+                self.modify(|view| view.revision = Some(revision));
                 self.emit(Event::Reload { revision });
             }
             ShareMessage::Presence { joiners, here } => {
@@ -687,14 +753,14 @@ impl Session {
                 } else {
                     here
                 };
-                self.view.send_modify(|view| {
+                self.modify(|view| {
                     view.joiners.clone_from(&joiners);
                     view.here.clone_from(&here);
                 });
                 self.emit(Event::Presence { joiners, here });
             }
             ShareMessage::Status { line } => {
-                self.view.send_modify(|view| view.status.clone_from(&line));
+                self.modify(|view| view.status.clone_from(&line));
                 self.emit(Event::Status { line });
             }
             ShareMessage::Delivered { ids } => {
@@ -732,7 +798,7 @@ impl Session {
                     page,
                     to_you: to.is_some() && to == you,
                 };
-                self.view.send_modify(|view| {
+                self.modify(|view| {
                     if view.answers.len() == MAX_ANSWERS {
                         view.answers.remove(0);
                     }

@@ -2,13 +2,13 @@
 // until the joiner has a name saved (or one given with --name).
 
 import { changeSettings } from "./api";
-import type { PageSettings } from "./generated/api";
+import type { PageSettings, Saved } from "./generated/api";
 import type { Ui } from "./ui";
 
 export class NamePrompt {
   constructor(
     private readonly ui: Ui,
-    private readonly saved: (settings: PageSettings) => void,
+    private readonly saved: (settings: Saved) => void,
   ) {
     ui.nameForm.addEventListener("submit", (event) => {
       event.preventDefault();

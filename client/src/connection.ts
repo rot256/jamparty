@@ -35,6 +35,16 @@ export class Connection {
   private statusLine: string | null = null;
   private incompatible: string | null = null;
   private colour: Colour = "amber";
+  /**
+   * The joiner process the event stream comes from (its epoch), and the
+   * newest view revision in it this page has applied (from events, comments
+   * it queued, settings it saved): an `api/status` older than that would
+   * undo newer state, and is not applied. Revisions count per joiner
+   * process: one restarted on the same port starts again, so a new epoch
+   * starts afresh, and answers from another epoch are not applied.
+   */
+  private epoch: string | null = null;
+  private newest = 0;
   private watchdog: number | undefined;
 
   constructor(
@@ -106,6 +116,21 @@ export class Connection {
     this.handlers.state(view, recovered);
   }
 
+  /** The page applied the joiner's view at revision `rev` of `epoch` (a queued comment). */
+  saw(epoch: string, rev: number): void {
+    if (epoch === this.epoch) this.newest = Math.max(this.newest, rev);
+  }
+
+  /**
+   * Whether an answer stamped `epoch` and `rev` is still news (no newer
+   * state was applied since); if so it counts as applied.
+   */
+  fresh(epoch: string, rev: number): boolean {
+    if (epoch !== this.epoch || rev < this.newest) return false;
+    this.newest = rev;
+    return true;
+  }
+
   /** Reads `api/status` again (on every reconnection and after deliveries). */
   async refresh(): Promise<void> {
     const checked = await fetchStatus();
@@ -115,6 +140,10 @@ export class Connection {
       return;
     }
     const status = checked.status;
+    if (this.epoch === null) this.epoch = status.epoch;
+    // From another joiner process, or overtaken by something newer while
+    // it was read: newer state stands.
+    if (!this.fresh(status.epoch, status.rev)) return;
     this.shareConnected = status.connected;
     this.statusLine = status.status;
     this.handlers.status(status);
@@ -143,6 +172,17 @@ export class Connection {
       this.lastEvent = Date.now();
       const event = parseEvent(message.data);
       if (event === null) return;
+      if (event.type !== "ping") {
+        if (event.epoch !== this.epoch) {
+          // Another joiner process (restarted on this port): start afresh.
+          const known = this.epoch !== null;
+          this.epoch = event.epoch;
+          this.newest = event.rev;
+          if (known) void this.refresh();
+        } else {
+          this.newest = Math.max(this.newest, event.rev);
+        }
+      }
       switch (event.type) {
         case "share":
           this.shareConnected = event.connected;

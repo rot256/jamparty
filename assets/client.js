@@ -452,6 +452,16 @@ var Connection = class {
   statusLine = null;
   incompatible = null;
   colour = "amber";
+  /**
+   * The joiner process the event stream comes from (its epoch), and the
+   * newest view revision in it this page has applied (from events, comments
+   * it queued, settings it saved): an `api/status` older than that would
+   * undo newer state, and is not applied. Revisions count per joiner
+   * process: one restarted on the same port starts again, so a new epoch
+   * starts afresh, and answers from another epoch are not applied.
+   */
+  epoch = null;
+  newest = 0;
   watchdog;
   /** Checks the joiner's page API, then connects the event stream. */
   async start() {
@@ -509,6 +519,19 @@ var Connection = class {
     this.colour = view.colour;
     this.handlers.state(view, recovered);
   }
+  /** The page applied the joiner's view at revision `rev` of `epoch` (a queued comment). */
+  saw(epoch, rev) {
+    if (epoch === this.epoch) this.newest = Math.max(this.newest, rev);
+  }
+  /**
+   * Whether an answer stamped `epoch` and `rev` is still news (no newer
+   * state was applied since); if so it counts as applied.
+   */
+  fresh(epoch, rev) {
+    if (epoch !== this.epoch || rev < this.newest) return false;
+    this.newest = rev;
+    return true;
+  }
   /** Reads `api/status` again (on every reconnection and after deliveries). */
   async refresh() {
     const checked = await fetchStatus();
@@ -518,6 +541,8 @@ var Connection = class {
       return;
     }
     const status = checked.status;
+    if (this.epoch === null) this.epoch = status.epoch;
+    if (!this.fresh(status.epoch, status.rev)) return;
     this.shareConnected = status.connected;
     this.statusLine = status.status;
     this.handlers.status(status);
@@ -543,6 +568,16 @@ var Connection = class {
       this.lastEvent = Date.now();
       const event = parseEvent(message.data);
       if (event === null) return;
+      if (event.type !== "ping") {
+        if (event.epoch !== this.epoch) {
+          const known = this.epoch !== null;
+          this.epoch = event.epoch;
+          this.newest = event.rev;
+          if (known) void this.refresh();
+        } else {
+          this.newest = Math.max(this.newest, event.rev);
+        }
+      }
       switch (event.type) {
         case "share":
           this.shareConnected = event.connected;
@@ -691,6 +726,8 @@ var Panel = class {
   onOpen = () => void 0;
   /** Called with the settings whenever they change. */
   onSettings = () => void 0;
+  /** Whether a saved answer is newer than what the page has applied. */
+  fresh = () => true;
   chips() {
     return [["commentMode", this.ui.commentModeKey], ["showCursor", this.ui.showCursorKey]];
   }
@@ -732,7 +769,8 @@ var Panel = class {
   }
   async change(change) {
     try {
-      this.show(await changeSettings(change));
+      const saved = await changeSettings(change);
+      if (this.fresh(saved)) this.show(saved);
     } catch (error) {
       this.message(error instanceof Error ? error.message : "could not save");
     }
@@ -1255,7 +1293,7 @@ var CommentDialog = class {
     const at = Date.now();
     submit({ ref, ...draft }).then((queued) => {
       this.outbox.add({ draft, ref, id: queued.id, state: "queued", at });
-      this.outbox.onPending(queued.pending);
+      this.outbox.onQueued(queued);
       this.close();
       ui.showToast(`Comment queued · ${queued.pending} pending`);
     }).catch((error) => {
@@ -1483,8 +1521,8 @@ var Outbox = class {
   entries = load();
   /** Called after every change, to redraw. */
   onChange = () => void 0;
-  /** Called with the joiner's pending count after a comment was queued. */
-  onPending = () => void 0;
+  /** Called with the joiner's reply after a comment was queued. */
+  onQueued = () => void 0;
   add(entry) {
     this.entries.push(entry);
     this.changed();
@@ -1509,7 +1547,7 @@ var Outbox = class {
       const queued = await submit({ ref: entry.ref, ...entry.draft });
       entry.id = queued.id;
       entry.state = "queued";
-      this.onPending(queued.pending);
+      this.onQueued(queued);
     } catch {
       entry.state = "unsent";
     }
@@ -2385,12 +2423,14 @@ function install() {
   outbox.onChange = () => {
     list.render();
   };
-  outbox.onPending = (pending) => {
-    ui.setPending(pending);
+  outbox.onQueued = (queued) => {
+    ui.setPending(queued.pending);
+    connection.saw(queued.epoch, queued.rev);
   };
-  const prompt = new NamePrompt(ui, (settings) => {
-    panel.show(settings);
+  const prompt = new NamePrompt(ui, (saved) => {
+    if (connection.fresh(saved.epoch, saved.rev)) panel.show(saved);
   });
+  panel.fresh = (saved) => connection.fresh(saved.epoch, saved.rev);
   const applySettings = (settings) => {
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);

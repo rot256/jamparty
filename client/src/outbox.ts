@@ -4,7 +4,7 @@
 
 import { submit } from "./api";
 import { MAX_OUTBOX, OUTBOX_KEY } from "./config";
-import type { Submission } from "./generated/api";
+import type { Queued, Submission } from "./generated/api";
 
 /** A comment as the page hands it to the joiner, without its ref. */
 export type Draft = Omit<Submission, "ref">;
@@ -78,8 +78,8 @@ export class Outbox {
   readonly entries: OutboxEntry[] = load();
   /** Called after every change, to redraw. */
   onChange: () => void = () => undefined;
-  /** Called with the joiner's pending count after a comment was queued. */
-  onPending: (pending: number) => void = () => undefined;
+  /** Called with the joiner's reply after a comment was queued. */
+  onQueued: (queued: Queued) => void = () => undefined;
 
   add(entry: OutboxEntry): void {
     this.entries.push(entry);
@@ -108,7 +108,7 @@ export class Outbox {
       const queued = await submit({ ref: entry.ref, ...entry.draft });
       entry.id = queued.id;
       entry.state = "queued";
-      this.onPending(queued.pending);
+      this.onQueued(queued);
     } catch {
       entry.state = "unsent";
     }

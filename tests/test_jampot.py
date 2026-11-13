@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import (
+    APIResponse,
     Browser,
     Locator,
     Page,
@@ -1802,3 +1803,145 @@ def test_cursors_are_placed_on_the_element(tmp_path: Path, browser: Browser) -> 
         finally:
             alice_context.close()
             bob_context.close()
+
+
+def test_a_stale_status_does_not_undo_an_event(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        dot = overlay(page, "#connection")
+        expect(dot).to_have_attribute("data-state", "green")
+        # What api/status said while the share was there.
+        stale = request(joined, "/_jampot/api/status")[1]
+        held: list[Route] = []
+        page.route("**/_jampot/api/status", lambda route: held.append(route))
+        # A delivery makes the page read api/status again; that answer is
+        # held while the share goes away.
+        comment_on_intro(page, "Any comment.")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        _ = jampot(tmp_path, "recv")
+        waiting(page, "a status read", lambda: len(held) > 0)
+        shared.process.stop()
+        expect(dot).to_have_attribute("data-state", "grey")
+        for route in held:
+            route.fulfill(status=200, content_type="application/json", body=stale)
+        page.wait_for_timeout(500)
+        expect(dot).to_have_attribute("data-state", "grey")
+
+
+def test_a_stale_status_does_not_undo_newer_state(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        page.wait_for_timeout(300)
+        stale = request(joined, "/_jampot/api/status")[1]
+        held: list[Route] = []
+        page.route("**/_jampot/api/status", lambda route: held.append(route))
+        # A delivery makes the page read api/status; that read is held.
+        comment_on_intro(page, "First.")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        _ = jampot(tmp_path, "recv")
+        waiting(page, "a status read", lambda: len(held) > 0)
+        # Meanwhile: a new comment, and comment mode turned off.
+        comment_on_intro(page, "Still pending.")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        page.locator("h1").click()
+        page.keyboard.press("c")
+        expect(overlay(page, "#comment-mode")).to_have_attribute(
+            "aria-checked", "false"
+        )
+        # The old answer arrives last.
+        for route in held:
+            route.fulfill(status=200, content_type="application/json", body=stale)
+        page.wait_for_timeout(500)
+        page.unroute("**/_jampot/api/status")
+        actual = cast(
+            dict[str, object], json.loads(request(joined, "/_jampot/api/status")[1])
+        )
+        assert actual["pending"] == 1
+        rows = overlay(page, "#outbox-list li")
+        expect(rows.first).to_have_attribute("data-state", "queued")
+        expect(rows.nth(1)).to_have_attribute("data-state", "delivered")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        expect(overlay(page, "#comment-mode")).to_have_attribute(
+            "aria-checked", "false"
+        )
+
+
+def test_a_restarted_joiner_is_believed(tmp_path: Path, page: Page) -> None:
+    port = free_port()
+    with share(tmp_path, "serve", str(SITE)) as shared:
+        with join(tmp_path / "bob", shared, "bob", port=port) as bob:
+            _ = page.goto(bob.url)
+            dot = overlay(page, "#connection")
+            expect(dot).to_have_attribute("data-state", "green")
+            # Move the joiner's view revision well past where a new joiner
+            # starts.
+            _ = page.evaluate(
+                """async () => {
+                    for (let index = 0; index < 60; index++) {
+                        await fetch("/_jampot/api/settings", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ commentMode: "on" }),
+                        });
+                    }
+                }"""
+            )
+            comment_on_intro(page, "Before the restart.")
+            row = overlay(page, "#outbox-list li")
+            expect(row).to_have_attribute("data-state", "queued")
+        # Delivered while the joiner is away; a new joiner, same page.
+        _ = jampot(tmp_path, "recv")
+        with join(tmp_path / "bob", shared, "bob", port=port):
+            expect(dot).to_have_attribute("data-state", "green", timeout=RECONNECT)
+            expect(row).to_have_attribute("data-state", "delivered")
+            # Its settings are believed too.
+            page.locator("h1").click()
+            page.keyboard.press("c")
+            expect(overlay(page, "#comment-mode")).to_have_attribute(
+                "aria-checked", "false"
+            )
+
+
+def test_a_late_settings_answer_does_not_undo_newer_settings(
+    tmp_path: Path, page: Page
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        held: list[tuple[Route, APIResponse]] = []
+
+        def hold(route: Route) -> None:
+            held.append((route, route.fetch()))
+
+        page.route("**/_jampot/api/settings", hold)
+        page.locator("h1").click()
+        page.keyboard.press("c")
+        waiting(page, "the held answer", lambda: len(held) > 0)
+        comment_mode = overlay(page, "#comment-mode")
+        expect(comment_mode).to_have_attribute("aria-checked", "false")
+        # Turned on again elsewhere (another page of the same joiner).
+        _ = request(
+            joined,
+            "/_jampot/api/settings",
+            "POST",
+            {"Origin": f"http://{joined.host}", "Content-Type": "application/json"},
+            json.dumps({"commentMode": "on"}).encode(),
+        )
+        expect(comment_mode).to_have_attribute("aria-checked", "true")
+        for route, response in held:
+            route.fulfill(response=response)
+        page.wait_for_timeout(300)
+        expect(comment_mode).to_have_attribute("aria-checked", "true")
+        # And it behaves on: right-click comments.
+        page.locator("#intro").click(button="right")
+        expect(overlay(page, "textarea")).to_be_focused()

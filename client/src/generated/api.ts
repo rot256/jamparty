@@ -130,7 +130,18 @@ undelivered: Array<CommentId>,
 /**
  * Recent answers, oldest first.
  */
-answers: Array<Answer>, settings: PageSettings, };
+answers: Array<Answer>, settings: PageSettings, 
+/**
+ * Counts the changes to this view and the events sent to pages (each
+ * event carries the count after it): a page applies a status only if
+ * it is no older than the newest event it has applied.
+ */
+rev: number, 
+/**
+ * This joiner process: revisions count within it (a joiner restarted
+ * on the same port starts counting again).
+ */
+epoch: Epoch, };
 
 export type Status = { api: number, version: string, 
 /**
@@ -168,13 +179,46 @@ undelivered: Array<CommentId>,
 /**
  * Recent answers, oldest first.
  */
-answers: Array<Answer>, settings: PageSettings, };
+answers: Array<Answer>, settings: PageSettings, 
+/**
+ * Counts the changes to this view and the events sent to pages (each
+ * event carries the count after it): a page applies a status only if
+ * it is no older than the newest event it has applied.
+ */
+rev: number, 
+/**
+ * This joiner process: revisions count within it (a joiner restarted
+ * on the same port starts counting again).
+ */
+epoch: Epoch, };
 
 export type Event = { "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, };
 
+export type Epoch = string;
+
+export type Stamped = { epoch: Epoch, rev: number, } & ({ "type": "share", connected: boolean, } | { "type": "reload", revision: number, } | { "type": "presence", joiners: Array<Author>, here: Array<Person>, } | { "type": "status", line: StatusLine | null, } | { "type": "delivered", ids: Array<CommentId>, } | { "type": "answer" } & Answer | { "type": "settings" } & PageSettings | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, });
+
+export type Saved = { epoch: Epoch, rev: number, 
+/**
+ * The name this joiner goes by now.
+ */
+name: JoinerName, 
+/**
+ * No name was chosen yet (none saved, no `--name`): the page asks.
+ */
+askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, };
+
 export type Submission = { ref: CommentRef, page: string, selector: string, selectedText: string | null, comment: string, };
 
-export type Queued = { id: CommentId, pending: number, };
+export type Queued = { id: CommentId, pending: number, 
+/**
+ * The joiner process the revision counts in.
+ */
+epoch: Epoch, 
+/**
+ * The joiner's view revision that has this comment (see `View::rev`).
+ */
+rev: number, };
 
 export type Limited429 = { error: string, retryAfterSecs: number, };
 

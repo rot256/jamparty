@@ -160,7 +160,7 @@ export class CommentDialog {
     submit({ ref, ...draft })
       .then((queued) => {
         this.outbox.add({ draft, ref, id: queued.id, state: "queued", at });
-        this.outbox.onPending(queued.pending);
+        this.outbox.onQueued(queued);
         this.close();
         ui.showToast(`Comment queued · ${queued.pending} pending`);
       })

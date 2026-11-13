@@ -36,9 +36,16 @@ function install(): void {
   list.onOpen = () => { panel.close(); };
   panel.onOpen = () => { list.close(); };
   outbox.onChange = () => { list.render(); };
-  outbox.onPending = (pending) => { ui.setPending(pending); };
+  outbox.onQueued = (queued) => {
+    ui.setPending(queued.pending);
+    // The joiner's views from before this comment are older than the page.
+    connection.saw(queued.epoch, queued.rev);
+  };
 
-  const prompt = new NamePrompt(ui, (settings) => { panel.show(settings); });
+  const prompt = new NamePrompt(ui, (saved) => {
+    if (connection.fresh(saved.epoch, saved.rev)) panel.show(saved);
+  });
+  panel.fresh = (saved) => connection.fresh(saved.epoch, saved.rev);
   const applySettings = (settings: PageSettings): void => {
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
