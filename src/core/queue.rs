@@ -21,7 +21,7 @@ use jiff::{SignedDuration, Timestamp};
 /// Maximum number of undelivered comments (waiting and in flight).
 pub(crate) const MAX_QUEUED: usize = 500;
 /// Backoff after the first failure; doubled per failure up to [`MAX_BACKOFF`].
-pub(crate) const FIRST_BACKOFF: SignedDuration = SignedDuration::from_secs(1);
+const FIRST_BACKOFF: SignedDuration = SignedDuration::from_secs(1);
 pub(crate) const MAX_BACKOFF: SignedDuration = SignedDuration::from_secs(60);
 
 /// What the target said about a batch.

@@ -23,7 +23,7 @@ use crate::core::{ids::Sid, port::Port};
 pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
 
 /// The joiner's own paths start with this.
-pub(crate) const API_PREFIX: &str = "/_jampot/api/";
+const API_PREFIX: &str = "/_jampot/api/";
 pub(crate) const STATUS_PATH: &str = "/_jampot/api/status";
 pub(crate) const SOCKET_PATH: &str = "/_jampot/api/socket";
 

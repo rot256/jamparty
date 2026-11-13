@@ -32,7 +32,7 @@ use crate::{
 };
 
 pub(crate) const MAX_STATUS_LINE: usize = 200;
-pub(crate) const MAX_ANSWER: usize = 10_000;
+const MAX_ANSWER: usize = 10_000;
 
 /// One control line.
 #[derive(Clone, Debug, Serialize, Deserialize)]

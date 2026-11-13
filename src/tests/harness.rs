@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// Every wait in these tests ends within this.
-pub(crate) const PATIENCE: Duration = Duration::from_secs(15);
+const PATIENCE: Duration = Duration::from_secs(15);
 
 pub(crate) const FIXTURE_HTML: &str =
     "<!doctype html><html><body><h1 id=\"title\">Fixture</h1></body></html>";
@@ -213,7 +213,7 @@ pub(crate) async fn try_joiner(
 }
 
 /// A settings file in a directory of its own, not created until saved.
-pub(crate) fn settings_path() -> PathBuf {
+fn settings_path() -> PathBuf {
     env::temp_dir()
         .join(format!("jampot-test-{}", uuid::Uuid::new_v4()))
         .join("settings.json")

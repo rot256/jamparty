@@ -62,7 +62,7 @@ impl From<PagePath> for String {
 }
 
 /// The colours people are shown in (avatars, cursors).
-pub(crate) const PALETTE_SIZE: u8 = 8;
+const PALETTE_SIZE: u8 = 8;
 
 /// A person's colour, an index into the page's palette; derived from their
 /// key, so it is the same in every page and every session.

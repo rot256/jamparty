@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::{join::api::ToPage, protocol::presence::PagePath};
 
 /// Pages one joiner takes at once; a socket past this is refused.
-pub(crate) const MAX_PAGES: usize = 64;
+const MAX_PAGES: usize = 64;
 /// Messages waiting for one page. A page that falls this far behind (a
 /// frozen tab) is dropped: it reconnects and starts from a new `hello`.
 pub(crate) const PAGE_QUEUE: usize = 256;

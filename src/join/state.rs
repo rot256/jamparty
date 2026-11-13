@@ -24,7 +24,7 @@ pub(crate) const MAX_ANSWERS: usize = 100;
 /// Delivered comments the share told of before this joiner heard they
 /// were queued, at most this many (an older share's delivery can overtake
 /// its own acknowledgement).
-pub(crate) const MAX_EARLY: usize = 100;
+const MAX_EARLY: usize = 100;
 
 /// The joiner's link to the share.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]

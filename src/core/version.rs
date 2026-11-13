@@ -46,7 +46,7 @@ impl fmt::Display for ProtocolVersion {
 /// The protocol version this jampot speaks.
 pub(crate) const PROTOCOL: ProtocolVersion = ProtocolVersion(1);
 
-pub(crate) const MAX_JAMPOT_VERSION: usize = 64;
+const MAX_JAMPOT_VERSION: usize = 64;
 
 /// A jampot release's version, as Cargo has it (`0.1.0`, `0.2.0-rc.1`): 1
 /// to 64 characters of `[0-9A-Za-z.+-]`.

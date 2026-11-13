@@ -55,7 +55,7 @@ impl KeyRef {
 }
 
 /// How `--to` names everyone.
-pub(crate) const EVERYONE: &str = "all";
+const EVERYONE: &str = "all";
 /// How `--to` marks a key.
 pub(crate) const KEY_PREFIX: &str = "key:";
 

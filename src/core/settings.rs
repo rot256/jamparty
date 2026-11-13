@@ -27,7 +27,7 @@ pub(crate) enum Corner {
     TopLeft,
 }
 
-pub(crate) const MAX_KEY: usize = 20;
+const MAX_KEY: usize = 20;
 /// Keys jampot uses itself: `/` opens a page comment, Escape cancels.
 pub(crate) const RESERVED_KEYS: [&str; 2] = ["/", "Escape"];
 

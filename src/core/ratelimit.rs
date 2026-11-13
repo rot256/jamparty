@@ -112,7 +112,7 @@ impl<K: Hash + Eq> RateLimiter<K> {
     /// Number of joiners currently tracked.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn tracked(&self) -> usize {
+    fn tracked(&self) -> usize {
         self.arrival.len()
     }
 }

@@ -26,7 +26,7 @@ use crate::{
 pub(crate) const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const RESERVED_PREFIX: &str = "/_jampot/";
 const CLIENT_PATH: &str = "/_jampot/client.js";
-pub(crate) const CLIENT_JS: &str = include_str!("../../assets/client.js");
+const CLIENT_JS: &str = include_str!("../../assets/client.js");
 
 /// What the share serves.
 #[derive(Clone)]
