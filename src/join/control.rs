@@ -36,7 +36,7 @@ pub(crate) struct Control {
     /// Whether the share takes presence (and cursor) messages.
     presence: Support,
     lines: mpsc::Sender<Envelope<JoinerMessage>>,
-    acks: Mutex<HashMap<CommentRef, oneshot::Sender<AckOutcome>>>,
+    acks: Mutex<Acks>,
 }
 
 impl Control {
@@ -49,11 +49,11 @@ impl Control {
             connection,
             presence,
             lines,
-            acks: Mutex::new(HashMap::new()),
+            acks: Mutex::new(Acks::default()),
         }
     }
 
-    fn acks(&self) -> MutexGuard<'_, HashMap<CommentRef, oneshot::Sender<AckOutcome>>> {
+    fn acks(&self) -> MutexGuard<'_, Acks> {
         self.acks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -66,11 +66,11 @@ impl Control {
         reference: CommentRef,
         draft: Draft,
     ) -> Result<AckOutcome, Report> {
-        let (ack, acked) = oneshot::channel();
-        self.acks().insert(reference.clone(), ack);
+        let (waiter, acked) = self.acks().wait(reference.clone());
         let _waiting = Waiting {
             control: self,
             reference: reference.clone(),
+            waiter,
         };
         let line = Envelope::from(JoinerMessage::Comment { reference, draft });
         self.lines
@@ -113,9 +113,7 @@ impl Control {
     }
 
     pub(crate) fn acknowledge(&self, reference: &CommentRef, outcome: AckOutcome) {
-        if let Some(ack) = self.acks().remove(reference) {
-            let _ = ack.send(outcome);
-        }
+        self.acks().acknowledge(reference, outcome);
     }
 
     /// Fails every comment still waiting for its acknowledgement.
@@ -131,15 +129,65 @@ impl Control {
     }
 }
 
+/// One wait for an acknowledgement, among those for the same ref.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WaiterId(u64);
+
+/// Who waits for which ref's acknowledgement. Several may wait for the
+/// same ref (two tabs sending the same comment again): the acknowledgement
+/// goes to each, and each gives up only its own wait.
+#[derive(Debug, Default)]
+struct Acks {
+    next: u64,
+    waiting: HashMap<CommentRef, Vec<(WaiterId, oneshot::Sender<AckOutcome>)>>,
+}
+
+impl Acks {
+    fn wait(&mut self, reference: CommentRef) -> (WaiterId, oneshot::Receiver<AckOutcome>) {
+        let id = WaiterId(self.next);
+        self.next = self.next.wrapping_add(1);
+        let (ack, acked) = oneshot::channel();
+        self.waiting.entry(reference).or_default().push((id, ack));
+        (id, acked)
+    }
+
+    /// Gives up wait `id` for `reference`, leaving any others.
+    fn forget(&mut self, reference: &CommentRef, id: WaiterId) {
+        if let Some(waiters) = self.waiting.get_mut(reference) {
+            waiters.retain(|(waiter, _)| *waiter != id);
+            if waiters.is_empty() {
+                self.waiting.remove(reference);
+            }
+        }
+    }
+
+    fn acknowledge(&mut self, reference: &CommentRef, outcome: AckOutcome) {
+        for (_, ack) in self.waiting.remove(reference).unwrap_or_default() {
+            let _ = ack.send(outcome);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.waiting.clear();
+    }
+
+    /// Waits in all.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.waiting.values().map(Vec::len).sum()
+    }
+}
+
 /// A comment waiting for its acknowledgement; forgotten when dropped.
 struct Waiting<'a> {
     control: &'a Control,
     reference: CommentRef,
+    waiter: WaiterId,
 }
 
 impl Drop for Waiting<'_> {
     fn drop(&mut self) {
-        self.control.acks().remove(&self.reference);
+        self.control.acks().forget(&self.reference, self.waiter);
     }
 }
 
@@ -149,5 +197,41 @@ async fn write_lines(mut writer: SendStream, mut queued: mpsc::Receiver<Envelope
             tracing::debug!(%error, "control stream write failed");
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        core::ids::CommentId,
+        join::control::Acks,
+        protocol::control::{AckOutcome, CommentRef},
+    };
+
+    #[test]
+    fn waits_for_the_same_ref_are_each_their_own() {
+        let mut acks = Acks::default();
+        let reference = CommentRef::try_from("same-ref".to_owned()).unwrap();
+        let (first, _first_acked) = acks.wait(reference.clone());
+        let (_, mut second_acked) = acks.wait(reference.clone());
+        // The first gives up (its tab went away): the second still waits.
+        acks.forget(&reference, first);
+        assert_eq!(acks.len(), 1);
+        let id: CommentId = "00000000-0000-4000-8000-000000000001".parse().unwrap();
+        let outcome = AckOutcome::Queued { id };
+        acks.acknowledge(&reference, outcome);
+        assert_eq!(second_acked.try_recv(), Ok(outcome));
+        assert_eq!(acks.len(), 0);
+    }
+
+    #[test]
+    fn every_wait_for_a_ref_hears_its_acknowledgement() {
+        let mut acks = Acks::default();
+        let reference = CommentRef::try_from("same-ref".to_owned()).unwrap();
+        let (_, mut first) = acks.wait(reference.clone());
+        let (_, mut second) = acks.wait(reference.clone());
+        acks.acknowledge(&reference, AckOutcome::QueueFull);
+        assert_eq!(first.try_recv(), Ok(AckOutcome::QueueFull));
+        assert_eq!(second.try_recv(), Ok(AckOutcome::QueueFull));
     }
 }
