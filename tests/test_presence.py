@@ -17,6 +17,7 @@ from support import (
     SITE,
     SPA,
     Joined,
+    cursor_on,
     cursors,
     eventually,
     hello,
@@ -58,12 +59,7 @@ def test_an_unrepresentable_url_is_nowhere(tmp_path: Path, browser: Browser) -> 
     ):
         overlay(alice_page, "#gear").click()
         expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
-        bob_page.locator("#title").click()
-        bob_page.keyboard.press("x")
-        expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
-            "aria-checked", "true"
-        )
-        time.sleep(0.3)
+        cursor_on(bob_page)
         bob_page.mouse.move(300, 250)
         expect(cursors(alice_page)).to_have_count(1)
 
@@ -83,13 +79,6 @@ def test_an_unrepresentable_url_is_nowhere(tmp_path: Path, browser: Browser) -> 
         time.sleep(0.3)
         bob_page.mouse.move(320, 270)
         expect(cursors(alice_page)).to_have_count(1)
-
-
-def cursor_on(page: Page) -> None:
-    page.locator("#title").click()
-    page.keyboard.press("x")
-    expect(overlay(page, "#show-cursor")).to_have_attribute("aria-checked", "true")
-    page.wait_for_timeout(300)
 
 
 def bob_is_at(bob: Joined, url: str) -> Callable[[], bool]:
@@ -226,11 +215,7 @@ def test_cursors_follow_pointers_on_the_same_page(
         assert sent(bob_page, "cursor") == []
 
         # Bob turns his on: alice sees it, named, following his pointer.
-        bob_page.keyboard.press("x")
-        expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
-            "aria-checked", "true"
-        )
-        time.sleep(0.3)
+        cursor_on(bob_page)
         bob_page.mouse.move(300, 250)
         expect(cursors(alice_page)).to_have_count(1)
         expect(cursors(alice_page).locator(".tag")).to_have_text("bob")
@@ -371,13 +356,6 @@ def test_presence_in_every_page(tmp_path: Path, browser: Browser) -> None:
             expect(overlay(page, '.avatar[title="carol"]')).to_have_count(0)
 
 
-def show_cursor_on(page: Page) -> None:
-    page.locator("h1").click()
-    page.keyboard.press("x")
-    expect(overlay(page, "#show-cursor")).to_have_attribute("aria-checked", "true")
-    time.sleep(0.3)
-
-
 def test_cursor_pages_follow_history_and_leaving(
     tmp_path: Path, browser: Browser
 ) -> None:
@@ -389,7 +367,7 @@ def test_cursor_pages_follow_history_and_leaving(
     ):
         overlay(alice_page, "#gear").click()
         expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
-        show_cursor_on(bob_page)
+        cursor_on(bob_page)
 
         def seen_again(x: int) -> None:
             bob_page.mouse.move(x, 250)
@@ -447,7 +425,7 @@ def test_cursors_are_placed_on_the_element(tmp_path: Path, browser: Browser) -> 
             _ = bob_page.goto(bob.url)
             overlay(alice_page, "#gear").click()
             expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
-            show_cursor_on(bob_page)
+            cursor_on(bob_page)
 
             def point(page: Page, x: float, y: float) -> tuple[float, float]:
                 box = page.locator("#intro").bounding_box()

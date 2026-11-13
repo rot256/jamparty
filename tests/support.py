@@ -1,5 +1,6 @@
 """What the browser tests share: running `jampot` processes, joining a
-share and talking to the joiner's local server."""
+share, talking to the joiner's local server, the fixture sites and dev
+servers, the overlay and pages."""
 
 import base64
 import hashlib
@@ -29,6 +30,9 @@ TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
 BINARY = TARGET_DIR / "debug/jampot"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 TIMEOUT = 20.0
+SITE = ROOT / "tests/fixtures/site"
+SPA = ROOT / "tests/fixtures/spa"
+FIXTURE_HTML = (SITE / "index.html").read_bytes()
 
 
 class Process:
@@ -208,15 +212,13 @@ def request(
 
 
 def wait_connected(joined: Joined) -> None:
-    deadline = time.monotonic() + TIMEOUT
-    while time.monotonic() < deadline:
+    def connected() -> bool:
         try:
-            if cast(dict[str, object], hello(joined)["link"])["connected"]:
-                return
+            return cast(dict[str, object], hello(joined)["link"])["connected"] is True
         except OSError:
-            pass
-        time.sleep(0.05)
-    pytest.fail("the joiner was not admitted")
+            return False
+
+    eventually("the joiner to be admitted", connected)
 
 
 class PageSocket:
@@ -304,18 +306,6 @@ def hello(joined: Joined) -> dict[str, object]:
         return first
     finally:
         page.close()
-
-
-# What the browser tests share: the fixture sites and dev servers, the
-# overlay, comments and pages.
-
-SITE = ROOT / "tests/fixtures/site"
-
-
-SPA = ROOT / "tests/fixtures/spa"
-
-
-FIXTURE_HTML = (SITE / "index.html").read_bytes()
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -470,6 +460,15 @@ def eventually(what: str, check: Callable[[], bool]) -> None:
 
 def cursors(page: Page) -> Locator:
     return overlay(page, ".cursor")
+
+
+def cursor_on(page: Page) -> None:
+    """Turns on "Show my cursor" by its key, and waits a little: the others
+    hear it is on (presence goes out every 100 ms) before it moves."""
+    page.locator("h1").click()
+    page.keyboard.press("x")
+    expect(overlay(page, "#show-cursor")).to_have_attribute("aria-checked", "true")
+    page.wait_for_timeout(300)
 
 
 def waiting(page: Page, what: str, check: Callable[[], bool]) -> None:

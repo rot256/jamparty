@@ -18,6 +18,7 @@ from support import (
     PageSocket,
     SocketTap,
     comment_on_intro,
+    cursor_on,
     cursors,
     jampot,
     join,
@@ -75,12 +76,7 @@ def test_a_joiner_that_drops_comes_back(tmp_path: Path, browser: Browser) -> Non
                 for page in (alice_page, carol_page):
                     overlay(page, "#gear").click()
                     expect(overlay(page, "#here-count")).to_have_text("3 here")
-                bob_page.locator("h1").click()
-                bob_page.keyboard.press("x")
-                expect(overlay(bob_page, "#show-cursor")).to_have_attribute(
-                    "aria-checked", "true"
-                )
-                time.sleep(0.3)
+                cursor_on(bob_page)
                 bob_page.mouse.move(400, 300)
                 expect(cursors(alice_page)).to_have_count(1)
 
