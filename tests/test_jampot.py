@@ -1603,3 +1603,202 @@ def test_reconnecting_after_a_client_side_move(
                 expect(cursors(alice_page)).to_have_count(0)
         finally:
             bob_context.close()
+
+
+# Further cases of docs/ui.md.
+
+
+def test_keys_rebinding_and_text_fields(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = page.evaluate(
+            """() => {
+                const area = document.createElement("textarea");
+                area.id = "area";
+                const editable = document.createElement("div");
+                editable.id = "editable";
+                editable.contentEditable = "true";
+                editable.textContent = "edit:";
+                document.querySelector("main").append(area, editable);
+            }"""
+        )
+        comment_mode = switch(page, "comment-mode")
+        show_cursor = switch(page, "show-cursor")
+        for field in ("#area", "#editable"):
+            page.locator(field).click()
+            page.keyboard.type("cx")
+            expect(comment_mode).to_have_attribute("aria-checked", "true")
+            expect(show_cursor).to_have_attribute("aria-checked", "false")
+        expect(page.locator("#area")).to_have_value("cx")
+        expect(page.locator("#editable")).to_contain_text("cx")
+
+        # The cursor's key rebinds too.
+        page.locator("h1").click()
+        overlay(page, "#gear").click()
+        chip = overlay(page, "#show-cursor-key")
+        chip.click()
+        page.keyboard.press("y")
+        expect(chip).to_have_text("Y")
+        page.keyboard.press("x")
+        expect(show_cursor).to_have_attribute("aria-checked", "false")
+        page.keyboard.press("y")
+        expect(show_cursor).to_have_attribute("aria-checked", "true")
+
+
+def test_list_times_and_dialog_titles(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        page.clock.install()
+        _ = page.goto(joined.url)
+        label = overlay(page, "#dialog-label")
+        page.locator("#intro").click(button="right")
+        expect(label).to_have_text("Comment:")
+        textarea = overlay(page, "textarea")
+        textarea.fill("On the paragraph.")
+        textarea.press("Enter")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        page.locator("h1").click()
+        page.keyboard.press("/")
+        expect(label).to_have_text("Comment:")
+        textarea.press("Escape")
+
+        # Relative times move on.
+        overlay(page, "#pill").click()
+        where = overlay(page, "#outbox-list li .where")
+        expect(where).to_have_text("#intro · just now")
+        page.clock.fast_forward(61_000)
+        expect(where).to_have_text("#intro · 1 min ago")
+        overlay(page, "#collapse").click()
+
+        # A comment on an answer.
+        _ = jampot(tmp_path, "send", "An answer.")
+        answer = overlay(page, ".agent-message")
+        expect(answer).to_contain_text("An answer.")
+        answer.click(button="right")
+        expect(label).to_have_text("Comment on agent response:")
+
+
+def show_cursor_on(page: Page) -> None:
+    page.locator("h1").click()
+    page.keyboard.press("x")
+    expect(overlay(page, "#show-cursor")).to_have_attribute("aria-checked", "true")
+    time.sleep(0.3)
+
+
+def test_cursor_pages_follow_history_and_leaving(
+    tmp_path: Path, browser: Browser
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SPA)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        overlay(alice_page, "#gear").click()
+        expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
+        show_cursor_on(bob_page)
+
+        def seen_again(x: int) -> None:
+            bob_page.mouse.move(x, 250)
+            bob_page.mouse.move(x + 5, 255)
+            expect(cursors(alice_page)).to_have_count(1)
+
+        seen_again(300)
+        # replaceState moves bob away, and back.
+        _ = bob_page.evaluate("history.replaceState({}, '', '/elsewhere')")
+        expect(cursors(alice_page)).to_have_count(0)
+        _ = bob_page.evaluate("history.replaceState({}, '', '/')")
+        seen_again(310)
+        # A hash change is another page; the back button (popstate)
+        # returns.
+        _ = bob_page.evaluate("location.hash = 'section'")
+        expect(cursors(alice_page)).to_have_count(0)
+        bob_page.go_back()
+        seen_again(320)
+        _ = bob_page.evaluate("history.pushState({}, '', '/pushed')")
+        expect(cursors(alice_page)).to_have_count(0)
+        bob_page.go_back()
+        seen_again(330)
+
+        # Leaving the page (pointerleave, a hidden tab) takes it away.
+        _ = bob_page.evaluate(
+            "document.documentElement.dispatchEvent(new PointerEvent('pointerleave'))"
+        )
+        expect(cursors(alice_page)).to_have_count(0)
+        seen_again(340)
+        _ = bob_page.evaluate(
+            """() => {
+                Object.defineProperty(document, "visibilityState", {
+                    configurable: true, get: () => "hidden",
+                });
+                document.dispatchEvent(new Event("visibilitychange"));
+                delete document.visibilityState;
+            }"""
+        )
+        expect(cursors(alice_page)).to_have_count(0)
+        seen_again(350)
+
+
+def test_cursors_are_placed_on_the_element(tmp_path: Path, browser: Browser) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+    ):
+        alice_context = browser.new_context(viewport={"width": 900, "height": 720})
+        bob_context = browser.new_context(viewport={"width": 1280, "height": 720})
+        try:
+            alice_page = alice_context.new_page()
+            _ = alice_page.goto(alice.url)
+            bob_page = bob_context.new_page()
+            _ = bob_page.goto(bob.url)
+            overlay(alice_page, "#gear").click()
+            expect(overlay(alice_page, "#here-count")).to_have_text("2 here")
+            show_cursor_on(bob_page)
+
+            def point(page: Page, x: float, y: float) -> tuple[float, float]:
+                box = page.locator("#intro").bounding_box()
+                assert box is not None
+                return box["x"] + x * box["width"], box["y"] + y * box["height"]
+
+            # The paragraph sits elsewhere in each page (centred, another
+            # width): the cursor lands at the same spot of it.
+            bob_x, bob_y = point(bob_page, 0.25, 0.5)
+            bob_page.mouse.move(bob_x, bob_y)
+            expect(cursors(alice_page)).to_have_count(1)
+            alice_x, alice_y = point(alice_page, 0.25, 0.5)
+            assert abs(alice_x - bob_x) > 50
+            eventually("the same spot", lambda: near(alice_page, alice_x, alice_y))
+
+            # A jump glides: positions in between are drawn.
+            _ = alice_page.evaluate(
+                """() => {
+                        window.track = [];
+                        const cursor = document.querySelector("#jampot")
+                            .shadowRoot.querySelector(".cursor");
+                        const sample = () => {
+                            const x = parseFloat(
+                                cursor.style.transform.replace("translate(", ""));
+                            window.track.push(x);
+                            if (window.track.length < 120) requestAnimationFrame(sample);
+                        };
+                        requestAnimationFrame(sample);
+                    }"""
+            )
+            end_x, end_y = point(bob_page, 0.9, 0.5)
+            bob_page.mouse.move(end_x, end_y)
+            target_x, target_y = point(alice_page, 0.9, 0.5)
+            eventually("the end", lambda: near(alice_page, target_x, target_y))
+            alice_page.wait_for_timeout(300)
+            seen = cast(list[float], alice_page.evaluate("window.track"))
+            between = [x for x in seen if alice_x + 2 < x < target_x - 2]
+            assert between, seen
+        finally:
+            alice_context.close()
+            bob_context.close()
