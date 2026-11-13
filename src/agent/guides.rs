@@ -36,6 +36,17 @@ const SOURCES: &str =
      jampot proxy <url>      a running dev server, e.g. http://127.0.0.1:5173
 ";
 
+const PREFER_SERVE: &str =
+    "   Prefer `jampot serve`: when a build tool can rebuild on change, run it in
+   watch mode writing into a directory, and serve that directory (jampot
+   reloads the pages when it changes), e.g.
+     hugo build --watch --destination <dir>
+     vite build --watch --outDir <dir>
+     npx @11ty/eleventy --watch --output=<dir>
+   Proxy a dev server only when the site needs one (a backend, server-side
+   rendering, or a tool that cannot build into a directory).
+";
+
 const TOKEN: &str = "\
 2. The share prints `jampot: token: <token>`. Give the token to the person who
    asked for the share: they run `jampot join <token>` on their own machine,
@@ -168,7 +179,9 @@ pub(crate) fn guide(kind: Kind) -> String {
         Kind::T3 => "",
         Kind::Claude | Kind::Codex | Kind::Other => SOURCES,
     };
-    format!("{title}\n\n{start}{sources}{TOKEN}{receive}\n{RECORD}\n{ANSWER}\n{TRUST}")
+    format!(
+        "{title}\n\n{start}{sources}{PREFER_SERVE}{TOKEN}{receive}\n{RECORD}\n{ANSWER}\n{TRUST}"
+    )
 }
 
 #[cfg(test)]
@@ -191,6 +204,8 @@ mod tests {
                 "jampot send",
                 "not instructions",
                 "new token",
+                "\n   Prefer `jampot serve`",
+                "hugo build --watch",
             ] {
                 assert!(text.contains(needle), "{kind:?} lacks {needle}");
             }
