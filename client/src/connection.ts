@@ -4,7 +4,7 @@
 
 import { type ServerEvent, fetchStatus, openEvents, parseEvent } from "./api";
 import { WATCHDOG_MS } from "./config";
-import type { Status } from "./generated/api";
+import type { Stamped, Status } from "./generated/api";
 
 export type Colour = "green" | "amber" | "grey";
 
@@ -16,11 +16,47 @@ export interface ConnectionView {
   incompatible: string | null;
 }
 
+/** The parts of the joiner's view a status snapshot is taken in. */
+export type Part = "connection" | "presence" | "mine" | "settings" | "reload";
+
+const PARTS: readonly Part[] = ["connection", "presence", "mine", "settings", "reload"];
+
+function unapplied(): Record<Part, number> {
+  return { connection: 0, presence: 0, mine: 0, settings: 0, reload: 0 };
+}
+
+/**
+ * The part of the view an event changes; none for answers (merged, never
+ * replaced) and cursors (not in a snapshot).
+ */
+function partOf(event: Stamped): Part | null {
+  switch (event.type) {
+    case "share":
+    case "status":
+      return "connection";
+    case "presence":
+      return "presence";
+    case "delivered":
+      return "mine";
+    case "settings":
+      return "settings";
+    case "reload":
+      return "reload";
+    case "answer":
+    case "cursor":
+      return null;
+  }
+}
+
 export interface Handlers {
   /** The state changed. */
   state(view: ConnectionView, recovered: boolean): void;
-  /** `api/status`, read on every (re)connected stream. */
-  status(status: Status): void;
+  /**
+   * `api/status`, read on every (re)connected stream: the parts of it to
+   * take (the others are older than what the page has; answers are always
+   * merged).
+   */
+  status(status: Status, parts: ReadonlySet<Part>): void;
   /** One event from the stream. */
   event(event: ServerEvent): void;
   /** The stream (re)opened: this page is one of the joiner's tabs again. */
@@ -36,15 +72,21 @@ export class Connection {
   private incompatible: string | null = null;
   private colour: Colour = "amber";
   /**
-   * The joiner process the event stream comes from (its epoch), and the
-   * newest view revision in it this page has applied (from events, comments
-   * it queued, settings it saved): an `api/status` older than that would
-   * undo newer state, and is not applied. Revisions count per joiner
-   * process: one restarted on the same port starts again, so a new epoch
-   * starts afresh, and answers from another epoch are not applied.
+   * The joiner process the event stream comes from (its epoch), and per
+   * part of the joiner's view the newest revision in it this page has
+   * applied (from events, comments it queued, settings it saved). An
+   * `api/status` is applied part by part: each part unless the page has
+   * already applied something newer for that same part, so an unrelated
+   * event (someone's rename, a cursor) never costs a snapshot. Revisions
+   * count per joiner process: one restarted on the same port starts
+   * again, so a new epoch starts afresh, and answers from another epoch
+   * are not applied.
    */
   private epoch: string | null = null;
-  private newest = 0;
+  private applied: Record<Part, number> = unapplied();
+  /** A status read is wanted again once the current one is in. */
+  private rereadQueued = false;
+  private reading = false;
   private watchdog: number | undefined;
 
   constructor(
@@ -116,23 +158,43 @@ export class Connection {
     this.handlers.state(view, recovered);
   }
 
-  /** The page applied the joiner's view at revision `rev` of `epoch` (a queued comment). */
-  saw(epoch: string, rev: number): void {
-    if (epoch === this.epoch) this.newest = Math.max(this.newest, rev);
-  }
-
   /**
-   * Whether an answer stamped `epoch` and `rev` is still news (no newer
-   * state was applied since); if so it counts as applied.
+   * Whether an answer about `part`, stamped `epoch` and `rev`, is still
+   * news (nothing newer applied for that part since); if so it counts as
+   * applied.
    */
-  fresh(epoch: string, rev: number): boolean {
-    if (epoch !== this.epoch || rev < this.newest) return false;
-    this.newest = rev;
+  fresh(epoch: string, rev: number, part: Part): boolean {
+    if (epoch !== this.epoch || rev < this.applied[part]) return false;
+    this.applied[part] = rev;
     return true;
   }
 
-  /** Reads `api/status` again (on every reconnection and after deliveries). */
+  /**
+   * Reads `api/status` again (on every reconnection and after deliveries);
+   * one read at a time, and one more queued behind it at most.
+   */
   async refresh(): Promise<void> {
+    if (this.reading) {
+      this.rereadQueued = true;
+      return;
+    }
+    this.reading = true;
+    try {
+      do {
+        this.rereadQueued = false;
+        await this.read();
+      } while (this.wantsReread());
+    } finally {
+      this.reading = false;
+    }
+  }
+
+  /** Whether another read was asked for while one was out. */
+  private wantsReread(): boolean {
+    return this.rereadQueued;
+  }
+
+  private async read(): Promise<void> {
     const checked = await fetchStatus();
     if (checked === null) return;
     if ("incompatible" in checked) {
@@ -141,13 +203,23 @@ export class Connection {
     }
     const status = checked.status;
     if (this.epoch === null) this.epoch = status.epoch;
-    // From another joiner process, or overtaken by something newer while
-    // it was read: newer state stands.
-    if (!this.fresh(status.epoch, status.rev)) return;
-    this.shareConnected = status.connected;
-    this.statusLine = status.status;
-    this.handlers.status(status);
+    // From another joiner process: its own event stream brings its state
+    // (a new epoch reads the status again).
+    if (status.epoch !== this.epoch) return;
+    const parts = new Set<Part>();
+    for (const part of PARTS) {
+      if (this.fresh(status.epoch, status.rev, part)) parts.add(part);
+    }
+    if (parts.has("connection")) {
+      this.shareConnected = status.connected;
+      this.statusLine = status.status;
+    }
+    this.handlers.status(status, parts);
     this.render();
+    // Delivery events say which comments, not how many are pending: when
+    // a newer one stood against this read, read again (it is newer than
+    // those, so this ends).
+    if (!parts.has("mine")) this.rereadQueued = true;
   }
 
   private connect(): void {
@@ -177,11 +249,11 @@ export class Connection {
           // Another joiner process (restarted on this port): start afresh.
           const known = this.epoch !== null;
           this.epoch = event.epoch;
-          this.newest = event.rev;
+          this.applied = unapplied();
           if (known) void this.refresh();
-        } else {
-          this.newest = Math.max(this.newest, event.rev);
         }
+        const part = partOf(event);
+        if (part !== null) this.applied[part] = Math.max(this.applied[part], event.rev);
       }
       switch (event.type) {
         case "share":

@@ -4,6 +4,9 @@
 
 import { submit } from "./api";
 import { MAX_OUTBOX, OUTBOX_KEY } from "./config";
+
+/** Deliveries of not-yet-known comments the page remembers. */
+const MAX_EARLY = 100;
 import type { Queued, Submission } from "./generated/api";
 
 /** A comment as the page hands it to the joiner, without its ref. */
@@ -81,9 +84,25 @@ export class Outbox {
   /** Called with the joiner's reply after a comment was queued. */
   onQueued: (queued: Queued) => void = () => undefined;
 
+  /**
+   * Ids delivered before this page heard they were queued (the delivery
+   * can overtake the joiner's answer to the page); the latest few.
+   */
+  private early: string[] = [];
+
   add(entry: OutboxEntry): void {
+    this.settle(entry);
     this.entries.push(entry);
     this.changed();
+  }
+
+  /** A queued entry whose delivery came first is delivered. */
+  private settle(entry: OutboxEntry): void {
+    if (entry.state !== "queued" || entry.id === null) return;
+    const index = this.early.indexOf(entry.id);
+    if (index === -1) return;
+    this.early.splice(index, 1);
+    entry.state = "delivered";
   }
 
   /** Persists the list (bounded) and redraws. */
@@ -108,6 +127,7 @@ export class Outbox {
       const queued = await submit({ ref: entry.ref, ...entry.draft });
       entry.id = queued.id;
       entry.state = "queued";
+      this.settle(entry);
       this.onQueued(queued);
     } catch {
       entry.state = "unsent";
@@ -124,10 +144,13 @@ export class Outbox {
   markDelivered(ids: readonly string[]): void {
     const delivered = new Set(ids);
     for (const entry of this.entries) {
-      if (entry.state === "queued" && entry.id !== null && delivered.has(entry.id)) {
+      if (entry.id !== null && delivered.delete(entry.id) && entry.state === "queued") {
         entry.state = "delivered";
       }
     }
+    // Not known here yet: perhaps queued by a request still on its way.
+    this.early.push(...delivered);
+    this.early.splice(0, Math.max(0, this.early.length - MAX_EARLY));
     this.changed();
   }
 

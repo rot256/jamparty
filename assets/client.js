@@ -438,6 +438,28 @@ function parseEvent(data) {
 }
 
 // client/src/connection.ts
+var PARTS = ["connection", "presence", "mine", "settings", "reload"];
+function unapplied() {
+  return { connection: 0, presence: 0, mine: 0, settings: 0, reload: 0 };
+}
+function partOf(event) {
+  switch (event.type) {
+    case "share":
+    case "status":
+      return "connection";
+    case "presence":
+      return "presence";
+    case "delivered":
+      return "mine";
+    case "settings":
+      return "settings";
+    case "reload":
+      return "reload";
+    case "answer":
+    case "cursor":
+      return null;
+  }
+}
 var Connection = class {
   constructor(handlers, tab) {
     this.handlers = handlers;
@@ -453,15 +475,21 @@ var Connection = class {
   incompatible = null;
   colour = "amber";
   /**
-   * The joiner process the event stream comes from (its epoch), and the
-   * newest view revision in it this page has applied (from events, comments
-   * it queued, settings it saved): an `api/status` older than that would
-   * undo newer state, and is not applied. Revisions count per joiner
-   * process: one restarted on the same port starts again, so a new epoch
-   * starts afresh, and answers from another epoch are not applied.
+   * The joiner process the event stream comes from (its epoch), and per
+   * part of the joiner's view the newest revision in it this page has
+   * applied (from events, comments it queued, settings it saved). An
+   * `api/status` is applied part by part: each part unless the page has
+   * already applied something newer for that same part, so an unrelated
+   * event (someone's rename, a cursor) never costs a snapshot. Revisions
+   * count per joiner process: one restarted on the same port starts
+   * again, so a new epoch starts afresh, and answers from another epoch
+   * are not applied.
    */
   epoch = null;
-  newest = 0;
+  applied = unapplied();
+  /** A status read is wanted again once the current one is in. */
+  rereadQueued = false;
+  reading = false;
   watchdog;
   /** Checks the joiner's page API, then connects the event stream. */
   async start() {
@@ -519,21 +547,40 @@ var Connection = class {
     this.colour = view.colour;
     this.handlers.state(view, recovered);
   }
-  /** The page applied the joiner's view at revision `rev` of `epoch` (a queued comment). */
-  saw(epoch, rev) {
-    if (epoch === this.epoch) this.newest = Math.max(this.newest, rev);
-  }
   /**
-   * Whether an answer stamped `epoch` and `rev` is still news (no newer
-   * state was applied since); if so it counts as applied.
+   * Whether an answer about `part`, stamped `epoch` and `rev`, is still
+   * news (nothing newer applied for that part since); if so it counts as
+   * applied.
    */
-  fresh(epoch, rev) {
-    if (epoch !== this.epoch || rev < this.newest) return false;
-    this.newest = rev;
+  fresh(epoch, rev, part) {
+    if (epoch !== this.epoch || rev < this.applied[part]) return false;
+    this.applied[part] = rev;
     return true;
   }
-  /** Reads `api/status` again (on every reconnection and after deliveries). */
+  /**
+   * Reads `api/status` again (on every reconnection and after deliveries);
+   * one read at a time, and one more queued behind it at most.
+   */
   async refresh() {
+    if (this.reading) {
+      this.rereadQueued = true;
+      return;
+    }
+    this.reading = true;
+    try {
+      do {
+        this.rereadQueued = false;
+        await this.read();
+      } while (this.wantsReread());
+    } finally {
+      this.reading = false;
+    }
+  }
+  /** Whether another read was asked for while one was out. */
+  wantsReread() {
+    return this.rereadQueued;
+  }
+  async read() {
     const checked = await fetchStatus();
     if (checked === null) return;
     if ("incompatible" in checked) {
@@ -542,11 +589,18 @@ var Connection = class {
     }
     const status = checked.status;
     if (this.epoch === null) this.epoch = status.epoch;
-    if (!this.fresh(status.epoch, status.rev)) return;
-    this.shareConnected = status.connected;
-    this.statusLine = status.status;
-    this.handlers.status(status);
+    if (status.epoch !== this.epoch) return;
+    const parts = /* @__PURE__ */ new Set();
+    for (const part of PARTS) {
+      if (this.fresh(status.epoch, status.rev, part)) parts.add(part);
+    }
+    if (parts.has("connection")) {
+      this.shareConnected = status.connected;
+      this.statusLine = status.status;
+    }
+    this.handlers.status(status, parts);
     this.render();
+    if (!parts.has("mine")) this.rereadQueued = true;
   }
   connect() {
     if (this.incompatible !== null) return;
@@ -572,11 +626,11 @@ var Connection = class {
         if (event.epoch !== this.epoch) {
           const known = this.epoch !== null;
           this.epoch = event.epoch;
-          this.newest = event.rev;
+          this.applied = unapplied();
           if (known) void this.refresh();
-        } else {
-          this.newest = Math.max(this.newest, event.rev);
         }
+        const part = partOf(event);
+        if (part !== null) this.applied[part] = Math.max(this.applied[part], event.rev);
       }
       switch (event.type) {
         case "share":
@@ -1471,6 +1525,7 @@ var NamePrompt = class {
 };
 
 // client/src/outbox.ts
+var MAX_EARLY = 100;
 function isRecord(value) {
   return typeof value === "object" && value !== null;
 }
@@ -1523,9 +1578,23 @@ var Outbox = class {
   onChange = () => void 0;
   /** Called with the joiner's reply after a comment was queued. */
   onQueued = () => void 0;
+  /**
+   * Ids delivered before this page heard they were queued (the delivery
+   * can overtake the joiner's answer to the page); the latest few.
+   */
+  early = [];
   add(entry) {
+    this.settle(entry);
     this.entries.push(entry);
     this.changed();
+  }
+  /** A queued entry whose delivery came first is delivered. */
+  settle(entry) {
+    if (entry.state !== "queued" || entry.id === null) return;
+    const index = this.early.indexOf(entry.id);
+    if (index === -1) return;
+    this.early.splice(index, 1);
+    entry.state = "delivered";
   }
   /** Persists the list (bounded) and redraws. */
   changed() {
@@ -1547,6 +1616,7 @@ var Outbox = class {
       const queued = await submit({ ref: entry.ref, ...entry.draft });
       entry.id = queued.id;
       entry.state = "queued";
+      this.settle(entry);
       this.onQueued(queued);
     } catch {
       entry.state = "unsent";
@@ -1561,10 +1631,12 @@ var Outbox = class {
   markDelivered(ids) {
     const delivered = new Set(ids);
     for (const entry of this.entries) {
-      if (entry.state === "queued" && entry.id !== null && delivered.has(entry.id)) {
+      if (entry.id !== null && delivered.delete(entry.id) && entry.state === "queued") {
         entry.state = "delivered";
       }
     }
+    this.early.push(...delivered);
+    this.early.splice(0, Math.max(0, this.early.length - MAX_EARLY));
     this.changed();
   }
   /** Every queued comment not in `undelivered` was delivered meanwhile. */
@@ -2424,13 +2496,13 @@ function install() {
     list.render();
   };
   outbox.onQueued = (queued) => {
-    ui.setPending(queued.pending);
-    connection.saw(queued.epoch, queued.rev);
+    if (connection.fresh(queued.epoch, queued.rev, "mine")) ui.setPending(queued.pending);
+    else void connection.refresh();
   };
   const prompt = new NamePrompt(ui, (saved) => {
-    if (connection.fresh(saved.epoch, saved.rev)) panel.show(saved);
+    if (connection.fresh(saved.epoch, saved.rev, "settings")) panel.show(saved);
   });
-  panel.fresh = (saved) => connection.fresh(saved.epoch, saved.rev);
+  panel.fresh = (saved) => connection.fresh(saved.epoch, saved.rev, "settings");
   const applySettings = (settings) => {
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
@@ -2457,14 +2529,17 @@ function install() {
       if (!connection.streaming) sender.suspend();
       if (recovered) void outbox.resendAll();
     },
-    status(status) {
-      you = status.you?.key ?? null;
-      ui.setPending(status.pending);
-      outbox.markDeliveredExcept(status.undelivered);
+    status(status, parts) {
+      if (parts.has("connection")) you = status.you?.key ?? null;
+      if (parts.has("mine")) {
+        ui.setPending(status.pending);
+        outbox.markDeliveredExcept(status.undelivered);
+      }
       for (const answer of status.answers) answers.add(answer);
-      panel.show(status.settings);
-      showPeople(status.here);
-      onRevision(status.revision);
+      if (parts.has("settings")) panel.show(status.settings);
+      if (parts.has("presence")) showPeople(status.here);
+      else if (parts.has("connection")) showPeople(here);
+      if (parts.has("reload")) onRevision(status.revision);
     },
     event(event) {
       switch (event.type) {

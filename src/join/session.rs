@@ -2,7 +2,7 @@
 //! what the share last said, and the event stream for pages.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
@@ -388,6 +388,43 @@ pub(crate) async fn report_changes(session: Arc<Session>) {
     }
 }
 
+/// Delivered comments the share told of before this joiner heard they
+/// were queued, at most this many (the share's delivery can overtake its
+/// own acknowledgement).
+const MAX_EARLY: usize = 100;
+
+/// This joiner's comments the share holds undelivered.
+#[derive(Default)]
+struct Mine {
+    undelivered: HashSet<CommentId>,
+    /// Ids the share delivered before their acknowledgement arrived.
+    early: VecDeque<CommentId>,
+}
+
+impl Mine {
+    fn queued(&mut self, id: CommentId) {
+        match self.early.iter().position(|early| *early == id) {
+            Some(index) => {
+                self.early.remove(index);
+            }
+            None => {
+                self.undelivered.insert(id);
+            }
+        }
+    }
+
+    fn delivered(&mut self, ids: &[CommentId]) {
+        for id in ids {
+            if !self.undelivered.remove(id) {
+                if self.early.len() == MAX_EARLY {
+                    self.early.pop_front();
+                }
+                self.early.push_back(*id);
+            }
+        }
+    }
+}
+
 /// Why a cursor was not sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CursorError {
@@ -407,7 +444,7 @@ pub(crate) struct Session {
     control: Mutex<Option<Arc<Control>>>,
     events: broadcast::Sender<Stamped>,
     /// Ids of this joiner's comments the share has not delivered yet.
-    mine: Mutex<HashSet<CommentId>>,
+    mine: Mutex<Mine>,
     tabs: Mutex<Tabs>,
     /// What the share was last told on the current connection, and a cursor
     /// waiting for its page to be told first; locked while telling, so
@@ -426,7 +463,7 @@ impl Session {
             view: watch::channel(view).0,
             control: Mutex::new(None),
             events: broadcast::channel(EVENT_CAPACITY).0,
-            mine: Mutex::new(HashSet::new()),
+            mine: Mutex::new(Mine::default()),
             tabs: Mutex::new(Tabs::default()),
             told: AsyncMutex::new(Told::default()),
             changed: Notify::new(),
@@ -658,15 +695,19 @@ impl Session {
             *self.control.lock().unwrap_or_else(PoisonError::into_inner) = Some(control);
         }
         let mut delivered = Vec::new();
-        self.update_mine(|mine| {
-            mine.retain(|id| {
-                let held = undelivered.contains(id);
-                if !held {
-                    delivered.push(*id);
-                }
-                held
-            });
-        });
+        self.update_mine(
+            |Mine {
+                 undelivered: mine, ..
+             }| {
+                mine.retain(|id| {
+                    let held = undelivered.contains(id);
+                    if !held {
+                        delivered.push(*id);
+                    }
+                    held
+                });
+            },
+        );
         self.modify(|view| {
             view.connected = true;
             view.you = Some(you);
@@ -705,25 +746,28 @@ impl Session {
     pub(crate) fn already_delivered(&self, id: CommentId) -> (usize, u64) {
         self.emit(Event::Delivered { ids: vec![id] });
         self.update_mine(|mine| {
-            mine.remove(&id);
+            mine.undelivered.remove(&id);
         })
     }
 
     /// One of our comments was queued under `id`; returns how many are
     /// pending, and the view's revision that has it.
     pub(crate) fn queued(&self, id: CommentId) -> (usize, u64) {
-        self.update_mine(|mine| {
-            mine.insert(id);
-        })
+        self.update_mine(|mine| mine.queued(id))
+    }
+
+    /// The share delivered these comments.
+    fn delivered(&self, ids: &[CommentId]) {
+        self.update_mine(|mine| mine.delivered(ids));
     }
 
     /// Changes the set of our undelivered comments; returns its size and
     /// the view's revision.
-    fn update_mine(&self, change: impl FnOnce(&mut HashSet<CommentId>)) -> (usize, u64) {
+    fn update_mine(&self, change: impl FnOnce(&mut Mine)) -> (usize, u64) {
         let undelivered: Vec<CommentId> = {
             let mut mine = self.mine.lock().unwrap_or_else(PoisonError::into_inner);
             change(&mut mine);
-            mine.iter().copied().collect()
+            mine.undelivered.iter().copied().collect()
         };
         let pending = undelivered.len();
         let rev = self.modify(|view| {
@@ -764,11 +808,7 @@ impl Session {
                 self.emit(Event::Status { line });
             }
             ShareMessage::Delivered { ids } => {
-                self.update_mine(|mine| {
-                    for id in &ids {
-                        mine.remove(id);
-                    }
-                });
+                self.delivered(&ids);
                 self.emit(Event::Delivered { ids });
             }
             ShareMessage::Answer {
@@ -813,5 +853,36 @@ impl Session {
                 tracing::debug!("unexpected admission message after admission");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        core::{ids::CommentId, rng::SeededRng},
+        join::session::{MAX_EARLY, Mine},
+    };
+
+    #[test]
+    fn a_delivery_that_overtakes_its_acknowledgement_is_kept() {
+        let rng = SeededRng::new(3);
+        let (early, late) = (CommentId::generate(&rng), CommentId::generate(&rng));
+        let mut mine = Mine::default();
+        // Delivered before the joiner heard it was queued: never pending.
+        mine.delivered(&[early]);
+        mine.queued(early);
+        assert!(mine.undelivered.is_empty());
+        assert!(mine.early.is_empty());
+        // The usual order.
+        mine.queued(late);
+        assert!(mine.undelivered.contains(&late));
+        mine.delivered(&[late]);
+        assert!(mine.undelivered.is_empty() && mine.early.is_empty());
+        // Bounded.
+        let others: Vec<CommentId> = (0..MAX_EARLY + 5)
+            .map(|_| CommentId::generate(&rng))
+            .collect();
+        mine.delivered(&others);
+        assert_eq!(mine.early.len(), MAX_EARLY);
     }
 }

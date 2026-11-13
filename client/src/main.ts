@@ -37,15 +37,16 @@ function install(): void {
   panel.onOpen = () => { list.close(); };
   outbox.onChange = () => { list.render(); };
   outbox.onQueued = (queued) => {
-    ui.setPending(queued.pending);
-    // The joiner's views from before this comment are older than the page.
-    connection.saw(queued.epoch, queued.rev);
+    // Its count is news unless something newer (its delivery, say) came
+    // first; either way, the joiner's views from before it are old now.
+    if (connection.fresh(queued.epoch, queued.rev, "mine")) ui.setPending(queued.pending);
+    else void connection.refresh();
   };
 
   const prompt = new NamePrompt(ui, (saved) => {
-    if (connection.fresh(saved.epoch, saved.rev)) panel.show(saved);
+    if (connection.fresh(saved.epoch, saved.rev, "settings")) panel.show(saved);
   });
-  panel.fresh = (saved) => connection.fresh(saved.epoch, saved.rev);
+  panel.fresh = (saved) => connection.fresh(saved.epoch, saved.rev, "settings");
   const applySettings = (settings: PageSettings): void => {
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
@@ -77,14 +78,18 @@ function install(): void {
       if (!connection.streaming) sender.suspend();
       if (recovered) void outbox.resendAll();
     },
-    status(status) {
-      you = status.you?.key ?? null;
-      ui.setPending(status.pending);
-      outbox.markDeliveredExcept(status.undelivered);
+    status(status, parts) {
+      if (parts.has("connection")) you = status.you?.key ?? null;
+      if (parts.has("mine")) {
+        ui.setPending(status.pending);
+        outbox.markDeliveredExcept(status.undelivered);
+      }
       for (const answer of status.answers) answers.add(answer);
-      panel.show(status.settings);
-      showPeople(status.here);
-      onRevision(status.revision);
+      if (parts.has("settings")) panel.show(status.settings);
+      // Who is "you" may have changed with the connection: draw again.
+      if (parts.has("presence")) showPeople(status.here);
+      else if (parts.has("connection")) showPeople(here);
+      if (parts.has("reload")) onRevision(status.revision);
     },
     event(event) {
       switch (event.type) {

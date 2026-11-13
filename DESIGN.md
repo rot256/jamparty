@@ -496,12 +496,23 @@ Kept out of the first version on purpose; the protocol leaves room:
   `rev` after it, `api/comments`' 202 has the `rev` that holds the
   comment and `api/settings` answers the settings with the `rev` of the
   `settings` event it sent. A page takes its epoch from its event stream
-  and applies a status or settings answer only if it is of that epoch
-  and no older than the newest `rev` it has applied, so a read that was
-  overtaken (by an event, a new comment, newer settings) undoes nothing,
-  a comment is never taken for delivered from a status that predates it,
-  and a joiner restarted on the same port (counting from 0 again) is
-  believed from its first event on.
+  and ignores answers from another epoch. It reconciles a status part by
+  part: the connection (`connected`, `status`, `you`), presence
+  (`here`), its comments (`pending`, `undelivered`), settings and the
+  live-reload revision. For each part it remembers the newest `rev` it
+  applied from an event of that part (`share`/`status`, `presence`,
+  `delivered`, `settings`, `reload`), a comment's 202 (its comments) or
+  a settings answer (settings), and takes that part from a status only if
+  the status is no older; answers are merged from every status, and
+  cursors belong to no part. So an unrelated event (someone's rename, a
+  moving cursor) never costs a snapshot, a read overtaken for one part
+  undoes nothing there, a comment is never taken for delivered from a
+  status that predates it, and a joiner restarted on the same port
+  (counting from 0 again) is believed from its first event on. Every
+  other part carries its whole state in its events; a `delivered` event
+  names comments but not the count, so when a status's comments part is
+  older than the page's, the page reads the status once more (newer than
+  that event: it ends). One read at a time, at most one queued.
   These are additions; the page API stays at version 2 (unreleased, so
   `seq` is simply required). `api/events` sends `data: <json>` with
   `type` `share` (`connected`,
@@ -539,6 +550,10 @@ Kept out of the first version on purpose; the protocol leaves room:
 - Reconnection: `admitted` lists the joiner's comments (by its full key)
   the share still holds; the joiner counts the rest of its
   pending comments as delivered (comments delivered while it was away).
+- A delivery can overtake its comment's acknowledgement (the share
+  writes both from one task, whichever is ready first): the joiner and
+  the page remember the last 100 delivered ids they did not know yet and
+  count such a comment delivered when its acknowledgement arrives.
 - T3 MCP, as in T3 Code v0.1.9 (tag `v0.1.9`, commit `24e7747`): the
   endpoint is effect's `McpServer.layerHttp` (`/mcp`, protocol
   `2025-06-18`, sessions with `Mcp-Session-Id`;

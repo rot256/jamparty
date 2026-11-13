@@ -1805,6 +1805,139 @@ def test_cursors_are_placed_on_the_element(tmp_path: Path, browser: Browser) -> 
             bob_context.close()
 
 
+def post_settings(joined: Joined, body: str) -> None:
+    status, answer = request(
+        joined,
+        "/_jampot/api/settings",
+        "POST",
+        {"Origin": f"http://{joined.host}", "Content-Type": "application/json"},
+        body.encode(),
+    )
+    assert status == 200, answer
+
+
+def hold_status_reads(page: Page, after: int = 0) -> list[tuple[Route, APIResponse]]:
+    """Holds the page's api/status answers (after the first `after`)."""
+    held: list[tuple[Route, APIResponse]] = []
+    seen: list[int] = []
+
+    def hold(route: Route) -> None:
+        response = route.fetch()
+        seen.append(1)
+        if len(seen) <= after:
+            route.fulfill(response=response)
+        else:
+            held.append((route, response))
+
+    page.route("**/_jampot/api/status", hold)
+    return held
+
+
+def release(held: list[tuple[Route, APIResponse]]) -> None:
+    for route, response in held:
+        route.fulfill(response=response)
+    held.clear()
+
+
+def test_a_snapshot_is_not_lost_to_someone_elses_rename(
+    tmp_path: Path, page: Page
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        join(tmp_path / "alice", shared, "alice") as alice,
+    ):
+        post_settings(bob, '{"commentMode":"off"}')
+        # The version check passes; the page's first real read is held.
+        held = hold_status_reads(page, after=1)
+        _ = page.goto(bob.url)
+        waiting(page, "the first status read", lambda: len(held) > 0)
+        post_settings(alice, '{"name":"changed"}')
+        expect(overlay(page, "#avatars")).to_contain_text("C")
+        page.wait_for_timeout(300)
+        release(held)
+        page.unroute("**/_jampot/api/status")
+        comment_mode = overlay(page, "#comment-mode")
+        expect(comment_mode).to_have_attribute("aria-checked", "false")
+        # The controls work: their settings were loaded.
+        page.locator("h1").click()
+        page.keyboard.press("c")
+        expect(comment_mode).to_have_attribute("aria-checked", "true")
+
+
+def test_a_recovery_snapshot_is_not_lost_to_someone_elses_rename(
+    tmp_path: Path, page: Page
+) -> None:
+    port = free_port()
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+    ):
+        with join(tmp_path / "bob", shared, "bob", port=port) as bob:
+            _ = page.goto(bob.url)
+            expect(overlay(page, "#connection")).to_have_attribute(
+                "data-state", "green"
+            )
+            comment_on_intro(page, "Before the restart.")
+            row = overlay(page, "#outbox-list li")
+            expect(row).to_have_attribute("data-state", "queued")
+        _ = jampot(tmp_path, "recv")
+        held = hold_status_reads(page)
+        with join(tmp_path / "bob", shared, "bob", port=port) as bob:
+            expect(overlay(page, "#connection")).to_have_attribute(
+                "data-state", "green", timeout=RECONNECT
+            )
+            waiting(page, "a recovery read", lambda: len(held) > 0)
+            post_settings(alice, '{"name":"changed"}')
+            expect(overlay(page, "#avatars")).to_contain_text("C")
+            page.wait_for_timeout(300)
+            release(held)
+            page.unroute("**/_jampot/api/status")
+            status = cast(
+                dict[str, object], json.loads(request(bob, "/_jampot/api/status")[1])
+            )
+            assert status["pending"] == 0
+            expect(row).to_have_attribute("data-state", "delivered")
+            expect(overlay(page, "#badge")).to_have_text("0 queued")
+
+
+def test_a_snapshot_converges_through_moving_cursors(
+    tmp_path: Path, browser: Browser
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+    ):
+        post_settings(bob, '{"commentMode":"off"}')
+        with pages(browser, alice) as (alice_page,):
+            alice_page.locator("h1").click()
+            alice_page.keyboard.press("x")
+            expect(overlay(alice_page, "#show-cursor")).to_have_attribute(
+                "aria-checked", "true"
+            )
+            context = browser.new_context(viewport={"width": 1280, "height": 720})
+            try:
+                bob_page = context.new_page()
+                held = hold_status_reads(bob_page, after=1)
+                _ = bob_page.goto(bob.url)
+                waiting(bob_page, "the first status read", lambda: len(held) > 0)
+                # Alice's pointer keeps moving on the same page meanwhile.
+                for step in range(40):
+                    alice_page.mouse.move(200 + (step % 20) * 10, 250)
+                    alice_page.wait_for_timeout(30)
+                expect(cursors(bob_page)).to_have_count(1)
+                release(held)
+                for step in range(40):
+                    alice_page.mouse.move(200 + (step % 20) * 10, 260)
+                    alice_page.wait_for_timeout(30)
+                expect(overlay(bob_page, "#comment-mode")).to_have_attribute(
+                    "aria-checked", "false"
+                )
+            finally:
+                context.close()
+
+
 def test_a_stale_status_does_not_undo_an_event(tmp_path: Path, page: Page) -> None:
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
@@ -1945,3 +2078,32 @@ def test_a_late_settings_answer_does_not_undo_newer_settings(
         # And it behaves on: right-click comments.
         page.locator("#intro").click(button="right")
         expect(overlay(page, "textarea")).to_be_focused()
+
+
+def test_a_delivery_before_the_queued_answer(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        held: list[tuple[Route, APIResponse]] = []
+
+        def hold(route: Route) -> None:
+            held.append((route, route.fetch()))
+
+        page.route("**/_jampot/api/comments", hold)
+        page.locator("#intro").click(button="right")
+        overlay(page, "textarea").fill("Fast agent.")
+        overlay(page, "textarea").press("Enter")
+        waiting(page, "the queued answer", lambda: len(held) > 0)
+        # The agent takes it before the page hears it was queued.
+        _ = jampot(tmp_path, "recv")
+        page.wait_for_timeout(300)
+        for route, response in held:
+            route.fulfill(response=response)
+        overlay(page, "#pill").click()
+        expect(overlay(page, "#outbox-list li")).to_have_attribute(
+            "data-state", "delivered"
+        )
+        expect(overlay(page, "#badge")).to_have_text("0 queued")
