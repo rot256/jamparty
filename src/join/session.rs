@@ -16,7 +16,7 @@ use crate::{
     join::{
         api::{Change, Outcome, RequestNumber, Submission, ToPage},
         control::Control,
-        pages::{Attached, Full, PageId, Pages},
+        pages::{Attached, Dropped, Full, PageId, Pages},
         preferences::{self, Preferences},
         state::{Snapshot, State},
         uplink::Uplink,
@@ -92,14 +92,25 @@ impl Session {
             | ToPage::Reload { .. }
             | ToPage::Answer(_) => true,
         });
+        let mut dropped = Dropped::None;
         for message in &messages {
-            inner.pages.publish(message);
+            if let Dropped::Some = inner.pages.publish(message) {
+                dropped = Dropped::Some;
+            }
         }
-        if let Some(Reply { page, to, outcome }) = reply {
-            inner.pages.send(page, &ToPage::Reply { to, outcome });
+        if let Some(Reply { page, to, outcome }) = reply
+            && let Dropped::Some = inner.pages.send(page, &ToPage::Reply { to, outcome })
+        {
+            dropped = Dropped::Some;
         }
         if changed {
             self.snapshot.send_replace(inner.state.snapshot());
+        }
+        drop(inner);
+        match dropped {
+            // The page in front may be gone: the joiner is elsewhere.
+            Dropped::Some => self.uplink.changed(),
+            Dropped::None => {}
         }
     }
 
@@ -343,7 +354,7 @@ pub(crate) mod tests {
 
     use crate::{
         core::settings::{Settings, Switch},
-        join::{preferences::Preferences, session::Session},
+        join::{api::ToPage, pages::PAGE_QUEUE, preferences::Preferences, session::Session},
         protocol::presence::{CursorSelector, Fraction, PagePath, Position},
     };
 
@@ -391,5 +402,24 @@ pub(crate) mod tests {
         };
         session.cursor(back.id, Some(position));
         assert_eq!(session.whereabouts().url, url("/back"));
+    }
+
+    #[test]
+    fn a_page_dropped_for_falling_behind_wakes_the_uplink() {
+        let session = session();
+        let mut quick = session.attach().unwrap();
+        let slow = session.attach().unwrap();
+        session.visit(quick.id, url("/quick"));
+        session.visit(slow.id, url("/slow"));
+        assert!(session.uplink().woken());
+        assert!(!session.uplink().woken());
+        for _ in 0..PAGE_QUEUE {
+            session.commit(|_| vec![ToPage::Ping], None);
+            while quick.queue.try_recv().is_ok() {}
+        }
+        // The slow page, in front, is gone: the share is to hear the
+        // joiner is on the quick one's page now.
+        assert!(session.uplink().woken());
+        assert_eq!(session.whereabouts().url, url("/quick"));
     }
 }

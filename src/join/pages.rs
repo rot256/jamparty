@@ -32,6 +32,15 @@ pub(crate) struct Attached {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Full;
 
+/// Whether sending dropped a page that fell behind: the joiner may be
+/// somewhere else now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "a dropped page may have been the one in front"]
+pub(crate) enum Dropped {
+    None,
+    Some,
+}
+
 struct Page {
     /// None before the page said where it is, or while it cannot say.
     url: Option<PagePath>,
@@ -57,6 +66,8 @@ impl Pages {
         let id = PageId(self.next);
         self.next = self.next.wrapping_add(1);
         let (sender, queue) = mpsc::channel(PAGE_QUEUE);
+        // A new queue has room for its hello.
+        let _ = sender.try_send(frame(hello));
         let (dropped_sender, dropped) = oneshot::channel();
         self.pages.insert(
             id,
@@ -67,7 +78,6 @@ impl Pages {
                 _dropped: dropped_sender,
             },
         );
-        self.send(id, hello);
         Ok(Attached { id, queue, dropped })
     }
 
@@ -120,7 +130,7 @@ impl Pages {
     /// Sends `message` to every page it is for: a cursor only to pages on
     /// its page, and none to a page more than half behind (the next
     /// movement replaces it); everything else to all.
-    pub(crate) fn publish(&mut self, message: &ToPage) {
+    pub(crate) fn publish(&mut self, message: &ToPage) -> Dropped {
         let frame = frame(message);
         let cursor_url = match message {
             ToPage::Cursor { url, .. } => Some(url),
@@ -149,22 +159,28 @@ impl Pages {
                 }
             }
         }
+        if behind.is_empty() {
+            return Dropped::None;
+        }
         for id in behind {
             tracing::debug!(?id, "a page fell behind; dropping it");
             self.detach(id);
         }
+        Dropped::Some
     }
 
     /// Sends `message` to one page; drops the page if it is too far
     /// behind.
-    pub(crate) fn send(&mut self, id: PageId, message: &ToPage) {
+    pub(crate) fn send(&mut self, id: PageId, message: &ToPage) -> Dropped {
         let Some(page) = self.pages.get(&id) else {
-            return;
+            return Dropped::None;
         };
         if page.queue.try_send(frame(message)).is_err() {
             tracing::debug!(?id, "a page fell behind; dropping it");
             self.detach(id);
+            return Dropped::Some;
         }
+        Dropped::None
     }
 
     /// How many pages are attached.
@@ -188,7 +204,7 @@ mod tests {
         core::ids::EndpointKey,
         join::{
             api::ToPage,
-            pages::{MAX_PAGES, PAGE_QUEUE, Pages},
+            pages::{Dropped, MAX_PAGES, PAGE_QUEUE, Pages},
         },
         protocol::presence::PagePath,
     };
@@ -242,9 +258,9 @@ mod tests {
             position: None,
         };
         for _ in 0..PAGE_QUEUE {
-            pages.publish(&ToPage::Ping);
+            let _ = pages.publish(&ToPage::Ping);
             // Cursors stop once a page is half behind, never dropping it.
-            pages.publish(&cursor);
+            assert_eq!(pages.publish(&cursor), Dropped::None);
             while quick.queue.try_recv().is_ok() {}
         }
         assert_eq!(pages.len(), 1, "the slow page is dropped");
@@ -256,7 +272,7 @@ mod tests {
         // The hello and the pings that fitted, and cursors only while it
         // was less than half behind.
         assert!(queued <= PAGE_QUEUE, "{queued}");
-        pages.publish(&ToPage::Ping);
+        assert_eq!(pages.publish(&ToPage::Ping), Dropped::None);
         assert!(quick.queue.try_recv().is_ok());
     }
 }

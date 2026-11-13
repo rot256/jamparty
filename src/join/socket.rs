@@ -36,6 +36,9 @@ use crate::{
 /// How often the joiner pings a page; a page that hears nothing for more
 /// than twice as long reconnects.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
+/// How long one frame to a page may take to go out; a page that takes
+/// longer is stuck, and its socket is closed.
+const SEND_TIMEOUT: Duration = KEEP_ALIVE;
 /// Comments one page may have waiting for the share at once; more are
 /// refused. A page sends one at a time, and its unsent ones one by one.
 pub(crate) const MAX_IN_FLIGHT: usize = 8;
@@ -158,8 +161,10 @@ async fn run(socket: Socket, session: &Arc<Session>, attached: Attached) {
                 },
                 _ = keep_alive.tick() => ping.clone(),
             };
-            if sink.send(Message::text(payload)).await.is_err() {
-                return Ended(CloseCode::NORMAL_CLOSURE, "gone");
+            match time::timeout(SEND_TIMEOUT, sink.send(Message::text(payload))).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => return Ended(CloseCode::NORMAL_CLOSURE, "gone"),
+                Err(_) => return Ended(CloseCode::SERVICE_OVERLOAD, "fell behind"),
             }
         }
     };
@@ -171,7 +176,7 @@ async fn run(socket: Socket, session: &Arc<Session>, attached: Attached) {
     // again, under the same ref, once it is back.
     comments.abort_all();
     tracing::debug!(?id, reason, "page socket closed");
-    let _ = sink.send(Message::close(Some(code), reason)).await;
+    let _ = time::timeout(SEND_TIMEOUT, sink.send(Message::close(Some(code), reason))).await;
 }
 
 /// The request number of a message that could not be read, to answer it.

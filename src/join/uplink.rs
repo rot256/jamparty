@@ -55,6 +55,14 @@ impl Uplink {
     fn take_pointer(&self) -> Option<Pointer> {
         self.pointer().take()
     }
+
+    /// Whether [`run`] was asked to look again since last asked (takes
+    /// the request).
+    #[cfg(test)]
+    pub(crate) fn woken(&self) -> bool {
+        use futures_util::FutureExt;
+        self.wake.notified().now_or_never().is_some()
+    }
 }
 
 /// What the share was told, and on which connection.
