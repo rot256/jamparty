@@ -348,7 +348,7 @@ def watch(page: Page, long_lived: tuple[str, ...] = ()) -> Watched:
     watched = Watched()
 
     def started(request: object, url: str) -> None:
-        # jampot's own (events, presence, cursors) are not the site's.
+        # jampot's own (its client, status and socket) are not the site's.
         if "/_jampot/" in url or any(part in url for part in long_lived):
             return
         watched.in_flight[request] = url

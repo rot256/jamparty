@@ -41,8 +41,8 @@ def test_the_pill_holds_the_dot_and_follows_the_state(
             expect(overlay(page, "#pill")).to_contain_text("0 queued")
             expect(overlay(page, "#bar > #gear")).to_be_visible()
 
-            # The joiner's event stream goes silent: the page's watchdog
-            # gives up on it and reconnects, which cannot work yet.
+            # The joiner's socket goes silent: the page's watchdog gives
+            # up on it and reconnects, which cannot work yet.
             os.kill(process.process.pid, signal.SIGSTOP)
             try:
                 page.clock.fast_forward(40_000)
