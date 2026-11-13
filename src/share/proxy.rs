@@ -1,4 +1,10 @@
 //! Forwards requests to the one dev server the share was given.
+//!
+//! The dev server sees requests as from a browser on its own origin: a
+//! request from the session's page (which the joiner checked) carries the
+//! dev server's origin in `Origin` and `Referer`, and no forwarding
+//! headers, so its own origin checks (CSRF, WebSocket origin, host checks)
+//! pass. A CORS answer for its own origin is for the session's.
 
 use std::{error::Error, fmt, str::FromStr};
 
@@ -6,8 +12,8 @@ use hyper::{
     Request, Response, StatusCode, Uri,
     body::Incoming,
     header::{
-        self, CONNECTION, HOST, HeaderMap, HeaderName, HeaderValue, LOCATION, TE, TRAILER,
-        TRANSFER_ENCODING, UPGRADE,
+        self, ACCESS_CONTROL_ALLOW_ORIGIN, CONNECTION, HOST, HeaderMap, HeaderName, HeaderValue,
+        LOCATION, ORIGIN, REFERER, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
     },
     upgrade,
 };
@@ -20,7 +26,7 @@ use tokio::io::copy_bidirectional;
 use url::Url;
 
 use crate::{
-    core::port::Port,
+    core::{ids::Sid, port::Port},
     share::{
         body::{AppBody, RequestError, incoming_body, map_incoming_response},
         inject::{ClientMode, maybe_inject_client},
@@ -108,15 +114,45 @@ impl fmt::Display for UpstreamUrl {
     }
 }
 
+/// The origin of the session a request came from,
+/// `http://<sid>.localhost[:<port>]`, read from its `Host`, which the
+/// joiner checked against the port it serves on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionOrigin(String);
+
+impl SessionOrigin {
+    /// The origin `headers`' `Host` names, if it is one of the session
+    /// `sid`'s.
+    #[must_use]
+    pub(crate) fn new(sid: &Sid, headers: &HeaderMap) -> Option<Self> {
+        let host = headers.get(HOST)?.to_str().ok()?;
+        let name = format!("{sid}.localhost");
+        let rest = host.strip_prefix(&name)?;
+        let valid = rest.is_empty()
+            || rest.strip_prefix(':').is_some_and(|port| {
+                port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<Port>().is_ok()
+            });
+        valid.then(|| Self(format!("http://{host}")))
+    }
+}
+
+impl From<SessionOrigin> for String {
+    fn from(origin: SessionOrigin) -> Self {
+        origin.0
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Proxy {
     upstream: Url,
     port: Port,
+    /// The session's host label: its pages' origins.
+    sid: Sid,
     client: Client<HttpsConnector<HttpConnector>, AppBody>,
 }
 
 impl Proxy {
-    pub(crate) fn new(upstream: UpstreamUrl) -> Self {
+    pub(crate) fn new(upstream: UpstreamUrl, sid: Sid) -> Self {
         let connector = HttpsConnectorBuilder::new()
             .with_webpki_roots()
             .https_or_http()
@@ -125,6 +161,7 @@ impl Proxy {
         Self {
             port: upstream.port(),
             upstream: upstream.url,
+            sid,
             client: Client::builder(TokioExecutor::new()).build(connector),
         }
     }
@@ -144,7 +181,7 @@ impl Proxy {
             .headers()
             .contains_key(header::UPGRADE)
             .then(|| upgrade::on(&mut request));
-        let original_host = request.headers().get(HOST).cloned();
+        let session = SessionOrigin::new(&self.sid, request.headers());
         let (mut parts, body) = request.into_parts();
         strip_hop_by_hop(&mut parts.headers, downstream_upgrade.is_some());
         let request_method = parts.method.clone();
@@ -158,15 +195,7 @@ impl Proxy {
             header::ACCEPT_ENCODING,
             header::HeaderValue::from_static("identity"),
         );
-        if let Some(host) = original_host {
-            parts
-                .headers
-                .insert(header::HeaderName::from_static("x-forwarded-host"), host);
-        }
-        parts.headers.insert(
-            header::HeaderName::from_static("x-forwarded-proto"),
-            header::HeaderValue::from_static("http"),
-        );
+        translate_request(&mut parts.headers, session.as_ref(), upstream);
 
         let outgoing = Request::from_parts(parts, incoming_body(body));
         let mut response = self.client.request(outgoing).await.map_err(|error| {
@@ -174,7 +203,7 @@ impl Proxy {
             RequestError::new(StatusCode::BAD_GATEWAY, "upstream request failed")
         })?;
 
-        rewrite_redirect(response.headers_mut(), upstream);
+        translate_response(response.headers_mut(), session.as_ref(), upstream);
         let upgraded = response.status() == StatusCode::SWITCHING_PROTOCOLS;
         strip_hop_by_hop(response.headers_mut(), upgraded);
 
@@ -270,6 +299,70 @@ fn strip_hop_by_hop(headers: &mut HeaderMap, upgrade: bool) {
     }
 }
 
+/// Makes a request from the session's page one from the dev server's own
+/// origin: `Origin` and a same-origin `Referer` name the dev server, and
+/// forwarding headers (the client's too) go. A foreign or `null` `Origin`
+/// stays as it is; none is invented.
+fn translate_request(headers: &mut HeaderMap, session: Option<&SessionOrigin>, upstream: &Url) {
+    let forwarding: Vec<HeaderName> = headers
+        .keys()
+        .filter(|name| name.as_str() == "forwarded" || name.as_str().starts_with("x-forwarded-"))
+        .cloned()
+        .collect();
+    for name in forwarding {
+        headers.remove(name);
+    }
+    let Some(SessionOrigin(session)) = session else {
+        return;
+    };
+    let own = upstream.origin().ascii_serialization();
+    if headers
+        .get(ORIGIN)
+        .is_some_and(|origin| origin == session.as_str())
+        && let Ok(value) = HeaderValue::from_str(&own)
+    {
+        headers.insert(ORIGIN, value);
+    }
+    let referer = headers
+        .get(REFERER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| Url::parse(value).ok())
+        .filter(|referer| referer.origin().ascii_serialization() == *session);
+    if let Some(referer) = referer {
+        let path = referer.path();
+        let mapped = match referer.query() {
+            Some(query) => format!("{path}?{query}"),
+            None => path.to_owned(),
+        };
+        // Unmappable (dot segments): better none than the session's.
+        match mapped
+            .parse::<Uri>()
+            .ok()
+            .and_then(|uri| upstream_uri(upstream, &uri).ok())
+            .and_then(|uri| HeaderValue::from_str(&uri.to_string()).ok())
+        {
+            Some(value) => headers.insert(REFERER, value),
+            None => headers.remove(REFERER),
+        };
+    }
+}
+
+/// Makes the dev server's answer one for the session: redirects to its
+/// own origin stay in the session, and a CORS grant to its own origin is
+/// for the session's.
+fn translate_response(headers: &mut HeaderMap, session: Option<&SessionOrigin>, upstream: &Url) {
+    rewrite_redirect(headers, upstream);
+    let own = upstream.origin().ascii_serialization();
+    if let Some(SessionOrigin(session)) = session
+        && headers
+            .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_some_and(|allowed| allowed == own.as_str())
+        && let Ok(value) = HeaderValue::from_str(session)
+    {
+        headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, value);
+    }
+}
+
 fn rewrite_redirect(headers: &mut header::HeaderMap, upstream: &Url) {
     let Some(value) = headers.get(LOCATION) else {
         return;
@@ -277,7 +370,13 @@ fn rewrite_redirect(headers: &mut header::HeaderMap, upstream: &Url) {
     let Ok(location) = value.to_str() else {
         return;
     };
-    let Ok(url) = Url::parse(location) else {
+    // Absolute, or scheme-relative (`//host/path`); relative ones are
+    // relative to the request's URL, which the browser resolves.
+    let absolute = match location.strip_prefix("//") {
+        Some(rest) => format!("{}://{rest}", upstream.scheme()),
+        None => location.to_owned(),
+    };
+    let Ok(url) = Url::parse(&absolute) else {
         return;
     };
     if url.origin() != upstream.origin() {
@@ -315,7 +414,169 @@ mod tests {
 
     use hyper::{StatusCode, Uri};
 
-    use crate::share::proxy::{UpstreamUrl, rewrite_redirect, strip_hop_by_hop, upstream_uri};
+    use crate::{
+        core::ids::{EndpointKey, Sid},
+        share::proxy::{
+            SessionOrigin, UpstreamUrl, rewrite_redirect, strip_hop_by_hop, translate_request,
+            translate_response, upstream_uri,
+        },
+    };
+
+    /// The session's host label (`EndpointKey([0; 32])`'s).
+    const SID: &str = "tzrjdfymwrg5sqai";
+
+    fn sid() -> Sid {
+        EndpointKey([0; 32]).sid()
+    }
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.parse().unwrap(), HeaderValue::from_static(value)))
+            .collect()
+    }
+
+    fn get<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+        headers.get(name).map(|value| value.to_str().unwrap())
+    }
+
+    /// What the dev server is sent for a request with `pairs`, `Host`
+    /// included, to `upstream`.
+    fn translated(upstream: &str, pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        let upstream = url::Url::parse(upstream).unwrap();
+        let mut sent = headers(pairs);
+        let session = SessionOrigin::new(&sid(), &sent);
+        translate_request(&mut sent, session.as_ref(), &upstream);
+        sent
+    }
+
+    #[test]
+    fn the_session_origin_is_read_from_its_host() {
+        assert_eq!(SID, sid().as_str());
+        let origin = |host: &'static str| {
+            SessionOrigin::new(&sid(), &headers(&[("host", host)])).map(String::from)
+        };
+        assert_eq!(
+            origin("tzrjdfymwrg5sqai.localhost:1313").as_deref(),
+            Some("http://tzrjdfymwrg5sqai.localhost:1313")
+        );
+        assert_eq!(
+            origin("tzrjdfymwrg5sqai.localhost").as_deref(),
+            Some("http://tzrjdfymwrg5sqai.localhost")
+        );
+        for other in [
+            "aaaaaaaaaaaaaaaa.localhost:1313",
+            "tzrjdfymwrg5sqai.localhost:0",
+            "tzrjdfymwrg5sqai.localhost:x",
+            "tzrjdfymwrg5sqai.localhost:1313@evil.example",
+            "evil.example",
+            "127.0.0.1:1313",
+        ] {
+            assert_eq!(origin(other), None, "{other}");
+        }
+        assert!(SessionOrigin::new(&sid(), &HeaderMap::new()).is_none());
+    }
+
+    #[test]
+    fn the_dev_server_sees_its_own_origin() {
+        let sent = translated(
+            "http://127.0.0.2:1313/",
+            &[
+                ("host", "tzrjdfymwrg5sqai.localhost:1313"),
+                ("origin", "http://tzrjdfymwrg5sqai.localhost:1313"),
+                ("referer", "http://tzrjdfymwrg5sqai.localhost:1313/a/b?x=1"),
+                ("forwarded", "for=192.0.2.1;host=evil.example"),
+                ("x-forwarded-host", "evil.example"),
+                ("x-forwarded-proto", "https"),
+                ("x-forwarded-for", "192.0.2.1"),
+                ("x-kept", "1"),
+            ],
+        );
+        assert_eq!(get(&sent, "origin"), Some("http://127.0.0.2:1313"));
+        assert_eq!(get(&sent, "referer"), Some("http://127.0.0.2:1313/a/b?x=1"));
+        for dropped in [
+            "forwarded",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-forwarded-for",
+        ] {
+            assert_eq!(get(&sent, dropped), None, "{dropped}");
+        }
+        assert_eq!(get(&sent, "x-kept"), Some("1"));
+    }
+
+    #[test]
+    fn a_base_path_and_the_default_port_carry_over() {
+        let sent = translated(
+            "http://localhost/app/",
+            &[
+                ("host", "tzrjdfymwrg5sqai.localhost"),
+                ("origin", "http://tzrjdfymwrg5sqai.localhost"),
+                ("referer", "http://tzrjdfymwrg5sqai.localhost/docs/"),
+            ],
+        );
+        assert_eq!(get(&sent, "origin"), Some("http://localhost"));
+        assert_eq!(get(&sent, "referer"), Some("http://localhost/app/docs/"));
+    }
+
+    #[test]
+    fn foreign_or_missing_origins_are_not_translated() {
+        let host = ("host", "tzrjdfymwrg5sqai.localhost:1313");
+        let upstream = "http://127.0.0.2:1313/";
+        for foreign in [
+            "http://evil.example",
+            "null",
+            "https://tzrjdfymwrg5sqai.localhost:1313",
+            "http://tzrjdfymwrg5sqai.localhost:1314",
+        ] {
+            let sent = translated(upstream, &[host, ("origin", foreign)]);
+            assert_eq!(get(&sent, "origin"), Some(foreign));
+        }
+        let sent = translated(upstream, &[host, ("referer", "http://evil.example/x")]);
+        assert_eq!(get(&sent, "referer"), Some("http://evil.example/x"));
+        // None is invented.
+        let sent = translated(upstream, &[host]);
+        assert_eq!(get(&sent, "origin"), None);
+        assert_eq!(get(&sent, "referer"), None);
+        // Not this session's host: nothing is translated, forwarding
+        // headers still go.
+        let sent = translated(
+            upstream,
+            &[
+                ("host", "aaaaaaaaaaaaaaaa.localhost:1313"),
+                ("origin", "http://aaaaaaaaaaaaaaaa.localhost:1313"),
+                ("x-forwarded-host", "evil.example"),
+            ],
+        );
+        assert_eq!(
+            get(&sent, "origin"),
+            Some("http://aaaaaaaaaaaaaaaa.localhost:1313")
+        );
+        assert_eq!(get(&sent, "x-forwarded-host"), None);
+    }
+
+    #[test]
+    fn cors_answers_for_the_dev_server_are_for_the_session() {
+        let upstream = url::Url::parse("http://127.0.0.2:1313/").unwrap();
+        let session = SessionOrigin::new(
+            &sid(),
+            &headers(&[("host", "tzrjdfymwrg5sqai.localhost:1313")]),
+        );
+        let answered = |allowed: &'static str| {
+            let mut received = headers(&[("access-control-allow-origin", allowed)]);
+            translate_response(&mut received, session.as_ref(), &upstream);
+            get(&received, "access-control-allow-origin").map(str::to_owned)
+        };
+        assert_eq!(
+            answered("http://127.0.0.2:1313").as_deref(),
+            Some("http://tzrjdfymwrg5sqai.localhost:1313")
+        );
+        assert_eq!(answered("*").as_deref(), Some("*"));
+        assert_eq!(
+            answered("http://elsewhere.example").as_deref(),
+            Some("http://elsewhere.example")
+        );
+    }
 
     #[test]
     fn hop_by_hop_headers_are_dropped() {
@@ -429,5 +690,17 @@ mod tests {
             headers.get(LOCATION).expect("location"),
             "http://elsewhere/next"
         );
+
+        // Scheme-relative, as some servers write them.
+        headers.insert(LOCATION, HeaderValue::from_static("//127.0.0.1:8000/next"));
+        rewrite_redirect(&mut headers, &upstream);
+        assert_eq!(headers.get(LOCATION).expect("location"), "/next");
+        headers.insert(LOCATION, HeaderValue::from_static("//elsewhere/next"));
+        rewrite_redirect(&mut headers, &upstream);
+        assert_eq!(headers.get(LOCATION).expect("location"), "//elsewhere/next");
+        // Relative ones are left to the browser.
+        headers.insert(LOCATION, HeaderValue::from_static("next"));
+        rewrite_redirect(&mut headers, &upstream);
+        assert_eq!(headers.get(LOCATION).expect("location"), "next");
     }
 }

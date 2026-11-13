@@ -122,18 +122,21 @@ impl Share {
             max_unadmitted,
             clock,
         } = config;
+        let key = generate_key(&SystemRng);
+        let token = PartyToken {
+            share: EndpointKey::from(key.public()),
+            secret: PartySecret::generate(&SystemRng),
+        };
         let (site, watcher) = match source {
             Source::Files(root) => {
                 let (watcher, reload) = live::start(&root)?;
                 let files = Files::new(root);
                 (Site::Files { files, reload }, Some(watcher))
             }
-            Source::Proxy(upstream) => (Site::Proxy(Box::new(Proxy::new(upstream))), None),
-        };
-        let key = generate_key(&SystemRng);
-        let token = PartyToken {
-            share: EndpointKey::from(key.public()),
-            secret: PartySecret::generate(&SystemRng),
+            Source::Proxy(upstream) => {
+                let proxy = Proxy::new(upstream, token.share.sid());
+                (Site::Proxy(Box::new(proxy)), None)
+            }
         };
         let (listener, socket) = runtime::listen(&runtime_dir, &token.share.sid())?;
         let endpoint = bind(&net, key, Accept::Jampot).await?;

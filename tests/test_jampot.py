@@ -64,7 +64,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if self.path == "/socket":
             self.handle_websocket()
             return
-        status, body = (200, FIXTURE_HTML) if self.path == "/" else (404, b"missing")
+        page = urlsplit(self.path).path == "/"
+        status, body = (200, FIXTURE_HTML) if page else (404, b"missing")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -94,6 +95,24 @@ class FixtureHandler(BaseHTTPRequestHandler):
         _ = self.wfile.write(bytes([0x81, len(payload)]) + payload)
         self.wfile.flush()
         self.close_connection = True
+
+
+class EchoHandler(FixtureHandler):
+    """A dev server that answers POST /echo with the headers it was sent."""
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        _ = self.rfile.read(length)
+        names = ["host", "origin", "referer", "forwarded"]
+        names += [
+            name for name in self.headers if name.lower().startswith("x-forwarded")
+        ]
+        body = json.dumps({name.lower(): self.headers[name] for name in names}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        _ = self.wfile.write(body)
 
 
 @contextmanager
@@ -451,6 +470,35 @@ def test_a_taken_port_falls_back_with_a_note(tmp_path: Path, page: Page) -> None
                 _ = page.goto(url)
                 expect(page.locator("h1")).to_have_text("Fixture page")
                 expect(page.locator("#jampot")).to_be_attached()
+
+
+def test_the_dev_server_sees_its_own_origin(tmp_path: Path, page: Page) -> None:
+    with (
+        upstream_server(DEV_HOST, EchoHandler) as upstream,
+        share(tmp_path, "proxy", upstream) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(f"{joined.url}?from=page")
+        expect(page.locator("h1")).to_have_text("Fixture page")
+        sent = cast(
+            dict[str, str | None],
+            page.evaluate(
+                """async () => {
+                    const response = await fetch("/echo", {
+                        method: "POST",
+                        headers: { "X-Forwarded-Host": "evil.example" },
+                        body: "x",
+                    });
+                    return response.json();
+                }"""
+            ),
+        )
+        assert sent == {
+            "host": urlsplit(upstream).netloc,
+            "origin": upstream,
+            "referer": f"{upstream}/?from=page",
+            "forwarded": None,
+        }
 
 
 def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:
