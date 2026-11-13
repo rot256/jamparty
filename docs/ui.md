@@ -38,6 +38,14 @@ joiner's local endpoints and the share; nothing in the site itself.
 
 - Title `Comment:` for element and page comments;
   `Comment on agent response:` stays for replies to answers.
+- A reload the dialog did not wait for (a dev server's live reload, or the
+  browser's) does not lose the comment: the page opens the dialog again on
+  the same target with the text, until it is sent or cancelled. If the
+  target is gone, the dialog says "The element is gone; this will be a page
+  comment." and sends it as one (after further reloads too). A comment sent
+  is the list's from then on (`sending`), never a draft again. While it is
+  on its way the dialog stays (Escape and outside clicks wait for the
+  joiner's answer); refused, it is the dialog's again, and a draft.
 
 ## Edit mode
 

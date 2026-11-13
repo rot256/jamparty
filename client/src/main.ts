@@ -6,7 +6,8 @@ import { Answers } from "./answers";
 import { AGENT_TARGET_PREFIX, LIVE_REVISION } from "./config";
 import { Connection, type ConnectionView } from "./connection";
 import { CursorLayer, CursorSender } from "./cursors";
-import { ANSWER_LABEL, CommentDialog } from "./dialog";
+import { CommentDialog } from "./dialog";
+import { loadDraft } from "./draft";
 import { EditMode } from "./edit";
 import type { PageSettings, Person } from "./generated/api";
 import { CommentList } from "./list";
@@ -77,6 +78,15 @@ function install(): void {
     dialog.reloadWhenClosed();
   };
 
+  // A draft left by a reload comes back once; one on an answer waits for
+  // the answers, which come with the first status.
+  let restored = false;
+  const restoreDraft = (): void => {
+    if (restored) return;
+    restored = true;
+    dialog.restore((selector) => answers.targetFor(selector));
+  };
+
   const connection = new Connection({
     state(view, recovered) {
       connectionView = view;
@@ -98,6 +108,7 @@ function install(): void {
         outbox.markDeliveredExcept(status.undelivered);
       }
       for (const answer of status.answers) answers.add(answer);
+      restoreDraft();
       if (parts.has("settings")) panel.show(status.settings);
       // Who is "you" may have changed with the connection: draw again.
       if (parts.has("presence")) showPeople(status.here);
@@ -190,7 +201,6 @@ function install(): void {
       event.clientX,
       event.clientY,
       `${AGENT_TARGET_PREFIX}${target.dataset.messageId}`,
-      ANSWER_LABEL,
     );
   }, true);
 
@@ -206,6 +216,7 @@ function install(): void {
   }, true);
 
   list.render();
+  if (loadDraft()?.target.kind !== "answer") restoreDraft();
   void connection.start();
 }
 

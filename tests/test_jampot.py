@@ -464,6 +464,264 @@ def test_live_reload_after_a_file_change(tmp_path: Path, page: Page) -> None:
         expect(page.locator("h1")).to_have_text("Changed page")
 
 
+def recv_all(home: Path) -> list[dict[str, object]]:
+    """Every comment the share holds, as `jampot recv` prints them."""
+    return [
+        cast(dict[str, object], json.loads(line))
+        for line in jampot(home, "recv").splitlines()
+    ]
+
+
+def test_a_comment_draft_survives_reloads(tmp_path: Path, page: Page) -> None:
+    site = tmp_path / "site"
+    _ = shutil.copytree(SITE, site)
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        page.locator("#intro").click(button="right")
+        textarea = page.locator("#jampot textarea")
+        expect(textarea).to_be_focused()
+        textarea.press_sequentially("Half written")
+
+        # A reload (the page's own, or a dev server's) brings it back.
+        _ = page.reload()
+        expect(textarea).to_have_value("Half written")
+        expect(textarea).to_be_focused()
+        expect(overlay(page, "#dialog-label")).to_have_text("Comment:")
+        expect(overlay(page, "#status")).to_have_text("")
+        textarea.press_sequentially(", now whole.")
+
+        # jampot's own live reload waits for the dialog to close.
+        index = site / "index.html"
+        _ = index.write_text(index.read_text().replace("Fixture page", "Changed page"))
+        expect(overlay(page, "#reload-notice")).to_be_visible()
+        expect(textarea).to_have_value("Half written, now whole.")
+        # Sent, then reloaded: the draft is gone with the dialog.
+        with page.expect_navigation():
+            textarea.press("Enter")
+        expect(page.locator("h1")).to_have_text("Changed page")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "Half written, now whole."
+        assert record["selector"] == "#intro"
+
+
+def test_a_draft_whose_element_is_gone_becomes_a_page_comment(
+    tmp_path: Path, page: Page
+) -> None:
+    site = tmp_path / "site"
+    _ = shutil.copytree(SITE, site)
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        page.locator("#intro").click(button="right")
+        textarea = page.locator("#jampot textarea")
+        textarea.press_sequentially("About that paragraph")
+        index = site / "index.html"
+        _ = index.write_text(index.read_text().replace('id="intro" ', ""))
+        # The page has heard of the change: a reload gets the new one, and
+        # no reload of jampot's own is left waiting for the dialog.
+        expect(overlay(page, "#reload-notice")).to_be_visible()
+        gone = "The element is gone; this will be a page comment."
+        for _ in range(2):
+            _ = page.reload()
+            expect(textarea).to_have_value("About that paragraph")
+            expect(overlay(page, "#dialog-label")).to_have_text("Comment:")
+            expect(overlay(page, "#status")).to_have_text(gone)
+            expect(overlay(page, "#reload-notice")).to_be_hidden()
+        textarea.press("Enter")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "About that paragraph"
+        assert record["selector"] == ""
+        # Cancelled or sent, a draft is not brought back.
+        _ = page.reload()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+
+
+def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jampot(tmp_path, "send", "An answer.")
+        answer = overlay(page, ".agent-message")
+        expect(answer).to_contain_text("An answer.")
+        answer.click(button="right")
+        textarea = overlay(page, "textarea")
+        textarea.press_sequentially("About the answer")
+        _ = page.reload()
+        # Answers come with the first status: the draft waits for them.
+        expect(textarea).to_have_value("About the answer")
+        label = overlay(page, "#dialog-label")
+        expect(label).to_have_text("Comment on agent response:")
+        expect(overlay(page, "#status")).to_have_text("")
+        textarea.press("Enter")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "About the answer"
+        assert str(record["selector"]).startswith("jampot-agent:")
+
+        # An answer dismissed meanwhile is gone: the reply goes to the page,
+        # and says so, however often the page reloads.
+        answer.click(button="right")
+        textarea.press_sequentially("On a dismissed answer")
+        message_id = answer.get_attribute("data-message-id")
+        assert message_id is not None
+        _ = page.evaluate(
+            "(id) => sessionStorage.setItem('jampot-dismissed-v1', JSON.stringify([id]))",
+            message_id,
+        )
+        for _ in range(2):
+            _ = page.reload()
+            expect(textarea).to_have_value("On a dismissed answer")
+            expect(label).to_have_text("Comment on agent response:")
+            expect(overlay(page, "#status")).to_have_text(
+                "The element is gone; this will be a page comment."
+            )
+        textarea.press("Enter")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "On a dismissed answer"
+        assert record["selector"] == ""
+
+
+# Holds the page's comment requests until `window.jampotRelease()`; then
+# answers with the joiner's response, or with `refusal` (status 429) if
+# given.
+HOLD_COMMENTS = """(refusal) => {
+    const original = window.fetch;
+    let release;
+    const released = new Promise((resolve) => { release = resolve; });
+    window.jampotRelease = () => release();
+    window.fetch = async (...args) => {
+        if (!String(args[0]).includes("/api/comments")) return original(...args);
+        await released;
+        if (refusal === null) return original(...args);
+        return new Response(JSON.stringify({ error: refusal }), {
+            status: 429,
+            headers: { "Content-Type": "application/json" },
+        });
+    };
+}"""
+
+
+def test_a_sending_dialog_stays_until_answered(tmp_path: Path, page: Page) -> None:
+    """Escape and an outside click do not dismiss a dialog whose comment
+    is on its way, so the next comment's draft is never one the sending
+    one forgets."""
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = page.evaluate(HOLD_COMMENTS, None)
+        page.locator("#intro").click(button="right")
+        textarea = overlay(page, "textarea")
+        textarea.press_sequentially("First")
+        textarea.press("Enter")
+        dialog = overlay(page, "#jampot-dialog")
+        status = overlay(page, "#status")
+        expect(status).to_have_text("Queueing…")
+        textarea.press("Escape")
+        page.mouse.click(5, 5)
+        # Enter again sends nothing more.
+        textarea.press("Enter")
+        expect(dialog).to_be_visible()
+        expect(textarea).to_have_value("First")
+        expect(status).to_have_text("Queueing…")
+
+        _ = page.evaluate("() => window.jampotRelease()")
+        expect(dialog).not_to_be_visible()
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        # The next comment is a draft again, and survives a reload.
+        page.locator("#action").click(button="right")
+        textarea.press_sequentially("Second")
+        _ = page.reload()
+        expect(textarea).to_have_value("Second")
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "First"
+
+
+def test_a_refused_comment_is_a_draft_again(tmp_path: Path, page: Page) -> None:
+    """A comment the joiner refuses (too many) goes back to the dialog, and
+    is a draft again: a reload keeps it."""
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = page.evaluate(HOLD_COMMENTS, "too many comments")
+        page.locator("#intro").click(button="right")
+        textarea = overlay(page, "textarea")
+        textarea.press_sequentially("Refused")
+        textarea.press("Enter")
+        expect(overlay(page, "#status")).to_have_text("Queueing…")
+        textarea.press("Escape")
+        _ = page.evaluate("() => window.jampotRelease()")
+        expect(overlay(page, "#status")).to_have_text("too many comments")
+        expect(overlay(page, "#jampot-dialog")).to_be_visible()
+        expect(overlay(page, "#outbox-list li")).to_have_count(0)
+        _ = page.reload()
+        expect(textarea).to_have_value("Refused")
+        expect(overlay(page, "#badge")).to_have_text("0 queued")
+
+
+def test_a_reload_during_sending_does_not_send_twice(
+    tmp_path: Path, page: Page
+) -> None:
+    """The share took the comment, but the page reloaded before it heard:
+    the comment is not a draft any more, and goes out once."""
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        page.locator("#intro").click(button="right")
+        textarea = overlay(page, "textarea")
+        textarea.press_sequentially("Exactly once")
+        # The joiner's answer arrives, but the page never sees it.
+        _ = page.evaluate(
+            """() => {
+                const original = window.fetch;
+                window.fetch = async (...args) => {
+                    const response = await original(...args);
+                    if (String(args[0]).includes("/api/comments")) {
+                        window.jampotAccepted = response.status;
+                        await new Promise(() => {});
+                    }
+                    return response;
+                };
+            }"""
+        )
+        textarea.press("Enter")
+        _ = page.wait_for_function("window.jampotAccepted === 202")
+        _ = page.reload()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        rows = overlay(page, "#outbox-list li")
+        expect(rows).to_have_count(1)
+        expect(rows).to_have_attribute("data-state", "queued")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "Exactly once"
+        assert record["selector"] == "#intro"
+
+
 def test_a_joiner_with_another_page_api_is_not_used(tmp_path: Path, page: Page) -> None:
     with (
         share(tmp_path, "serve", str(SITE)) as shared,

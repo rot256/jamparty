@@ -96,6 +96,7 @@ var SHARE_VERSION = SCRIPT_URL.searchParams.get("version");
 var HOST_ID = "jampot";
 var DISMISSED_KEY = "jampot-dismissed-v1";
 var OUTBOX_KEY = "jampot-outbox-v1";
+var DRAFT_KEY = "jampot-draft-v1";
 var MAX_OUTBOX = 20;
 var WATCHDOG_MS = 35e3;
 var AGENT_TARGET_PREFIX = "jampot-agent:";
@@ -1220,9 +1221,83 @@ var CursorLayer = class {
   }
 };
 
+// client/src/draft.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function parseKind(value) {
+  switch (value) {
+    case "element":
+    case "page":
+    case "answer":
+      return value;
+    default:
+      return null;
+  }
+}
+function parseTarget(value) {
+  if (!isRecord(value)) return null;
+  const kind = parseKind(value.kind);
+  const { selector } = value;
+  if (kind === null || typeof selector !== "string") return null;
+  return { kind, selector };
+}
+function parse(value) {
+  if (!isRecord(value)) return null;
+  const { page, unavailable, selectedText, comment } = value;
+  const target = parseTarget(value.target);
+  if (typeof page !== "string" || typeof comment !== "string" || target === null) return null;
+  return {
+    page,
+    target,
+    unavailable: unavailable === true,
+    selectedText: typeof selectedText === "string" ? selectedText : null,
+    comment
+  };
+}
+function saveDraft(draft) {
+  try {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+  }
+}
+function clearDraft() {
+  try {
+    sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+  }
+}
+function isThisPage(page) {
+  try {
+    const url = new URL(page);
+    const here = window.location;
+    return url.pathname === here.pathname && url.search === here.search && url.hash === here.hash;
+  } catch {
+    return false;
+  }
+}
+function loadDraft() {
+  try {
+    const draft = parse(JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? "null"));
+    return draft !== null && isThisPage(draft.page) ? draft : null;
+  } catch {
+    return null;
+  }
+}
+
 // client/src/dialog.ts
 var ELEMENT_LABEL = "Comment:";
 var ANSWER_LABEL = "Comment on agent response:";
+var GONE = "The element is gone; this will be a page comment.";
+function labelFor(kind) {
+  switch (kind) {
+    case "element":
+    case "page":
+      return ELEMENT_LABEL;
+    case "answer":
+      return ANSWER_LABEL;
+  }
+}
 var CommentDialog = class {
   constructor(ui, outbox) {
     this.ui = ui;
@@ -1232,6 +1307,9 @@ var CommentDialog = class {
       event.preventDefault();
       this.submit();
     });
+    textarea.addEventListener("input", () => {
+      this.keep();
+    });
     textarea.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
@@ -1239,16 +1317,16 @@ var CommentDialog = class {
       }
     });
     cancel.addEventListener("click", () => {
-      this.close();
+      this.dismiss();
     });
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
-      this.close();
+      this.dismiss();
     });
     dialog.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       const rect = dialog.getBoundingClientRect();
-      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) this.close();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) this.dismiss();
     });
     dialog.addEventListener("close", () => {
       this.stopTracking();
@@ -1258,10 +1336,24 @@ var CommentDialog = class {
   ui;
   outbox;
   captured = null;
+  /** What the dialog was opened on, which a draft keeps. */
+  target = { kind: "page", selector: "" };
+  /** The target was gone after a reload: a page comment now. */
+  unavailable = false;
+  /** Handed to the outbox and on its way: no draft any more. */
+  sending = false;
   /** A live reload waiting for the dialog to close. */
   pendingReload = false;
   get open() {
     return this.ui.dialog.open;
+  }
+  /**
+   * Closes the dialog at the person's request (Cancel, Escape, a click
+   * outside), unless its comment is on its way: it stays until the joiner
+   * answers, so no other comment starts meanwhile.
+   */
+  dismiss() {
+    if (!this.sending) this.close();
   }
   /** Reloads now, or when the dialog closes if it is open. */
   reloadWhenClosed() {
@@ -1272,11 +1364,60 @@ var CommentDialog = class {
       window.location.reload();
     }
   }
-  openElement(target, x, y, selector, label = ELEMENT_LABEL) {
-    this.show(captureTarget(target, selector), x, y, label);
+  /** Opens on `target`; `selector` names it when the page cannot (an answer). */
+  openElement(target, x, y, selector) {
+    const kind = selector?.startsWith(AGENT_TARGET_PREFIX) ? "answer" : "element";
+    const captured = captureTarget(target, selector);
+    this.show(captured, x, y, { kind, selector: captured.selector });
   }
   openPage() {
-    this.show(capturePageTarget(), window.innerWidth / 2, window.innerHeight / 3, ELEMENT_LABEL);
+    const x = window.innerWidth / 2;
+    const y = window.innerHeight / 3;
+    this.show(capturePageTarget(), x, y, { kind: "page", selector: "" });
+  }
+  /**
+   * Opens the dialog again on the draft this page left, if any, its target
+   * found by `find`. A target that is gone makes it a page comment, for
+   * good: it stays one after further reloads, and the dialog says so.
+   */
+  restore(find) {
+    const draft = loadDraft();
+    if (draft === null || this.ui.dialog.open) return;
+    const { target, selectedText } = draft;
+    let element = null;
+    if (target.kind !== "page" && !draft.unavailable) {
+      try {
+        element = find(target.selector);
+      } catch {
+      }
+    }
+    const page = window.location.href;
+    let x = window.innerWidth / 2;
+    let y = window.innerHeight / 3;
+    let captured = { element: null, page, selector: "", selectedText };
+    if (element !== null) {
+      captured = { element, page, selector: target.selector, selectedText };
+      const rect = element.getBoundingClientRect();
+      x = rect.left;
+      y = rect.bottom;
+    }
+    this.show(captured, x, y, target);
+    this.unavailable = target.kind !== "page" && element === null;
+    this.ui.textarea.value = draft.comment;
+    if (this.unavailable) this.ui.status.textContent = GONE;
+    this.keep();
+  }
+  /** Keeps what the open dialog holds, for after a reload. */
+  keep() {
+    const captured = this.captured;
+    if (captured === null || !this.ui.dialog.open || this.sending) return;
+    saveDraft({
+      page: captured.page,
+      target: this.target,
+      unavailable: this.unavailable,
+      selectedText: captured.selectedText,
+      comment: this.ui.textarea.value
+    });
   }
   updateHighlight = () => {
     const { highlight, dialog } = this.ui;
@@ -1304,14 +1445,16 @@ var CommentDialog = class {
     dialog.style.left = `${Math.max(gap, Math.min(x + gap, window.innerWidth - width - gap))}px`;
     dialog.style.top = `${Math.max(gap, Math.min(y + gap, window.innerHeight - height - gap))}px`;
   }
-  show(captured, x, y, label) {
+  show(captured, x, y, target) {
     const ui = this.ui;
     if (ui.dialog.open) {
       ui.textarea.focus();
       return;
     }
     this.captured = captured;
-    ui.dialogLabel.textContent = label;
+    this.target = target;
+    this.unavailable = false;
+    ui.dialogLabel.textContent = labelFor(target.kind);
     ui.selectionPreview.hidden = captured.selectedText === null;
     ui.selectionText.textContent = captured.selectedText ?? "";
     ui.status.textContent = "";
@@ -1323,6 +1466,7 @@ var CommentDialog = class {
     window.addEventListener("resize", this.updateHighlight);
     window.addEventListener("scroll", this.updateHighlight, true);
     ui.textarea.focus();
+    this.keep();
   }
   close() {
     const ui = this.ui;
@@ -1331,6 +1475,8 @@ var CommentDialog = class {
     this.stopTracking();
     ui.highlight.style.display = "none";
     this.captured = null;
+    this.unavailable = false;
+    clearDraft();
     ui.selectionPreview.hidden = true;
     ui.selectionText.textContent = "";
     ui.status.textContent = "";
@@ -1340,7 +1486,7 @@ var CommentDialog = class {
   submit() {
     const ui = this.ui;
     const captured = this.captured;
-    if (!captured) return;
+    if (!captured || this.sending) return;
     const comment = ui.textarea.value.trim();
     if (!comment) {
       ui.status.textContent = "Enter a comment before queueing it.";
@@ -1357,22 +1503,28 @@ var CommentDialog = class {
       comment
     };
     const ref = crypto.randomUUID();
-    const at = Date.now();
+    const entry = this.outbox.sending(draft, ref);
+    this.sending = true;
+    clearDraft();
     submit({ ref, ...draft }).then((queued) => {
-      this.outbox.add({ draft, ref, id: queued.id, state: "queued", at });
+      this.outbox.accepted(entry, queued);
       this.outbox.onQueued(queued);
       this.close();
       ui.showToast(`Comment queued · ${queued.pending} pending`);
     }).catch((error) => {
       if (error instanceof SubmitError && error.unsent) {
-        this.outbox.add({ draft, ref, id: null, state: "unsent", at });
+        this.outbox.unsent(entry);
         this.close();
         ui.showToast("Not sent: kept in the page, sent when the connection is back");
         return;
       }
+      this.outbox.withdraw(entry);
+      this.sending = false;
+      this.keep();
       ui.status.textContent = error instanceof Error ? error.message : "Could not queue comment";
       ui.textarea.focus();
     }).finally(() => {
+      this.sending = false;
       ui.send.disabled = false;
       ui.cancel.disabled = false;
     });
@@ -1650,11 +1802,11 @@ var NamePrompt = class {
 
 // client/src/outbox.ts
 var MAX_EARLY = 100;
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null;
 }
 function parseDraft(value) {
-  if (!isRecord(value)) return null;
+  if (!isRecord2(value)) return null;
   const { page, selector, selectedText, comment } = value;
   if (typeof page !== "string" || typeof selector !== "string" || typeof comment !== "string") {
     return null;
@@ -1676,7 +1828,7 @@ function parseState(value) {
   }
 }
 function parseEntry(value) {
-  if (!isRecord(value)) return null;
+  if (!isRecord2(value)) return null;
   const draft = parseDraft(value.draft);
   if (draft === null) return null;
   return {
@@ -1707,11 +1859,6 @@ var Outbox = class {
    * can overtake the joiner's answer to the page); the latest few.
    */
   early = [];
-  add(entry) {
-    this.settle(entry);
-    this.entries.push(entry);
-    this.changed();
-  }
   /** A queued entry whose delivery came first is delivered. */
   settle(entry) {
     if (entry.state !== "queued" || entry.id === null) return;
@@ -1731,6 +1878,34 @@ var Outbox = class {
     } catch {
     }
     this.onChange();
+  }
+  /**
+   * A comment about to be sent, kept first: a reload before the joiner's
+   * answer sends it again under the same ref, so it is queued once.
+   */
+  sending(draft, ref) {
+    const entry = { draft, ref, id: null, state: "sending", at: Date.now() };
+    this.entries.push(entry);
+    this.changed();
+    return entry;
+  }
+  /** The joiner queued `entry`. */
+  accepted(entry, queued) {
+    entry.id = queued.id;
+    entry.state = "queued";
+    this.settle(entry);
+    this.changed();
+  }
+  /** `entry` did not reach the joiner: kept, sent again later. */
+  unsent(entry) {
+    entry.state = "unsent";
+    this.changed();
+  }
+  /** `entry` was refused (rate limit, full queue): back to the dialog. */
+  withdraw(entry) {
+    const index = this.entries.indexOf(entry);
+    if (index !== -1) this.entries.splice(index, 1);
+    this.changed();
   }
   async resend(entry) {
     if (entry.state !== "unsent") return;
@@ -2707,6 +2882,12 @@ function install() {
     reloadRevision = String(revision);
     dialog.reloadWhenClosed();
   };
+  let restored = false;
+  const restoreDraft = () => {
+    if (restored) return;
+    restored = true;
+    dialog.restore((selector) => answers.targetFor(selector));
+  };
   const connection = new Connection({
     state(view, recovered) {
       connectionView = view;
@@ -2725,6 +2906,7 @@ function install() {
         outbox.markDeliveredExcept(status.undelivered);
       }
       for (const answer of status.answers) answers.add(answer);
+      restoreDraft();
       if (parts.has("settings")) panel.show(status.settings);
       if (parts.has("presence")) showPeople(status.here);
       else if (parts.has("connection")) showPeople(here);
@@ -2803,8 +2985,7 @@ function install() {
       target,
       event.clientX,
       event.clientY,
-      `${AGENT_TARGET_PREFIX}${target.dataset.messageId}`,
-      ANSWER_LABEL
+      `${AGENT_TARGET_PREFIX}${target.dataset.messageId}`
     );
   }, true);
   document.addEventListener("keydown", (event) => {
@@ -2815,6 +2996,7 @@ function install() {
     dialog.openPage();
   }, true);
   list.render();
+  if (loadDraft()?.target.kind !== "answer") restoreDraft();
   void connection.start();
 }
 if (document.readyState === "loading") {

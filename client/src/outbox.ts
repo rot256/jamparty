@@ -10,7 +10,7 @@ const MAX_EARLY = 100;
 import type { Queued, Submission } from "./generated/api";
 
 /** A comment as the page hands it to the joiner, without its ref. */
-type Draft = Omit<Submission, "ref">;
+export type Draft = Omit<Submission, "ref">;
 
 type OutboxState = "queued" | "delivered" | "unsent" | "sending";
 
@@ -90,12 +90,6 @@ export class Outbox {
    */
   private early: string[] = [];
 
-  add(entry: OutboxEntry): void {
-    this.settle(entry);
-    this.entries.push(entry);
-    this.changed();
-  }
-
   /** A queued entry whose delivery came first is delivered. */
   private settle(entry: OutboxEntry): void {
     if (entry.state !== "queued" || entry.id === null) return;
@@ -117,6 +111,38 @@ export class Outbox {
       // The list stays in this document if storage is unavailable.
     }
     this.onChange();
+  }
+
+  /**
+   * A comment about to be sent, kept first: a reload before the joiner's
+   * answer sends it again under the same ref, so it is queued once.
+   */
+  sending(draft: Draft, ref: string): OutboxEntry {
+    const entry: OutboxEntry = { draft, ref, id: null, state: "sending", at: Date.now() };
+    this.entries.push(entry);
+    this.changed();
+    return entry;
+  }
+
+  /** The joiner queued `entry`. */
+  accepted(entry: OutboxEntry, queued: Queued): void {
+    entry.id = queued.id;
+    entry.state = "queued";
+    this.settle(entry);
+    this.changed();
+  }
+
+  /** `entry` did not reach the joiner: kept, sent again later. */
+  unsent(entry: OutboxEntry): void {
+    entry.state = "unsent";
+    this.changed();
+  }
+
+  /** `entry` was refused (rate limit, full queue): back to the dialog. */
+  withdraw(entry: OutboxEntry): void {
+    const index = this.entries.indexOf(entry);
+    if (index !== -1) this.entries.splice(index, 1);
+    this.changed();
   }
 
   async resend(entry: OutboxEntry): Promise<void> {
