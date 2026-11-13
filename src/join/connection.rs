@@ -14,7 +14,7 @@ use crate::{
     Report,
     adapters::{endpoint, lines},
     core::{queue::backoff, token::PartyToken},
-    join::session::{Control, Session},
+    join::{control::Control, session::Session},
     protocol::control::{Envelope, JoinerMessage, RefusedReason, ShareMessage, SiteInfo},
     share::REFUSED_CODE,
 };

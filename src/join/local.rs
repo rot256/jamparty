@@ -27,10 +27,7 @@ use crate::{
     core::request::{
         FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade, is_navigation,
     },
-    join::{
-        api,
-        session::{Control, Session},
-    },
+    join::{api, control::Control, session::Session},
     share::{
         HEADER_READ_TIMEOUT,
         body::{AppBody, RequestError, full_body, map_incoming_response},

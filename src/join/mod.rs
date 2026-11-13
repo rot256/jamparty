@@ -3,6 +3,7 @@
 
 mod api;
 mod connection;
+mod control;
 mod local;
 mod markdown;
 mod session;
@@ -357,7 +358,7 @@ impl Joiner {
     /// The current control stream, if admitted.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn control(&self) -> Option<Arc<session::Control>> {
+    pub(crate) fn control(&self) -> Option<Arc<control::Control>> {
         self.session.control()
     }
 
