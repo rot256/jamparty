@@ -4,7 +4,8 @@ use crate::core::{
     ids::EndpointKey,
     port::Port,
     request::{
-        LocalOrigin, Method, Refusal, RequestFacts, Route, SOCKET_PATH, STATUS_PATH, Upgrade,
+        CLIENT_PATH, LocalOrigin, Method, Refusal, RequestFacts, Route, SOCKET_PATH, STATUS_PATH,
+        Upgrade,
     },
 };
 
@@ -116,8 +117,22 @@ fn table() {
         ("site put", fetch(Method::Other, "/api/x"), Ok(Route::Proxy)),
         (
             "client.js",
-            fetch(Method::Get, "/_jampot/client.js"),
-            Ok(Route::Proxy),
+            fetch(Method::Get, CLIENT_PATH),
+            Ok(Route::Client),
+        ),
+        (
+            "head client.js",
+            fetch(Method::Head, CLIENT_PATH),
+            Ok(Route::Client),
+        ),
+        (
+            "client.js as a module",
+            RequestFacts {
+                origin: Some(ORIGIN),
+                sec_fetch_dest: Some("script"),
+                ..fetch(Method::Get, CLIENT_PATH)
+            },
+            Ok(Route::Client),
         ),
         ("upgrade", upgrade(Some("same-origin")), Ok(Route::Proxy)),
         ("upgrade no site", upgrade(None), Ok(Route::Proxy)),
@@ -157,6 +172,27 @@ fn table() {
                 ..upgrade(Some("same-origin"))
             },
             Err(Refusal::MethodNotAllowed),
+        ),
+        (
+            "post client.js",
+            fetch(Method::Post, CLIENT_PATH),
+            Err(Refusal::MethodNotAllowed),
+        ),
+        (
+            "upgrade client.js",
+            RequestFacts {
+                path: CLIENT_PATH,
+                ..upgrade(Some("same-origin"))
+            },
+            Err(Refusal::MethodNotAllowed),
+        ),
+        (
+            "cross-site client.js",
+            RequestFacts {
+                sec_fetch_site: Some("cross-site"),
+                ..fetch(Method::Get, CLIENT_PATH)
+            },
+            Err(Refusal::CrossSite),
         ),
         (
             "socket without upgrade",

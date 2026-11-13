@@ -47,10 +47,6 @@ async fn static_files_with_the_client_injected() {
     assert_eq!(css.status, 200);
     assert_eq!(css.body, "h1 { color: red }");
 
-    let client = get(&joiner, "/_jampot/client.js").await;
-    assert_eq!(client.status, 200);
-    assert!(client.body.contains("api/socket"));
-
     for hidden in ["/.secret", "/%2esecret", "/missing", "/_jampot/other"] {
         assert_eq!(get(&joiner, hidden).await.status, 404, "{hidden}");
     }
@@ -248,4 +244,43 @@ async fn without_the_share_a_page_load_gets_a_page_that_retries() {
     let asset = get(&joiner, "/style.css").await;
     assert_eq!(asset.status, StatusCode::BAD_GATEWAY);
     assert_eq!(asset.body, r#"{"error":"the share is not reachable"}"#);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_joiner_serves_the_client_itself() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let joiner = joiner_waiting(
+        share.token().clone(),
+        share.direct_addrs(),
+        "alice",
+        generate_key(&SystemRng),
+        Duration::from_millis(300),
+    )
+    .await;
+    let mut view = joiner.watch();
+    within("admission", view.wait_for(|view| view.link.connected))
+        .await
+        .unwrap();
+    // With the share gone, the client still comes: from the joiner.
+    share.stop().await;
+    until("the joiner notices", || {
+        !joiner.watch().borrow().link.connected
+    })
+    .await;
+    let client = get(&joiner, "/_jampot/client.js?live=3&version=0.0.1").await;
+    assert_eq!(client.status, 200);
+    assert_eq!(
+        client.headers.get(header::CONTENT_TYPE).unwrap(),
+        "text/javascript; charset=utf-8"
+    );
+    assert_eq!(
+        client.headers.get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    assert_eq!(client.body, include_str!("../../assets/client.js"));
+    let head = local(&joiner, "HEAD", "/_jampot/client.js")
+        .body(Full::default())
+        .unwrap();
+    assert_eq!(fetch(&joiner, head).await.status, 200);
 }

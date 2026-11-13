@@ -12,17 +12,20 @@
 //!   that one too.
 //!
 //! Paths are matched exactly as received (no decoding or normalisation).
-//! Everything under `/_jampot/api/` is the joiner's own: its two paths
-//! (the page API's version, and the page's socket, the one path that
-//! takes an upgrade), and a 404 for any other, which never reaches the
-//! share. Everything else goes to the share.
+//! The joiner answers `/_jampot/client.js` (GET or HEAD) itself, so a
+//! page's client is always its joiner's. Everything under `/_jampot/api/`
+//! is the joiner's own too: the page's socket (GET with an upgrade), and
+//! a 404 for any other path, which never reaches the share. Everything
+//! else goes to the share.
 
 use crate::core::{ids::Sid, port::Port};
 
 /// Every response carries `Content-Security-Policy` with this value.
 pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
 
-/// The joiner's own paths start with this.
+/// The browser client the share's pages load.
+pub(crate) const CLIENT_PATH: &str = "/_jampot/client.js";
+/// The joiner's API paths start with this.
 const API_PREFIX: &str = "/_jampot/api/";
 pub(crate) const STATUS_PATH: &str = "/_jampot/api/status";
 pub(crate) const SOCKET_PATH: &str = "/_jampot/api/socket";
@@ -72,6 +75,8 @@ pub(crate) struct RequestFacts<'a> {
 /// Who answers an accepted request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
+    /// GET or HEAD the browser client.
+    Client,
     /// GET the page API's version.
     Status,
     /// GET with an upgrade: the page's WebSocket.
@@ -179,6 +184,17 @@ pub(crate) fn is_navigation(facts: &RequestFacts<'_>) -> bool {
 
 fn route(facts: &RequestFacts<'_>) -> Result<Route, Refusal> {
     let (route, method, upgrade) = match facts.path {
+        CLIENT_PATH => {
+            let read = match facts.method {
+                Method::Get | Method::Head => facts.upgrade == Upgrade::No,
+                Method::Post | Method::Other => false,
+            };
+            return if read {
+                Ok(Route::Client)
+            } else {
+                Err(Refusal::MethodNotAllowed)
+            };
+        }
         STATUS_PATH => (Route::Status, Method::Get, Upgrade::No),
         SOCKET_PATH => (Route::Socket, Method::Get, Upgrade::Yes),
         path if path.starts_with(API_PREFIX) => return Ok(Route::Unknown),

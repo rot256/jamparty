@@ -1,6 +1,7 @@
 //! The joiner's local HTTP server on `127.0.0.1`: checks each request with
-//! the core decision, answers jampot's own paths and forwards everything
-//! else to the share, one iroh stream per request.
+//! the core decision, answers jampot's own paths (the browser client
+//! included) and forwards everything else to the share, one iroh stream
+//! per request.
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
@@ -30,9 +31,13 @@ use crate::{
     join::{api, control::Control, session::Session, socket},
     share::{
         HEADER_READ_TIMEOUT,
-        body::{AppBody, RequestError, full_body, map_incoming_response},
+        body::{AppBody, RequestError, full_body, javascript_response, map_incoming_response},
     },
 };
+
+/// The browser client the share's pages load: this joiner's own, so it
+/// always speaks this joiner's page API.
+const CLIENT_JS: &str = include_str!("../../assets/client.js");
 
 /// The pause after a failed accept.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
@@ -98,6 +103,7 @@ async fn handle(
     let page_load = is_navigation(&request_facts);
     let decision = origin.decide(&request_facts);
     let mut response = match decision {
+        Ok(Route::Client) => javascript_response(CLIENT_JS),
         Ok(Route::Status) => api::status(),
         Ok(Route::Socket) => socket::open(request, session),
         Ok(Route::Unknown) => {

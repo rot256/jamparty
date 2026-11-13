@@ -1,11 +1,11 @@
 //! Request streams: one HTTP/1.1 exchange (or upgrade) per iroh stream,
 //! answered from the directory or the dev server, with the client
-//! injected.
+//! injected (the joiner serves the client itself).
 
 use std::{convert::Infallible, time::Duration};
 
 use hyper::{
-    Method, Request, Response, StatusCode, body::Incoming, server::conn::http1, service::service_fn,
+    Request, Response, StatusCode, body::Incoming, server::conn::http1, service::service_fn,
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
 use iroh::endpoint::{RecvStream, SendStream};
@@ -14,7 +14,7 @@ use tokio::io;
 use crate::{
     protocol::control::SiteInfo,
     share::{
-        body::{AppBody, RequestError, javascript_response},
+        body::{AppBody, RequestError},
         files::Files,
         live::ReloadState,
         proxy::Proxy,
@@ -25,8 +25,6 @@ use crate::{
 /// local server.
 pub(crate) const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const RESERVED_PREFIX: &str = "/_jampot/";
-const CLIENT_PATH: &str = "/_jampot/client.js";
-const CLIENT_JS: &str = include_str!("../../assets/client.js");
 
 /// What the share serves.
 #[derive(Clone)]
@@ -75,13 +73,7 @@ pub(crate) async fn serve_stream(send: SendStream, recv: RecvStream, site: Site)
 
 async fn handle(request: Request<Incoming>, site: Site) -> Response<AppBody> {
     let path = request.uri().path();
-    let result = if path == CLIENT_PATH {
-        if request.method() == Method::GET || request.method() == Method::HEAD {
-            Ok(javascript_response(CLIENT_JS))
-        } else {
-            Err(RequestError::method_not_allowed("GET, HEAD"))
-        }
-    } else if path.starts_with(RESERVED_PREFIX) {
+    let result = if path.starts_with(RESERVED_PREFIX) {
         Err(RequestError::new(
             StatusCode::NOT_FOUND,
             "reserved jampot resource not found",
