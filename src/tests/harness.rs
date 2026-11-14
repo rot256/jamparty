@@ -253,7 +253,7 @@ pub(crate) async fn try_joiner_with(
     within("the joiner to start", Joiner::start(config)).await
 }
 
-/// A settings file in a directory of its own, not created until saved.
+/// A settings file in a directory of its own, never created.
 fn settings_path() -> PathBuf {
     env::temp_dir()
         .join(format!("jampot-test-{}", uuid::Uuid::new_v4()))

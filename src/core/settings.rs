@@ -171,7 +171,7 @@ impl Default for Settings {
     }
 }
 
-/// A change from the page: the fields given replace the saved ones.
+/// A change from the page: the fields given replace the current ones.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]

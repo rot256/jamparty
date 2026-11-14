@@ -159,7 +159,7 @@ export class Panel {
   }
 
   /**
-   * Asks the joiner for a change. What it saved comes as a settings
+   * Asks the joiner for a change. What it took comes as a settings
    * message, in order with everyone else's; only a failure is shown here.
    */
   private async change(change: SettingsChange): Promise<void> {

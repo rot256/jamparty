@@ -1,5 +1,5 @@
 //! I/O at the edges: iroh endpoints, control-line framing, HTTP bodies, the
-//! joiner's key and settings files, the runtime socket, the command target
+//! joiner's settings file, the runtime socket, the command target
 //! and the t3 target (an MCP client).
 
 pub(crate) mod command;
