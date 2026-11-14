@@ -8,12 +8,10 @@ use crate::{
     },
     protocol::{
         comment::{Author, Draft},
-        control::{AckOutcome, CommentRef, ShareMessage},
+        control::{AckOutcome, CommentRef, MAX_QUEUED_PER_KEY, ShareMessage},
         presence::{Position, Whereabouts},
     },
-    share::hub::{
-        ACK_QUEUE, Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, MAX_QUEUED_PER_KEY, Outgoing,
-    },
+    share::hub::{ACK_QUEUE, Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, Outgoing},
 };
 
 fn hub() -> (Arc<Hub>, Arc<ManualClock>) {

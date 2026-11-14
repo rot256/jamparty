@@ -19,7 +19,7 @@ use crate::{
         control::Control,
         pages::{Attached, Dropped, Full, PageId, Pages},
         preferences::{self, Preferences},
-        state::{Snapshot, State},
+        state::{Snapshot, State, TooMany},
         uplink::Uplink,
     },
     protocol::{
@@ -336,13 +336,30 @@ impl Session {
 
     /// The share admitted us on `control`; of our comments it still holds
     /// `undelivered`.
-    pub(crate) fn connected(&self, control: Arc<Control>, you: Author, undelivered: &[CommentId]) {
-        self.commit(|inner| {
-            inner.admissions = inner.admissions.next();
-            inner.control = Some((inner.admissions, control));
-            inner.state.admitted(you, undelivered).into()
+    /// Fails, changing nothing, for a share that claims more undelivered
+    /// comments than a share holds.
+    pub(crate) fn connected(
+        &self,
+        control: Arc<Control>,
+        you: Author,
+        undelivered: &[CommentId],
+    ) -> Result<(), TooMany> {
+        let mut result = Ok(());
+        self.commit(|inner| match inner.state.admitted(you, undelivered) {
+            Ok(messages) => {
+                inner.admissions = inner.admissions.next();
+                inner.control = Some((inner.admissions, control));
+                messages.into()
+            }
+            Err(too_many) => {
+                result = Err(too_many);
+                Vec::new().into()
+            }
         });
-        self.uplink.changed();
+        if result.is_ok() {
+            self.uplink.changed();
+        }
+        result
     }
 
     /// The share speaks another protocol: the joiner gives up.
@@ -365,14 +382,24 @@ impl Session {
         });
     }
 
-    /// Applies a message from the share after admission.
-    pub(crate) fn apply(&self, control: &Control, message: ShareMessage) {
+    /// Applies a message from the share after admission; fails, changing
+    /// nothing, on an acknowledgement that would have this joiner hold
+    /// more undelivered comments than a share keeps.
+    pub(crate) fn apply(&self, control: &Control, message: ShareMessage) -> Result<(), TooMany> {
         match message {
             ShareMessage::CommentAck { reference, outcome } => {
                 // Applied here, in the share's order (an acknowledgement
                 // before its comment's delivery), before the comment's
                 // reply.
-                self.commit(|inner| inner.state.acknowledged(outcome).into());
+                let mut result = Ok(());
+                self.commit(|inner| match inner.state.acknowledged(outcome) {
+                    Ok(messages) => messages.into(),
+                    Err(too_many) => {
+                        result = Err(too_many);
+                        Vec::new().into()
+                    }
+                });
+                result?;
                 control.acknowledge(&reference, outcome);
             }
             other @ (ShareMessage::Admitted { .. }
@@ -386,6 +413,7 @@ impl Session {
                 self.commit(|inner| inner.state.apply(other).into());
             }
         }
+        Ok(())
     }
 }
 

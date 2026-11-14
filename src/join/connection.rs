@@ -202,7 +202,17 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
         }
     };
     let control = Arc::new(Control::new(connection, send));
-    session.connected(Arc::clone(&control), you, &undelivered);
+    if session
+        .connected(Arc::clone(&control), you, &undelivered)
+        .is_err()
+    {
+        control
+            .connection
+            .close(VarInt::from_u32(0), b"too many comments");
+        return Ended::Failed(report!(
+            "the share claims more pending comments than a share keeps"
+        ));
+    }
     if let Some(first) = first.take() {
         let _ = first.send(Ok(welcome));
     }
@@ -232,7 +242,12 @@ async fn receive(recv: &mut BufReader<RecvStream>, control: &Control, session: &
             Ok(Some(Envelope {
                 version: _,
                 message,
-            })) => session.apply(control, message),
+            })) => {
+                if session.apply(control, message).is_err() {
+                    tracing::warn!("the share claims more pending comments than a share keeps");
+                    return;
+                }
+            }
             Ok(None) => return,
             Err(error) => {
                 tracing::debug!(%error, "control stream ended");

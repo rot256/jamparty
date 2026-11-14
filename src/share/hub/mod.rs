@@ -56,8 +56,6 @@ const MAX_ANSWERS: usize = 100;
 /// bounds a presence line (64 authors of at most ~160 bytes).
 pub(crate) const MAX_JOINERS: usize = 64;
 pub(crate) const MAX_JOINERS_PER_KEY: usize = 4;
-/// Undelivered comments one joiner key may have in the queue.
-pub(crate) const MAX_QUEUED_PER_KEY: usize = 100;
 /// Comment refs remembered, so a comment sent again is queued once.
 const MAX_REFS: usize = 1000;
 /// Cursor messages waiting for one joiner's control stream; more are

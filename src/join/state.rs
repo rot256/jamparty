@@ -14,7 +14,9 @@ use crate::{
     join::{api::ToPage, markdown, preferences::PageSettings},
     protocol::{
         comment::{Author, CommentPage, CommentSelector},
-        control::{AckOutcome, RefusedReason, Revision, ShareMessage, StatusLine},
+        control::{
+            AckOutcome, MAX_QUEUED_PER_KEY, RefusedReason, Revision, ShareMessage, StatusLine,
+        },
         presence::Person,
     },
 };
@@ -93,6 +95,19 @@ pub(crate) struct Mine {
     undelivered: Option<BTreeSet<CommentId>>,
 }
 
+/// Comments this joiner holds as pending, at most. A share keeps
+/// [`MAX_QUEUED_PER_KEY`], but the joiner's view can lag it: the share
+/// sends a new comment's acknowledgement ahead of an earlier delivery, so
+/// for a moment the joiner still holds delivered ones. This bounds what a
+/// hostile share can make it hold, far past any honest lag; were an honest
+/// share to pass it, the reconnect's admission would set things right.
+pub(crate) const MAX_PENDING: usize = 10 * MAX_QUEUED_PER_KEY;
+
+/// The share claims more undelivered comments of this joiner than it can
+/// hold: it is not one to trust.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TooMany;
+
 impl Mine {
     #[must_use]
     pub(crate) fn view(&self) -> Option<Vec<CommentId>> {
@@ -103,12 +118,22 @@ impl Mine {
 
     /// The share admitted this joiner holding `undelivered` of its
     /// comments; any others were delivered meanwhile.
-    fn admitted(&mut self, undelivered: &[CommentId]) {
-        self.undelivered = Some(undelivered.iter().copied().collect());
+    fn admitted(&mut self, undelivered: &[CommentId]) -> Result<(), TooMany> {
+        let undelivered: BTreeSet<CommentId> = undelivered.iter().copied().collect();
+        if undelivered.len() > MAX_QUEUED_PER_KEY {
+            return Err(TooMany);
+        }
+        self.undelivered = Some(undelivered);
+        Ok(())
     }
 
-    fn queued(&mut self, id: CommentId) {
-        self.undelivered.get_or_insert_default().insert(id);
+    fn queued(&mut self, id: CommentId) -> Result<(), TooMany> {
+        let undelivered = self.undelivered.get_or_insert_default();
+        if undelivered.len() >= MAX_PENDING && !undelivered.contains(&id) {
+            return Err(TooMany);
+        }
+        undelivered.insert(id);
+        Ok(())
     }
 
     fn delivered(&mut self, ids: &[CommentId]) {
@@ -171,15 +196,19 @@ impl State {
     /// The share admitted this joiner as `you`, holding `undelivered` of
     /// its comments. A status line from before is dropped: the share
     /// sends its own after admission, if it has one.
-    pub(crate) fn admitted(&mut self, you: Author, undelivered: &[CommentId]) -> Vec<ToPage> {
+    pub(crate) fn admitted(
+        &mut self,
+        you: Author,
+        undelivered: &[CommentId],
+    ) -> Result<Vec<ToPage>, TooMany> {
+        self.mine.admitted(undelivered)?;
         self.link = Link {
             connected: true,
             refused: None,
             you: Some(you),
             status: None,
         };
-        self.mine.admitted(undelivered);
-        vec![ToPage::Link(self.link.clone()), self.mine_message()]
+        Ok(vec![ToPage::Link(self.link.clone()), self.mine_message()])
     }
 
     /// The connection is gone (or never came up); `refused` when for good.
@@ -203,13 +232,13 @@ impl State {
     }
 
     /// The share's answer to one of this joiner's comments.
-    pub(crate) fn acknowledged(&mut self, outcome: AckOutcome) -> Vec<ToPage> {
+    pub(crate) fn acknowledged(&mut self, outcome: AckOutcome) -> Result<Vec<ToPage>, TooMany> {
         match outcome {
-            AckOutcome::Queued { id } => self.mine.queued(id),
+            AckOutcome::Queued { id } => self.mine.queued(id)?,
             AckOutcome::Delivered { id } => self.mine.delivered(&[id]),
-            AckOutcome::RateLimited { .. } | AckOutcome::QueueFull => return Vec::new(),
+            AckOutcome::RateLimited { .. } | AckOutcome::QueueFull => return Ok(Vec::new()),
         }
-        vec![self.mine_message()]
+        Ok(vec![self.mine_message()])
     }
 
     /// The settings changed.

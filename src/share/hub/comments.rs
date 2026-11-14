@@ -10,9 +10,9 @@ use crate::{
     },
     protocol::{
         comment::{Author, Comment, Draft},
-        control::{AckOutcome, Anchor, CommentRef, ShareMessage, StatusLine},
+        control::{AckOutcome, Anchor, CommentRef, MAX_QUEUED_PER_KEY, ShareMessage, StatusLine},
     },
-    share::hub::{Audience, Hub, Inner, MAX_ANCHORS, MAX_QUEUED_PER_KEY, MAX_REFS},
+    share::hub::{Audience, Hub, Inner, MAX_ANCHORS, MAX_REFS},
 };
 
 impl Hub {

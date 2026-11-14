@@ -35,6 +35,9 @@ use crate::{
 };
 
 pub(crate) const MAX_STATUS_LINE: usize = 200;
+/// Undelivered comments the share holds for one joiner key; a joiner
+/// drops a share that claims more.
+pub(crate) const MAX_QUEUED_PER_KEY: usize = 100;
 const MAX_ANSWER: usize = 10_000;
 
 /// One control line.
