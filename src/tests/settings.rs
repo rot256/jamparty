@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::{
     adapters::endpoint::generate_key,
     core::rng::SystemRng,
-    join::{JoinConfig, Joiner},
+    join::{JoinConfig, Joiner, ProxyLimits},
     share::Share,
     tests::harness::{
         ADMISSION_WAIT, CONNECT_WAIT, PageSocket, about, connected, fixture_dir, net, share_files,
@@ -33,6 +33,7 @@ async fn joiner(share: &Share, name: Option<&str>, settings: &Path) -> Joiner {
         port: None,
         connect_wait: CONNECT_WAIT,
         admission_wait: ADMISSION_WAIT,
+        proxy: ProxyLimits::JOIN,
     })
     .await
     .unwrap();

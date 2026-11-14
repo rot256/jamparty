@@ -1,9 +1,16 @@
 //! The joiner's local HTTP server on `127.0.0.1`: checks each request with
 //! the core decision, answers jampot's own paths (the browser client
 //! included) and forwards everything else to the share, one iroh stream
-//! per request.
+//! per request. What it forwards is bounded on the joiner's side, whatever
+//! the share does: so many requests and tunnels at once
+//! ([`ProxyLimits`]), a deadline for the share's response headers, and an
+//! upgraded tunnel ends when the browser's side does, or goes idle.
 
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{
+    convert::Infallible,
+    sync::{Arc, Mutex, PoisonError},
+    time::Duration,
+};
 
 use bytes::Bytes;
 use hyper::{
@@ -18,9 +25,10 @@ use hyper::{
 use hyper_util::rt::{TokioIo, TokioTimer};
 use rootcause::prelude::report;
 use tokio::{
-    io::{self, copy_bidirectional},
+    io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpListener,
-    time,
+    sync::{Semaphore, oneshot},
+    time::{self, Instant},
 };
 
 use crate::{
@@ -41,6 +49,62 @@ const CLIENT_JS: &str = include_str!("../../assets/client.js");
 
 /// The pause after a failed accept.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+/// What an upgraded tunnel copies at a time, each way.
+const TUNNEL_BUFFER: usize = 16 * 1024;
+
+/// What the joiner allows the requests it forwards to the share.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProxyLimits {
+    /// Requests and upgraded tunnels to the share at once, each on a
+    /// stream of its own; past this a request is answered 503. Below the
+    /// streams a share allows a joiner (64, its control stream included).
+    pub(crate) concurrent: usize,
+    /// How long the share has to send a response's headers (a dev
+    /// server's first build can be slow); then 504.
+    pub(crate) response_wait: Duration,
+    /// How long an upgraded tunnel may carry nothing either way before it
+    /// is closed. Live-reload sockets that never speak reconnect after.
+    pub(crate) idle: Duration,
+    /// How long one side of a tunnel may still send after the other
+    /// closed.
+    pub(crate) half_close: Duration,
+}
+
+impl ProxyLimits {
+    /// What `jampot join` allows.
+    pub(crate) const JOIN: Self = Self {
+        concurrent: 48,
+        response_wait: Duration::from_secs(120),
+        idle: Duration::from_secs(30 * 60),
+        half_close: Duration::from_secs(2),
+    };
+}
+
+/// The local server's way to the share: its limits, and the permits for
+/// requests at once.
+pub(crate) struct Proxy {
+    limits: ProxyLimits,
+    permits: Arc<Semaphore>,
+}
+
+impl Proxy {
+    #[must_use]
+    pub(crate) fn new(limits: ProxyLimits) -> Self {
+        Self {
+            limits,
+            permits: Arc::new(Semaphore::new(limits.concurrent)),
+        }
+    }
+
+    /// Requests and tunnels to the share open now.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn open(&self) -> usize {
+        self.limits
+            .concurrent
+            .saturating_sub(self.permits.available_permits())
+    }
+}
 
 /// What a page load gets while the share cannot be reached: a short note
 /// that retries by itself (the joiner reconnects after a drop).
@@ -58,6 +122,7 @@ pub(crate) async fn serve(
     listener: TcpListener,
     session: Arc<Session>,
     origin: Arc<LocalOrigin>,
+    proxy: Arc<Proxy>,
     connect_wait: Duration,
 ) {
     loop {
@@ -72,12 +137,16 @@ pub(crate) async fn serve(
         };
         let session = Arc::clone(&session);
         let origin = Arc::clone(&origin);
+        let proxy = Arc::clone(&proxy);
         tokio::spawn(async move {
             let service = service_fn(move |request| {
                 let session = Arc::clone(&session);
                 let origin = Arc::clone(&origin);
+                let proxy = Arc::clone(&proxy);
                 async move {
-                    Ok::<_, Infallible>(handle(request, &session, &origin, connect_wait).await)
+                    Ok::<_, Infallible>(
+                        handle(request, &session, &origin, &proxy, connect_wait).await,
+                    )
                 }
             });
             let served = http1::Builder::new()
@@ -97,6 +166,7 @@ async fn handle(
     request: Request<Incoming>,
     session: &Arc<Session>,
     origin: &LocalOrigin,
+    proxy: &Proxy,
     connect_wait: Duration,
 ) -> Response<AppBody> {
     let request_facts = facts(&request);
@@ -108,7 +178,7 @@ async fn handle(
         Ok(Route::Unknown) => {
             RequestError::new(StatusCode::NOT_FOUND, "no such jampot path").into()
         }
-        Ok(Route::Proxy) => match forward(request, session, connect_wait).await {
+        Ok(Route::Proxy) => match forward(request, session, proxy, connect_wait).await {
             Ok(response) => response,
             Err(error) if page_load && error.status == StatusCode::BAD_GATEWAY => {
                 unreachable_page()
@@ -158,12 +228,23 @@ fn refused(refusal: Refusal) -> Response<AppBody> {
 }
 
 /// Sends the request to the share on a fresh stream and streams the
-/// response back; an upgrade keeps both ends open.
+/// response back; an upgrade keeps both ends open, as a tunnel. Each holds
+/// a permit of `proxy` until its stream is done.
 async fn forward(
     mut request: Request<Incoming>,
     session: &Session,
+    proxy: &Proxy,
     connect_wait: Duration,
 ) -> Result<Response<AppBody>, RequestError> {
+    let Ok(permit) = Arc::clone(&proxy.permits).try_acquire_owned() else {
+        tracing::debug!("too many requests to the share at once");
+        return Err(RequestError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many requests to the share at once",
+        ));
+    };
+    let permit = Arc::new(permit);
+    let limits = proxy.limits;
     let unreachable = |error: Report| {
         tracing::debug!(%error, "could not forward to the share");
         RequestError::new(StatusCode::BAD_GATEWAY, "the share is not reachable")
@@ -184,33 +265,117 @@ async fn forward(
     let (mut sender, connection) = client_http1::handshake(io)
         .await
         .map_err(|error| unreachable(error.into()))?;
+    // The stream is driven until its response is done, unless this
+    // request is given up first (the browser went, or the share was too
+    // slow): then `answered` is dropped unsent, and so is the stream.
+    let (answered, mut abandoned) = oneshot::channel::<()>();
+    let held = Arc::clone(&permit);
     tokio::spawn(async move {
-        if let Err(error) = connection.with_upgrades().await {
-            tracing::debug!(%error, "request stream ended with an error");
+        let _held = held;
+        tokio::select! {
+            result = connection.with_upgrades() => {
+                if let Err(error) = result {
+                    tracing::debug!(%error, "request stream ended with an error");
+                }
+            }
+            Err(_) = &mut abandoned => {
+                tracing::debug!("request given up before the share answered");
+            }
         }
     });
-    let mut response = sender
-        .send_request(request)
-        .await
-        .map_err(|error| unreachable(error.into()))?;
+    let mut response = match time::timeout(limits.response_wait, sender.send_request(request)).await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => return Err(unreachable(error.into())),
+        Err(_) => {
+            tracing::debug!("the share did not answer in time");
+            return Err(RequestError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "the share did not answer in time",
+            ));
+        }
+    };
+    // Nobody waits for it any more if the stream ended meanwhile.
+    let _ = answered.send(());
     if response.status() == StatusCode::SWITCHING_PROTOCOLS
         && let Some(local_upgrade) = local_upgrade
     {
         let share_upgrade = upgrade::on(&mut response);
         tokio::spawn(async move {
+            let _held = permit;
             match tokio::try_join!(local_upgrade, share_upgrade) {
                 Ok((local, share)) => {
-                    let mut local = TokioIo::new(local);
-                    let mut share = TokioIo::new(share);
-                    if let Err(error) = copy_bidirectional(&mut local, &mut share).await {
-                        tracing::debug!(%error, "upgraded stream closed with an error");
-                    }
+                    tunnel(TokioIo::new(local), TokioIo::new(share), limits).await;
                 }
                 Err(error) => tracing::debug!(%error, "upgrade failed"),
             }
         });
     }
     Ok(map_incoming_response(response))
+}
+
+/// Carries an upgraded connection between the browser and the share until
+/// either side closes it (the other then has [`ProxyLimits::half_close`]
+/// to finish), or nothing moves either way for [`ProxyLimits::idle`].
+async fn tunnel<L, S>(local: L, share: S, limits: ProxyLimits)
+where
+    L: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (local_read, local_write) = io::split(local);
+    let (share_read, share_write) = io::split(share);
+    let moved = Mutex::new(Instant::now());
+    let up = pipe(local_read, share_write, &moved);
+    let down = pipe(share_read, local_write, &moved);
+    tokio::pin!(up, down);
+    tokio::select! {
+        ended = &mut up => {
+            if let Err(error) = ended {
+                tracing::debug!(%error, "the browser's side of a tunnel failed");
+            }
+            let _ = time::timeout(limits.half_close, &mut down).await;
+        }
+        ended = &mut down => {
+            if let Err(error) = ended {
+                tracing::debug!(%error, "the share's side of a tunnel failed");
+            }
+            let _ = time::timeout(limits.half_close, &mut up).await;
+        }
+        () = idle(&moved, limits.idle) => {
+            tracing::debug!("closing an idle tunnel");
+        }
+    }
+}
+
+/// Copies `from` to `to` until `from` ends, then shuts `to` down; notes
+/// in `moved` when bytes last went through.
+async fn pipe<R, W>(mut from: R, mut to: W, moved: &Mutex<Instant>) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut buffer = vec![0; TUNNEL_BUFFER];
+    loop {
+        let read = from.read(&mut buffer).await?;
+        let Some(bytes) = buffer.get(..read).filter(|bytes| !bytes.is_empty()) else {
+            return to.shutdown().await;
+        };
+        to.write_all(bytes).await?;
+        to.flush().await?;
+        *moved.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
+    }
+}
+
+/// Ends once nothing went through for `limit`, as `moved` says.
+async fn idle(moved: &Mutex<Instant>, limit: Duration) {
+    loop {
+        let last = *moved.lock().unwrap_or_else(PoisonError::into_inner);
+        let deadline = last + limit;
+        if Instant::now() >= deadline {
+            return;
+        }
+        time::sleep_until(deadline).await;
+    }
 }
 
 /// The connection to the share, waiting up to `wait` for one while the

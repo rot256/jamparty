@@ -16,6 +16,7 @@ mod hostile_share;
 mod local_rules;
 mod mirror;
 mod presence;
+mod proxy_limits;
 mod requests;
 mod session;
 mod settings;

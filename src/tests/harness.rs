@@ -30,7 +30,7 @@ use crate::{
     Report,
     adapters::endpoint::{Accept, Discovery, NetConfig, bind, connect, generate_key},
     core::{clock::ManualClock, port::Port, rng::SystemRng, token::PartyToken},
-    join::{JoinConfig, Joiner},
+    join::{JoinConfig, Joiner, ProxyLimits},
     share::{Share, ShareConfig, Source, delivery::Target, proxy::UpstreamUrl},
 };
 
@@ -183,6 +183,7 @@ fn join_config(
         port: None,
         connect_wait: CONNECT_WAIT,
         admission_wait: ADMISSION_WAIT,
+        proxy: ProxyLimits::JOIN,
     }
 }
 
@@ -236,6 +237,20 @@ pub(crate) async fn try_joiner(
     addrs: Vec<SocketAddr>,
 ) -> Result<Joiner, Report> {
     start_joiner(token, addrs, "alice", generate_key(&SystemRng), None).await
+}
+
+/// Starts a joiner that forwards within `proxy`; fails if the share
+/// refuses it.
+pub(crate) async fn try_joiner_with(
+    token: PartyToken,
+    addrs: Vec<SocketAddr>,
+    proxy: ProxyLimits,
+) -> Result<Joiner, Report> {
+    let config = JoinConfig {
+        proxy,
+        ..join_config(token, addrs, "alice", generate_key(&SystemRng))
+    };
+    within("the joiner to start", Joiner::start(config)).await
 }
 
 /// A settings file in a directory of its own, not created until saved.

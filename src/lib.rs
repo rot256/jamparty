@@ -49,7 +49,7 @@ use crate::{
         rng::SystemRng,
         token::{PartyToken, TokenError},
     },
-    join::{JoinConfig, Joiner, Refused},
+    join::{JoinConfig, Joiner, ProxyLimits, Refused},
     protocol::{agent::Addressee, control::AnswerText},
     share::{
         Share, ShareConfig, Source,
@@ -504,6 +504,7 @@ async fn join(
         port,
         connect_wait: CONNECT_WAIT,
         admission_wait: ADMISSION_WAIT,
+        proxy: ProxyLimits::JOIN,
     };
     println!("jampot: connecting to the share…");
     let joiner = tokio::select! {

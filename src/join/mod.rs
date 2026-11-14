@@ -12,6 +12,7 @@ mod session;
 mod socket;
 mod state;
 mod uplink;
+pub(crate) use crate::join::local::ProxyLimits;
 #[cfg(test)]
 pub(crate) use crate::join::{
     markdown::MAX_ANSWER_HTML,
@@ -56,6 +57,7 @@ use crate::{
     },
     join::{
         connection::{Dial, Final, Welcome},
+        local::Proxy,
         preferences::Preferences,
         session::Session,
         state::Snapshot,
@@ -87,6 +89,8 @@ pub(crate) struct JoinConfig {
     /// How long the share has to answer the hello before the attempt
     /// counts as failed (and is retried).
     pub(crate) admission_wait: Duration,
+    /// What the local server allows the requests it forwards.
+    pub(crate) proxy: ProxyLimits,
 }
 
 /// The share refused this joiner for good.
@@ -266,6 +270,8 @@ pub(crate) struct Joiner {
     share_version: JampotVersion,
     origin: Arc<LocalOrigin>,
     #[cfg(test)]
+    proxy: Arc<Proxy>,
+    #[cfg(test)]
     port: Port,
     fallback: Option<Fallback>,
     _tasks: JoinSet<()>,
@@ -288,6 +294,7 @@ impl Joiner {
             port,
             connect_wait,
             admission_wait,
+            proxy,
         } = config;
         let preferences = Preferences {
             settings: settings::load(&path)?,
@@ -327,11 +334,13 @@ impl Joiner {
         };
         let Bound { listeners, port } = bound;
         let origin = Arc::new(LocalOrigin::new(&sid, port));
+        let proxy = Arc::new(Proxy::new(proxy));
         for listener in listeners {
             tasks.spawn(local::serve(
                 listener,
                 Arc::clone(&session),
                 Arc::clone(&origin),
+                Arc::clone(&proxy),
                 connect_wait,
             ));
         }
@@ -340,6 +349,8 @@ impl Joiner {
             session,
             share_version: jampot,
             origin,
+            #[cfg(test)]
+            proxy,
             #[cfg(test)]
             port,
             fallback,
@@ -379,6 +390,13 @@ impl Joiner {
     #[must_use]
     pub(crate) fn local_addr(&self) -> SocketAddr {
         SocketAddr::from((Ipv4Addr::LOCALHOST, u16::from(self.port)))
+    }
+
+    /// Requests and tunnels to the share open now.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn proxied(&self) -> usize {
+        self.proxy.open()
     }
 
     /// The local origin (`Host` and `Origin` values).
