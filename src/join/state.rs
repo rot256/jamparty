@@ -11,7 +11,11 @@ use serde::Serialize;
 
 use crate::{
     core::{ids::CommentId, settings::Switch},
-    join::{api::ToPage, markdown, preferences::PageSettings},
+    join::{
+        api::ToPage,
+        markdown::{self, AnswerHtml},
+        preferences::PageSettings,
+    },
     protocol::{
         comment::{Author, CommentPage, CommentSelector},
         control::{
@@ -23,6 +27,16 @@ use crate::{
 
 /// Answers kept for pages that load later.
 pub(crate) const MAX_ANSWERS: usize = 100;
+/// The most answer HTML kept for pages that load later, all answers
+/// together: older answers go first. Each is at most
+/// [`markdown::MAX_ANSWER_HTML`], so the latest always fits.
+pub(crate) const MAX_ANSWERS_HTML: usize = 256 * 1024;
+
+/// Whether answers of `count` and `bytes` of HTML have room for one more
+/// of `incoming` bytes.
+fn room(count: usize, bytes: usize, incoming: usize) -> bool {
+    count < MAX_ANSWERS && bytes.saturating_add(incoming) <= MAX_ANSWERS_HTML
+}
 
 /// The joiner's link to the share.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -43,7 +57,8 @@ pub(crate) struct Link {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct Answer {
     pub(crate) id: CommentId,
-    pub(crate) html: String,
+    #[cfg_attr(test, ts(type = "string"))]
+    pub(crate) html: AnswerHtml,
     /// The selector of the comment it answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
@@ -70,7 +85,8 @@ pub(crate) struct Snapshot {
     /// share first said (a joiner that restarted does not know yet).
     pub(crate) mine: Option<Vec<CommentId>>,
     pub(crate) settings: PageSettings,
-    /// Recent answers, oldest first.
+    /// Recent answers, oldest first: at most [`MAX_ANSWERS`], of at most
+    /// [`MAX_ANSWERS_HTML`] together.
     pub(crate) answers: Vec<Answer>,
     /// The live-reload revision (shared directories only).
     pub(crate) revision: Option<Revision>,
@@ -147,6 +163,8 @@ pub(crate) struct State {
     mine: Mine,
     settings: PageSettings,
     answers: VecDeque<Answer>,
+    /// The HTML of `answers`, in bytes.
+    answers_html: usize,
     revision: Option<Revision>,
 }
 
@@ -159,6 +177,7 @@ impl State {
             mine: Mine::default(),
             settings,
             answers: VecDeque::new(),
+            answers_html: 0,
             revision: None,
         }
     }
@@ -285,9 +304,13 @@ impl State {
                     page,
                     to_you: to.is_some() && to == you,
                 };
-                if self.answers.len() == MAX_ANSWERS {
-                    self.answers.pop_front();
+                while !room(self.answers.len(), self.answers_html, answer.html.len()) {
+                    let Some(oldest) = self.answers.pop_front() else {
+                        break;
+                    };
+                    self.answers_html = self.answers_html.saturating_sub(oldest.html.len());
                 }
+                self.answers_html = self.answers_html.saturating_add(answer.html.len());
                 self.answers.push_back(answer.clone());
                 vec![ToPage::Answer(answer)]
             }
@@ -316,7 +339,14 @@ pub(crate) fn follow(snapshot: &mut Snapshot, message: &ToPage) {
         ToPage::Reload { revision } => snapshot.revision = Some(*revision),
         ToPage::Answer(answer) => {
             if !snapshot.answers.iter().any(|known| known.id == answer.id) {
-                if snapshot.answers.len() == MAX_ANSWERS {
+                let html = |answers: &[Answer]| answers.iter().map(|known| known.html.len()).sum();
+                while !snapshot.answers.is_empty()
+                    && !room(
+                        snapshot.answers.len(),
+                        html(&snapshot.answers),
+                        answer.html.len(),
+                    )
+                {
                     snapshot.answers.remove(0);
                 }
                 snapshot.answers.push(answer.clone());

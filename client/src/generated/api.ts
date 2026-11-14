@@ -114,7 +114,8 @@ people: Array<Person>,
  */
 mine: Array<CommentId> | null, settings: PageSettings, 
 /**
- * Recent answers, oldest first.
+ * Recent answers, oldest first: at most [`MAX_ANSWERS`], of at most
+ * [`MAX_ANSWERS_HTML`] together.
  */
 answers: Array<Answer>, 
 /**

@@ -13,7 +13,12 @@ mod socket;
 mod state;
 mod uplink;
 #[cfg(test)]
-pub(crate) use crate::join::{pages::PAGE_QUEUE, uplink::REPORT_GAP};
+pub(crate) use crate::join::{
+    markdown::MAX_ANSWER_HTML,
+    pages::{MAX_FRAME, PAGE_QUEUE},
+    state::MAX_ANSWERS_HTML,
+    uplink::REPORT_GAP,
+};
 
 use std::{
     error::Error,

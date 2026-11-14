@@ -220,7 +220,8 @@ async fn answers_reach_every_joiner_and_later_ones() {
     .unwrap()
     .clone();
     let last = view.answers.last().unwrap();
-    assert!(last.html.contains("&lt;script&gt;"), "{}", last.html);
+    let html = last.html.as_str();
+    assert!(html.contains("&lt;script&gt;"), "{html}");
     assert!(last.anchor.is_none());
 }
 
@@ -231,7 +232,7 @@ fn answers(joiner: &Joiner) -> Vec<(String, bool)> {
         .borrow()
         .answers
         .iter()
-        .map(|answer| (answer.html.clone(), answer.to_you))
+        .map(|answer| (answer.html.as_str().to_owned(), answer.to_you))
         .collect()
 }
 

@@ -11,6 +11,10 @@ use crate::{join::api::ToPage, protocol::presence::PagePath};
 
 /// Pages one joiner takes at once; a socket past this is refused.
 const MAX_PAGES: usize = 64;
+/// The largest message sent to a page. The largest the joiner makes is a
+/// `hello`, whose answers are bounded well below this
+/// ([`crate::join::state::MAX_ANSWERS_HTML`]); a larger one is not sent.
+pub(crate) const MAX_FRAME: usize = 1024 * 1024;
 /// Messages waiting for one page. A page that falls this far behind (a
 /// frozen tab) is dropped: it reconnects and starts from a new `hello`.
 pub(crate) const PAGE_QUEUE: usize = 256;
@@ -201,13 +205,24 @@ impl Pages {
     }
 }
 
-/// `message` as a text frame's payload. Serialising these types does not
-/// fail (no maps with non-string keys, no fallible `Serialize`); were it
-/// ever to, the message is not sent, and the error is logged.
-pub(crate) fn frame(message: &ToPage) -> Result<Bytes, serde_json::Error> {
-    serde_json::to_vec(message).map(Bytes::from).inspect_err(
-        |error| tracing::error!(%error, "a page message could not be serialised; not sent"),
-    )
+/// A message that is not sent to pages: it could not be serialised (these
+/// types do not fail to: no maps with non-string keys, no fallible
+/// `Serialize`), or it is larger than [`MAX_FRAME`]. Why is logged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Unsendable;
+
+/// `message` as a text frame's payload, of at most [`MAX_FRAME`] bytes;
+/// otherwise the message is not sent, and why is logged.
+pub(crate) fn frame(message: &ToPage) -> Result<Bytes, Unsendable> {
+    let bytes = serde_json::to_vec(message).map_err(|error| {
+        tracing::error!(%error, "a page message could not be serialised; not sent");
+        Unsendable
+    })?;
+    if bytes.len() > MAX_FRAME {
+        tracing::error!(bytes = bytes.len(), "a page message is too large; not sent");
+        return Err(Unsendable);
+    }
+    Ok(Bytes::from(bytes))
 }
 
 #[cfg(test)]

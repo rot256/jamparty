@@ -14,8 +14,9 @@ use crate::{
     },
     join::{
         api::ToPage,
+        markdown::MAX_ANSWER_HTML,
         preferences::PageSettings,
-        state::{State, TooMany, follow},
+        state::{MAX_ANSWERS, MAX_ANSWERS_HTML, State, TooMany, follow},
     },
     protocol::{
         comment::{Author, Draft},
@@ -193,6 +194,36 @@ fn a_readmitted_joiner_forgets_the_old_status_line() {
     // the one from before is stale.
     state.admitted(author(1), &[]).unwrap();
     assert_eq!(state.snapshot().link.status, None);
+}
+
+#[test]
+fn answers_kept_are_bounded_in_bytes_as_well_as_number() {
+    let mut state = State::new(settings(Switch::Off));
+    let mut page = state.snapshot();
+    // Each renders to about 60 KB: few fit.
+    let large = AnswerText::try_from("\"".repeat(10_000)).unwrap();
+    for index in 0..40 {
+        for message in state.apply(ShareMessage::Answer {
+            id: nth(index),
+            message: large.clone(),
+            anchor: None,
+            to: None,
+        }) {
+            follow(&mut page, &message);
+        }
+    }
+    let snapshot = state.snapshot();
+    let html: usize = snapshot
+        .answers
+        .iter()
+        .map(|answer| answer.html.len())
+        .sum();
+    assert!(html <= MAX_ANSWERS_HTML, "{html}");
+    assert!(snapshot.answers.len() >= MAX_ANSWERS_HTML / MAX_ANSWER_HTML);
+    assert!(snapshot.answers.len() < MAX_ANSWERS);
+    assert_eq!(snapshot.answers.last().unwrap().id, nth(39));
+    // A page that followed holds the same.
+    assert_eq!(page, snapshot);
 }
 
 fn nth(n: usize) -> CommentId {
