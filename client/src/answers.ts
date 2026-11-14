@@ -1,9 +1,12 @@
 // The agent's answers: shown bottom right, or next to the element of the
 // comment they answer when that is on this page; dismissed ones stay
-// dismissed for the session.
+// dismissed for the session. At most MAX_ANSWERS are shown, as many as
+// the joiner keeps, the oldest going first; dismissals are kept only of
+// answers the joiner still has, and at most as many.
 
 import { samePage } from "./capture";
 import { AGENT_TARGET_PREFIX, DISMISSED_KEY } from "./config";
+import { MAX_ANSWERS } from "./generated/api";
 import type { Answer } from "./generated/api";
 import type { Ui } from "./ui";
 
@@ -27,9 +30,10 @@ const EDGE = 8;
 function loadDismissed(): Set<string> {
   try {
     const stored: unknown = JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]");
-    return new Set(
-      Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : [],
-    );
+    const ids = Array.isArray(stored)
+      ? stored.filter((id): id is string => typeof id === "string")
+      : [];
+    return new Set(ids.slice(-MAX_ANSWERS));
   } catch {
     return new Set();
   }
@@ -66,8 +70,30 @@ export class Answers {
     return document.querySelector(selector);
   }
 
+  /**
+   * The answers the joiner has now (its hello): dismissals of others are
+   * forgotten, since those answers do not come back.
+   */
+  keepDismissed(answers: readonly Answer[]): void {
+    const held = new Set(answers.map((answer) => answer.id));
+    let changed = false;
+    for (const id of [...this.dismissed]) {
+      if (!held.has(id)) {
+        this.dismissed.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) this.persistDismissed();
+  }
+
   add(answer: Answer): void {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
+    // The oldest go first (a Map keeps the order answers came in).
+    for (const [id, shown] of this.shown) {
+      if (this.shown.size < MAX_ANSWERS) break;
+      shown.node.remove();
+      this.shown.delete(id);
+    }
     const node = document.createElement("article");
     node.className = "agent-message";
     node.dataset.messageId = answer.id;
@@ -123,6 +149,10 @@ export class Answers {
     });
     close.addEventListener("click", () => {
       this.dismissed.add(answer.id);
+      for (const id of this.dismissed) {
+        if (this.dismissed.size <= MAX_ANSWERS) break;
+        this.dismissed.delete(id);
+      }
       this.persistDismissed();
       this.shown.delete(answer.id);
       node.remove();

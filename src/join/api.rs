@@ -178,7 +178,7 @@ mod bindings {
                 ToPage,
             },
             preferences::PageSettings,
-            state::{Answer, Link, Snapshot},
+            state::{Answer, Link, MAX_ANSWERS, Snapshot},
         },
         protocol::{
             comment::{Author, CommentPage, CommentSelector, MAX_COMMENT, MAX_SELECTED_TEXT},
@@ -188,6 +188,7 @@ mod bindings {
                 PagePath, Person, Position,
             },
         },
+        share::hub::MAX_JOINERS,
     };
 
     fn generate() -> String {
@@ -241,6 +242,9 @@ mod bindings {
             ("MAX_PAGE_PATH", MAX_PAGE_PATH),
             ("MAX_CURSOR_SELECTOR", MAX_CURSOR_SELECTOR),
             ("FRACTION_ONE", usize::from(FRACTION_ONE)),
+            // What the joiner keeps, and how many people a share takes.
+            ("MAX_ANSWERS", MAX_ANSWERS),
+            ("MAX_JOINERS", MAX_JOINERS),
         ];
         for (name, value) in limits {
             out.push_str(&format!("export const {name} = {value};\n"));

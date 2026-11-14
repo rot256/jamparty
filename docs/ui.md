@@ -128,9 +128,11 @@ text. Rows:
   (`pointerleave`, window blur, tab hidden) sends one `cursor` message
   with no position, so the cursor disappears for others at once.
 - The receiver interpolates between positions and fades a cursor after a
-  few seconds without an update (its own timer, nothing sent); it removes
-  it on the no-position message, when the joiner leaves the URL, turns
-  the switch off, or disconnects.
+  few seconds without an update (its own timer, nothing sent), removing it
+  once faded; it removes it at once on the no-position message, when the
+  joiner leaves the URL, turns the switch off, or disconnects. It draws
+  only the cursors of people its joiner lists as here, one each and at
+  most as many as a share takes (64).
 - Never shown in the comment dialog's target highlight or captured into
   comments.
 
@@ -168,6 +170,8 @@ text. Rows:
 - `jampot send --anchor <comment id> "…"` without `--to` addresses the
   comment's author by default; `--to all` (or no anchor and no `--to`)
   sends it to everyone.
+- A page shows at most as many answers as its joiner keeps (100), the
+  oldest going first, and remembers dismissals only of those.
 - The recipient's answer bubble shows a small `to you` line above the text
   (in the answer-meta style, `#7b3221`, 11 px, bold).
 - The `jampot agent` guides describe `--to`.

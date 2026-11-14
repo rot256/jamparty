@@ -1,5 +1,7 @@
 // Cursors: this page's pointer, sent while "Show my cursor" is on, and
-// other people's, drawn while they are on this page.
+// other people's, drawn while they are on this page: only of people the
+// joiner says are here, at most one each for as many as a share takes,
+// and removed once faded out.
 //
 // Sending happens only on movement: one message per `pointermove`, at most
 // CURSOR_RATE per second, the last position of a window always sent, and
@@ -9,12 +11,14 @@
 
 import { cssSelector } from "./capture";
 import { CURSOR_FADE_MS, CURSOR_RATE } from "./config";
-import { FRACTION_ONE, MAX_CURSOR_SELECTOR } from "./generated/api";
+import { FRACTION_ONE, MAX_CURSOR_SELECTOR, MAX_JOINERS } from "./generated/api";
 import type { Person, Position } from "./generated/api";
 import { colourOf } from "./panel";
 import type { Ui } from "./ui";
 
 const INTERVAL_MS = 1000 / CURSOR_RATE;
+/** A faded cursor is removed after its fade (400 ms in the styles) is over. */
+const CURSOR_GONE_MS = CURSOR_FADE_MS + 1000;
 
 function fraction(offset: number, size: number): number {
   if (size <= 0) return 0;
@@ -153,16 +157,30 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 export class CursorLayer {
   private readonly drawn = new Map<string, Drawn>();
   private people = new Map<string, Person>();
+  /** This page's URL, as last said. */
+  private url: string | null = null;
   private frame: number | undefined;
 
   constructor(private readonly ui: Ui) {}
 
+  /**
+   * Whether `key`'s pointer may stay drawn: here, on this page, cursor on.
+   * Presence may lag a pointer by a moment (the share sends it in
+   * batches), so a pointer is drawn for anyone here, and taken away when
+   * presence says they left the page or switched off.
+   */
+  private shows(key: string): boolean {
+    const person = this.people.get(key);
+    return person?.cursor === "on" && this.url !== null && person.url === this.url;
+  }
+
   /** Someone's pointer on this page moved, or (null) left it. */
   update(key: string, position: Position | null): void {
-    if (position === null) {
+    if (position === null || !this.people.has(key)) {
       this.remove(key);
       return;
     }
+    if (!this.drawn.has(key) && this.drawn.size >= MAX_JOINERS) return;
     let element: Element | null;
     try {
       element = document.querySelector(position.selector);
@@ -187,11 +205,9 @@ export class CursorLayer {
   /** Who is here: cursors of people gone, elsewhere or switched off go. */
   setPeople(here: readonly Person[], url: string | null): void {
     this.people = new Map(here.map((person) => [person.key, person]));
+    this.url = url;
     for (const key of [...this.drawn.keys()]) {
-      const person = this.people.get(key);
-      if (person?.cursor !== "on" || url === null || person.url !== url) {
-        this.remove(key);
-      }
+      if (!this.shows(key)) this.remove(key);
     }
     for (const drawn of this.drawn.values()) this.paint(drawn);
   }
@@ -251,12 +267,18 @@ export class CursorLayer {
     this.frame = requestAnimationFrame(() => { this.animate(); });
   }
 
-  /** Glides each cursor towards its point (kept on its element as the page scrolls) and fades idle ones. */
+  /**
+   * Glides each cursor towards its point (kept on its element as the page
+   * scrolls), fades idle ones and removes them once faded.
+   */
   private animate(): void {
     this.frame = undefined;
     const now = performance.now();
-    let moving = false;
-    for (const drawn of this.drawn.values()) {
+    for (const [key, drawn] of [...this.drawn]) {
+      if (now - drawn.updated > CURSOR_GONE_MS) {
+        this.remove(key);
+        continue;
+      }
       if (!drawn.element.isConnected) {
         drawn.node.dataset.faded = "true";
         continue;
@@ -269,11 +291,9 @@ export class CursorLayer {
       drawn.shownX = Math.abs(targetX - shownX) < 0.5 ? targetX : shownX;
       drawn.shownY = Math.abs(targetY - shownY) < 0.5 ? targetY : shownY;
       drawn.node.style.transform = `translate(${drawn.shownX}px, ${drawn.shownY}px)`;
-      const idle = now - drawn.updated > CURSOR_FADE_MS;
-      drawn.node.dataset.faded = String(idle);
-      // Keep animating while gliding, and until idle ones have faded.
-      if (!idle) moving = true;
+      drawn.node.dataset.faded = String(now - drawn.updated > CURSOR_FADE_MS);
     }
-    if (moving) this.schedule();
+    // Every frame while any is drawn, until it is removed.
+    if (this.drawn.size > 0) this.schedule();
   }
 }

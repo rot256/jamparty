@@ -123,6 +123,7 @@ function install(): void {
     you = hello.link.you?.key ?? null;
     outbox.setKey(you);
     showMine(hello.mine);
+    answers.keepDismissed(hello.answers);
     for (const answer of hello.answers) answers.add(answer);
     restoreDraft();
     showSettings(hello.settings);

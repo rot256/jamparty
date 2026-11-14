@@ -7,6 +7,8 @@ var MAX_SELECTED_TEXT = 2e3;
 var MAX_PAGE_PATH = 512;
 var MAX_CURSOR_SELECTOR = 512;
 var FRACTION_ONE = 1e4;
+var MAX_ANSWERS = 100;
+var MAX_JOINERS = 64;
 var RESERVED_KEYS = ["/", "Escape"];
 var MODIFIER_KEYS = ["Alt", "AltGraph", "CapsLock", "Control", "Fn", "FnLock", "Hyper", "Meta", "NumLock", "ScrollLock", "Shift", "Super", "Symbol"];
 var PAGE_KEYS = ["Enter", "Tab", " "];
@@ -126,9 +128,8 @@ var EDGE = 8;
 function loadDismissed() {
   try {
     const stored = JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]");
-    return new Set(
-      Array.isArray(stored) ? stored.filter((id) => typeof id === "string") : []
-    );
+    const ids = Array.isArray(stored) ? stored.filter((id) => typeof id === "string") : [];
+    return new Set(ids.slice(-MAX_ANSWERS));
   } catch {
     return /* @__PURE__ */ new Set();
   }
@@ -164,8 +165,28 @@ var Answers = class {
     }
     return document.querySelector(selector);
   }
+  /**
+   * The answers the joiner has now (its hello): dismissals of others are
+   * forgotten, since those answers do not come back.
+   */
+  keepDismissed(answers) {
+    const held = new Set(answers.map((answer) => answer.id));
+    let changed = false;
+    for (const id of [...this.dismissed]) {
+      if (!held.has(id)) {
+        this.dismissed.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) this.persistDismissed();
+  }
   add(answer) {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
+    for (const [id, shown] of this.shown) {
+      if (this.shown.size < MAX_ANSWERS) break;
+      shown.node.remove();
+      this.shown.delete(id);
+    }
     const node = document.createElement("article");
     node.className = "agent-message";
     node.dataset.messageId = answer.id;
@@ -216,6 +237,10 @@ var Answers = class {
     });
     close.addEventListener("click", () => {
       this.dismissed.add(answer.id);
+      for (const id of this.dismissed) {
+        if (this.dismissed.size <= MAX_ANSWERS) break;
+        this.dismissed.delete(id);
+      }
       this.persistDismissed();
       this.shown.delete(answer.id);
       node.remove();
@@ -626,6 +651,7 @@ var Panel = class {
 
 // client/src/cursors.ts
 var INTERVAL_MS = 1e3 / CURSOR_RATE;
+var CURSOR_GONE_MS = CURSOR_FADE_MS + 1e3;
 function fraction(offset, size) {
   if (size <= 0) return 0;
   return Math.round(Math.min(1, Math.max(0, offset / size)) * FRACTION_ONE);
@@ -745,13 +771,26 @@ var CursorLayer = class {
   ui;
   drawn = /* @__PURE__ */ new Map();
   people = /* @__PURE__ */ new Map();
+  /** This page's URL, as last said. */
+  url = null;
   frame;
+  /**
+   * Whether `key`'s pointer may stay drawn: here, on this page, cursor on.
+   * Presence may lag a pointer by a moment (the share sends it in
+   * batches), so a pointer is drawn for anyone here, and taken away when
+   * presence says they left the page or switched off.
+   */
+  shows(key) {
+    const person = this.people.get(key);
+    return person?.cursor === "on" && this.url !== null && person.url === this.url;
+  }
   /** Someone's pointer on this page moved, or (null) left it. */
   update(key, position) {
-    if (position === null) {
+    if (position === null || !this.people.has(key)) {
       this.remove(key);
       return;
     }
+    if (!this.drawn.has(key) && this.drawn.size >= MAX_JOINERS) return;
     let element;
     try {
       element = document.querySelector(position.selector);
@@ -774,11 +813,9 @@ var CursorLayer = class {
   /** Who is here: cursors of people gone, elsewhere or switched off go. */
   setPeople(here, url) {
     this.people = new Map(here.map((person) => [person.key, person]));
+    this.url = url;
     for (const key of [...this.drawn.keys()]) {
-      const person = this.people.get(key);
-      if (person?.cursor !== "on" || url === null || person.url !== url) {
-        this.remove(key);
-      }
+      if (!this.shows(key)) this.remove(key);
     }
     for (const drawn of this.drawn.values()) this.paint(drawn);
   }
@@ -834,12 +871,18 @@ var CursorLayer = class {
       this.animate();
     });
   }
-  /** Glides each cursor towards its point (kept on its element as the page scrolls) and fades idle ones. */
+  /**
+   * Glides each cursor towards its point (kept on its element as the page
+   * scrolls), fades idle ones and removes them once faded.
+   */
   animate() {
     this.frame = void 0;
     const now = performance.now();
-    let moving = false;
-    for (const drawn of this.drawn.values()) {
+    for (const [key, drawn] of [...this.drawn]) {
+      if (now - drawn.updated > CURSOR_GONE_MS) {
+        this.remove(key);
+        continue;
+      }
       if (!drawn.element.isConnected) {
         drawn.node.dataset.faded = "true";
         continue;
@@ -852,11 +895,9 @@ var CursorLayer = class {
       drawn.shownX = Math.abs(targetX - shownX) < 0.5 ? targetX : shownX;
       drawn.shownY = Math.abs(targetY - shownY) < 0.5 ? targetY : shownY;
       drawn.node.style.transform = `translate(${drawn.shownX}px, ${drawn.shownY}px)`;
-      const idle = now - drawn.updated > CURSOR_FADE_MS;
-      drawn.node.dataset.faded = String(idle);
-      if (!idle) moving = true;
+      drawn.node.dataset.faded = String(now - drawn.updated > CURSOR_FADE_MS);
     }
-    if (moving) this.schedule();
+    if (this.drawn.size > 0) this.schedule();
   }
 };
 
@@ -2832,6 +2873,7 @@ function install() {
     you = hello.link.you?.key ?? null;
     outbox.setKey(you);
     showMine(hello.mine);
+    answers.keepDismissed(hello.answers);
     for (const answer of hello.answers) answers.add(answer);
     restoreDraft();
     showSettings(hello.settings);
