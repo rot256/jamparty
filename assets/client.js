@@ -102,6 +102,7 @@ var LIVE_REVISION = (() => {
 var HOST_ID = "jampot";
 var DISMISSED_KEY = "jampot-dismissed-v1";
 var OUTBOX_KEY = "jampot-outbox-v1";
+var JOINER_KEY = "jampot-joiner-key-v1";
 var DRAFT_KEY = "jampot-draft-v1";
 var SETTINGS_COOKIE = "jampot-settings-v1";
 var MAX_OUTBOX = 20;
@@ -1540,6 +1541,13 @@ function parseEntry(value) {
     at: typeof value.at === "number" ? value.at : Date.now()
   };
 }
+function lastKey() {
+  try {
+    return sessionStorage.getItem(JOINER_KEY);
+  } catch {
+    return null;
+  }
+}
 function load() {
   try {
     const stored = JSON.parse(sessionStorage.getItem(OUTBOX_KEY) ?? "[]");
@@ -1565,10 +1573,24 @@ var Outbox = class {
   undelivered = null;
   /** This joiner's key, once a hello said it. */
   key = null;
+  /**
+   * The key a comment is made under: this joiner's, or before its hello
+   * (a comment written as the page loads), that of the joiner this tab
+   * last heard from, which it most likely is.
+   */
+  stamp = lastKey();
   /** The joiner's key, from its hello or link (null: not known yet, and kept). */
   setKey(key) {
     if (key === null || key === this.key) return;
     this.key = key;
+    this.stamp = key;
+    for (const entry of this.entries) {
+      if (entry.key === null) entry.key = key;
+    }
+    try {
+      sessionStorage.setItem(JOINER_KEY, key);
+    } catch {
+    }
     this.changed();
   }
   /** Whether `entry` was made under another joiner key than this one's. */
@@ -1643,7 +1665,7 @@ var Outbox = class {
       ref,
       id: null,
       state: "sending",
-      key: this.key,
+      key: this.stamp,
       at: Date.now()
     };
     this.entries.push(entry);
@@ -1676,7 +1698,7 @@ var Outbox = class {
    */
   async resend(entry) {
     if (entry.state !== "unsent") return;
-    entry.key = this.key;
+    entry.key = this.stamp;
     entry.state = "sending";
     this.changed();
     const outcome = await this.send({ ref: entry.ref, ...entry.draft });

@@ -556,3 +556,27 @@ def test_a_delivery_before_the_queued_answer(tmp_path: Path, page: Page) -> None
             "data-state", "delivered"
         )
         expect(overlay(page, "#badge")).to_have_text("0 queued")
+
+
+def test_a_comment_before_a_new_tabs_first_hello_is_sent(
+    tmp_path: Path, page: Page
+) -> None:
+    """A comment written before a fresh tab's first hello is made with no
+    joiner key known; it never reached a joiner, so it goes out under the
+    key the hello brings."""
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        tap.hold.add("hello")
+        _ = page.goto(joined.url)
+        waiting(page, "the held hello", lambda: len(tap.held) > 0)
+        comment_on_intro(page, "Before the first hello")
+        rows = overlay(page, "#outbox-list li")
+        expect(rows).to_have_attribute("data-state", "unsent")
+        tap.release()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(rows).to_have_attribute("data-state", "queued")
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "Before the first hello"

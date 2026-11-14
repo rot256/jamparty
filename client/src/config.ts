@@ -21,6 +21,8 @@ export const LIVE_REVISION = ((): number | null => {
 export const HOST_ID = "jampot";
 export const DISMISSED_KEY = "jampot-dismissed-v1";
 export const OUTBOX_KEY = "jampot-outbox-v1";
+/** The key of the joiner this tab last heard from. */
+export const JOINER_KEY = "jampot-joiner-key-v1";
 export const DRAFT_KEY = "jampot-draft-v1";
 /** The cookie that keeps the settings changed in this share's pages. */
 export const SETTINGS_COOKIE = "jampot-settings-v1";

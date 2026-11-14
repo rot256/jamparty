@@ -12,7 +12,7 @@
 // may send one again by hand), and their delivery is not followed: the
 // share speaks of this key's comments only.
 
-import { MAX_OUTBOX, OUTBOX_KEY } from "./config";
+import { JOINER_KEY, MAX_OUTBOX, OUTBOX_KEY } from "./config";
 import type { CommentOutcome, Submission } from "./generated/api";
 import { isRecord } from "./json";
 
@@ -79,6 +79,15 @@ function parseEntry(value: unknown): OutboxEntry | null {
   };
 }
 
+/** The key of the joiner this tab last heard from, across reloads. */
+function lastKey(): string | null {
+  try {
+    return sessionStorage.getItem(JOINER_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function load(): OutboxEntry[] {
   try {
     const stored: unknown = JSON.parse(sessionStorage.getItem(OUTBOX_KEY) ?? "[]");
@@ -101,6 +110,12 @@ export class Outbox {
   private undelivered: ReadonlySet<string> | null = null;
   /** This joiner's key, once a hello said it. */
   private key: string | null = null;
+  /**
+   * The key a comment is made under: this joiner's, or before its hello
+   * (a comment written as the page loads), that of the joiner this tab
+   * last heard from, which it most likely is.
+   */
+  private stamp: string | null = lastKey();
 
   constructor(private readonly send: Send) {}
 
@@ -108,6 +123,17 @@ export class Outbox {
   setKey(key: string | null): void {
     if (key === null || key === this.key) return;
     this.key = key;
+    this.stamp = key;
+    // Comments made with no key known never reached a joiner (the socket
+    // sends nothing before its hello): they are this joiner's to send.
+    for (const entry of this.entries) {
+      if (entry.key === null) entry.key = key;
+    }
+    try {
+      sessionStorage.setItem(JOINER_KEY, key);
+    } catch {
+      // Comments made before the next hello then count as another key's.
+    }
     this.changed();
   }
 
@@ -192,7 +218,7 @@ export class Outbox {
       ref,
       id: null,
       state: "sending",
-      key: this.key,
+      key: this.stamp,
       at: Date.now(),
     };
     this.entries.push(entry);
@@ -228,7 +254,7 @@ export class Outbox {
    */
   async resend(entry: OutboxEntry): Promise<void> {
     if (entry.state !== "unsent") return;
-    entry.key = this.key;
+    entry.key = this.stamp;
     entry.state = "sending";
     this.changed();
     const outcome = await this.send({ ref: entry.ref, ...entry.draft });
