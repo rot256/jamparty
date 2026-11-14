@@ -4,7 +4,7 @@
 
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
@@ -89,7 +89,11 @@ async fn recv_waits_for_comments_and_delivery_reaches_only_the_author() {
             .is_err()
     );
 
-    let id = commented(&alice_page.comment(DRAFT).await).unwrap();
+    let mut body: Value = serde_json::from_str(DRAFT).unwrap();
+    body["type"] = "comment".into();
+    body["ref"] = "recv-ref".into();
+    let mut seen = alice_page.request(body).await;
+    let id = commented(&seen.pop().unwrap()["outcome"]).unwrap();
     let comments = within("recv", waiting).await.unwrap();
     let [comment] = comments.as_slice() else {
         panic!("expected one comment, got {comments:?}");
@@ -98,9 +102,14 @@ async fn recv_waits_for_comments_and_delivery_reaches_only_the_author() {
     assert_eq!(comment.comment, "Bigger, please");
     assert_eq!(comment.id.to_string(), id);
 
-    // Alice's page hears of the delivery: nothing pending any more.
-    let mine = alice_page.next_of("mine").await;
-    assert_eq!(mine["undelivered"], json!([]), "{mine}");
+    // Alice's page hears of the delivery: nothing pending any more. With
+    // recv already waiting, that can come before the reply.
+    let delivered =
+        |message: &Value| message["type"] == "mine" && message["undelivered"] == json!([]);
+    if !seen.iter().any(delivered) {
+        let mine = alice_page.next_of("mine").await;
+        assert!(delivered(&mine), "{mine}");
+    }
     // Bob's hears nothing of alice's comments: an answer sent to everyone
     // afterwards arrives first.
     send(share.socket_path(), "after", None).await.unwrap();
