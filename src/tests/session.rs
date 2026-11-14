@@ -203,7 +203,9 @@ async fn a_reconnecting_joiner_learns_what_was_delivered_meanwhile() {
     .unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
+// One thread: the given-up comment's single poll below must not race the
+// writer, the share and the acknowledgement on other workers.
+#[tokio::test]
 async fn a_comment_sent_again_is_queued_once() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
