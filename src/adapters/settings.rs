@@ -5,23 +5,39 @@
 //! open to other users is refused.
 
 use std::{
-    fs,
+    env, fs,
     io::ErrorKind,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 
-use rootcause::prelude::{ResultExt, bail, report};
+use rootcause::{
+    option_ext::OptionExt,
+    prelude::{ResultExt, bail, report},
+};
 
-use crate::{Report, adapters::keyfile, core::settings::Settings};
+use crate::{Report, core::settings::Settings};
 
 const FILE: &str = "settings.json";
 /// Settings files are small; a larger one is not ours.
 const MAX_BYTES: u64 = 64 * 1024;
 
+/// jampot's configuration directory (`~/.config/jampot`, or under
+/// `$XDG_CONFIG_HOME`), from the environment.
+fn config_dir() -> Result<PathBuf, Report> {
+    let config = match env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let home = env::var_os("HOME").context("HOME is not set")?;
+            PathBuf::from(home).join(".config")
+        }
+    };
+    Ok(config.join("jampot"))
+}
+
 /// Where the settings live, from the environment.
 pub(crate) fn default_path() -> Result<PathBuf, Report> {
-    Ok(keyfile::config_dir()?.join(FILE))
+    Ok(config_dir()?.join(FILE))
 }
 
 /// The settings at `path`; the defaults when there is no file yet.

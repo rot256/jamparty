@@ -72,7 +72,8 @@ pub(crate) struct JoinConfig {
     /// The settings file (`adapters::settings`): read at start for the
     /// defaults, never written.
     pub(crate) settings: PathBuf,
-    /// The joiner's own iroh key.
+    /// The joiner's iroh key for this run: `jampot join` makes a fresh one
+    /// each time and never stores it; reconnects keep it.
     pub(crate) key: SecretKey,
     pub(crate) net: NetConfig,
     /// Direct addresses of the share; empty to use address lookup.

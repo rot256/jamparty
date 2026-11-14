@@ -82,7 +82,7 @@ pub(crate) struct Snapshot {
     /// cursor switch.
     pub(crate) people: Vec<Person>,
     /// This joiner's comments the share holds undelivered; none until the
-    /// share first said (a joiner that restarted does not know yet).
+    /// share first said.
     pub(crate) mine: Option<Vec<CommentId>>,
     pub(crate) settings: PageSettings,
     /// Recent answers, oldest first: at most [`MAX_ANSWERS`], of at most

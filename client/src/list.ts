@@ -4,7 +4,7 @@
 
 import { AGENT_TARGET_PREFIX } from "./config";
 import type { ConnectionView } from "./connection";
-import type { Outbox, OutboxEntry } from "./outbox";
+import type { Outbox, ShownState } from "./outbox";
 import type { Ui } from "./ui";
 
 /** The last step of a selector, for people: `h1`, `#intro`, `page`. */
@@ -24,15 +24,18 @@ function relativeTime(at: number, now = Date.now()): string {
   return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
 }
 
-function stateText(entry: OutboxEntry): string {
-  switch (entry.state) {
+function stateText(state: ShownState): string {
+  switch (state) {
     case "unsent":
       return "not sent";
     case "sending":
       return "sending";
+    case "earlier":
+      // Queued under an earlier jampot join; this one cannot follow it.
+      return "sent earlier";
     case "queued":
     case "delivered":
-      return entry.state;
+      return state;
   }
 }
 
@@ -101,7 +104,8 @@ export class CommentList {
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
     outboxList.replaceChildren(...entries.map((entry) => {
       const item = document.createElement("li");
-      item.dataset.state = entry.state;
+      const shown = this.outbox.shown(entry);
+      item.dataset.state = shown;
       const row = document.createElement("div");
       row.className = "row";
       const where = document.createElement("span");
@@ -110,7 +114,7 @@ export class CommentList {
       where.title = entry.draft.selector || "the whole page";
       const state = document.createElement("span");
       state.className = "state";
-      state.textContent = stateText(entry);
+      state.textContent = stateText(shown);
       row.append(where, state);
       const text = document.createElement("p");
       text.className = "text";

@@ -5,7 +5,6 @@
 pub(crate) mod command;
 pub(crate) mod endpoint;
 pub(crate) mod http;
-pub(crate) mod keyfile;
 pub(crate) mod lines;
 pub(crate) mod mcp;
 pub(crate) mod runtime;

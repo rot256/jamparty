@@ -21,7 +21,11 @@ its own joiner's client.
 - Dot colours: green `#2f9e44` connected, amber `#e8a33d` reconnecting,
   grey `#9a958e` share unreachable or a status line set. Comments not sent
   go out again whenever the joiner is connected to the share, status line
-  or not.
+  or not: those made under this joiner's key. Each `jampot join` has a
+  fresh key, never stored, and the share tells comments apart by key and
+  ref, so comments from before a joiner started over are never sent again
+  by themselves (that would queue them twice); the person may send one
+  again by hand.
 - Clicking the pill expands it upward into the comment list (below);
   clicking again, `▾`, or anywhere outside the list collapses it.
 - A gear button sits next to the pill and opens the control panel (below);
@@ -35,7 +39,9 @@ its own joiner's client.
 - The joiner's own comments, newest first. Each row: what it points at
   (the element's short selector, or `page` for a page comment), relative
   time (`3 min ago`), state (`queued`, `delivered` in green, `not sent` in
-  red with a `send again` button), then the comment text.
+  red with a `send again` button, `sent earlier` for one queued under a
+  joiner that has since started over, whose delivery this one cannot
+  follow), then the comment text.
 - Only the joiner's own comments; other people's comments are never shown.
 
 ## Comment dialog
@@ -225,7 +231,9 @@ All of this is part of the version-1 wire format.
     and nothing for bob; `--anchor` on bob's comment reaches only bob; a
     broadcast reaches everyone;
   - reconnect: one joiner drops and returns; the others' presence and
-    cursors update, and its unsent comments go out.
+    cursors update; its comments from before are not sent again by
+    themselves (a new joiner has a new key), and go out when sent again
+    by hand.
 
 ## Open question
 

@@ -113,7 +113,7 @@ export type Snapshot = { link: Link,
 people: Array<Person>, 
 /**
  * This joiner's comments the share holds undelivered; none until the
- * share first said (a joiner that restarted does not know yet).
+ * share first said.
  */
 mine: Array<CommentId> | null, settings: PageSettings, 
 /**

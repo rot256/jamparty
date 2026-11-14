@@ -5,7 +5,8 @@ use std::{net::SocketAddr, time::Duration};
 
 use iroh::{
     Endpoint, EndpointAddr, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey,
-    endpoint::{Connection, QuicTransportConfig, VarInt, presets},
+    address_lookup::{DnsAddressLookup, PkarrResolver},
+    endpoint::{self, Builder, Connection, QuicTransportConfig, VarInt, presets},
 };
 use rootcause::prelude::report;
 use zeroize::Zeroizing;
@@ -22,7 +23,9 @@ use crate::{
 /// How endpoints reach each other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Discovery {
-    /// iroh's defaults: n0's public relays and address lookup.
+    /// n0's public relays and address lookup: the share publishes its
+    /// addresses and joiners look them up; a joiner, which only dials
+    /// out, publishes nothing.
     Public,
     /// No relays and no address lookup: bound on `127.0.0.1`, peers are
     /// dialled at direct addresses only.
@@ -99,11 +102,13 @@ pub(crate) async fn bind(
     }
     .build();
     let builder = match config.discovery {
-        Discovery::Public => match &config.relay {
-            None => Endpoint::builder(presets::N0),
-            Some(url) => Endpoint::builder(presets::N0)
-                .relay_mode(RelayMode::Custom(RelayMap::from(url.clone()))),
-        },
+        Discovery::Public => {
+            let builder = public(accept);
+            match &config.relay {
+                None => builder,
+                Some(url) => builder.relay_mode(RelayMode::Custom(RelayMap::from(url.clone()))),
+            }
+        }
         Discovery::Direct => Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Disabled)
             .clear_address_lookup()
@@ -119,6 +124,20 @@ pub(crate) async fn bind(
         .transport_config(transport)
         .bind()
         .await?)
+}
+
+/// n0's defaults ([`presets::N0`]) for an endpoint that accepts jampot
+/// connections. One that only dials out resolves addresses as those do,
+/// and uses the same relays, but publishes none of its own: nobody needs
+/// to find a joiner, and its key and addresses are nobody's business.
+fn public(accept: Accept) -> Builder {
+    match accept {
+        Accept::Jampot => Endpoint::builder(presets::N0),
+        Accept::Nothing => Endpoint::builder(presets::Minimal)
+            .address_lookup(PkarrResolver::n0_dns())
+            .address_lookup(DnsAddressLookup::n0_dns())
+            .relay_mode(endpoint::default_relay_mode()),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

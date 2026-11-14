@@ -20,6 +20,7 @@ from support import (
     comment_on_intro,
     cursor_on,
     cursors,
+    hello,
     jampot,
     join,
     overlay,
@@ -134,14 +135,17 @@ def test_a_joiner_that_drops_comes_back(tmp_path: Path, browser: Browser) -> Non
                 "data-state", "unsent"
             )
 
-            # Back on the same port (the same page): the comment goes out.
+            # Back on the same port (the same page), with a new key: the
+            # comment waits for bob, and goes out when he sends it again.
             with join(tmp_path / "bob", shared, "bob", port=port):
                 expect(overlay(bob_page, "#connection")).to_have_attribute(
                     "data-state", "green", timeout=RECONNECT
                 )
-                expect(overlay(bob_page, "#outbox-list li")).to_have_attribute(
-                    "data-state", "queued", timeout=RECONNECT
-                )
+                row = overlay(bob_page, "#outbox-list li")
+                expect(row).to_have_attribute("data-state", "unsent")
+                overlay(bob_page, "#pill").click()
+                row.locator("button").click()
+                expect(row).to_have_attribute("data-state", "queued")
                 [line] = jampot(tmp_path, "recv").splitlines()
                 record = cast(dict[str, object], json.loads(line))
                 assert record["comment"] == "Written while away."
@@ -198,7 +202,26 @@ def test_reconnecting_after_a_client_side_move(
 # Further cases of docs/ui.md.
 
 
-def test_a_restarted_joiner_is_believed(tmp_path: Path, page: Page) -> None:
+def test_each_join_has_a_key_of_its_own(tmp_path: Path) -> None:
+    home = tmp_path / "bob"
+    with share(tmp_path, "serve", str(SITE)) as shared:
+        keys: list[object] = []
+        for _ in range(2):
+            with join(home, shared, "bob") as bob:
+                link = cast(dict[str, object], hello(bob)["link"])
+                keys.append(cast(dict[str, object], link["you"])["key"])
+        assert keys[0] != keys[1]
+    # Nothing is kept for it.
+    config = home / "config"
+    assert not config.exists() or not any(config.rglob("*")), list(config.rglob("*"))
+
+
+def test_comments_from_before_a_restart_are_not_sent_again(
+    tmp_path: Path, page: Page
+) -> None:
+    """A joiner that starts over has a new key: the page's comments from
+    before are not followed or sent again by themselves, since the share
+    would queue them a second time under the new key."""
     port = free_port()
     with share(tmp_path, "serve", str(SITE)) as shared:
         with join(tmp_path / "bob", shared, "bob", port=port) as bob:
@@ -206,45 +229,37 @@ def test_a_restarted_joiner_is_believed(tmp_path: Path, page: Page) -> None:
             dot = overlay(page, "#connection")
             expect(dot).to_have_attribute("data-state", "green")
             comment_on_intro(page, "Before the restart.")
-            row = overlay(page, "#outbox-list li")
-            expect(row).to_have_attribute("data-state", "queued")
-        # Delivered while the joiner is away; the page cannot know yet.
-        _ = jampot(tmp_path, "recv")
-        page.wait_for_timeout(500)
-        expect(row).to_have_attribute("data-state", "queued")
-        # A new joiner, same page: it says what the share holds.
+            rows = overlay(page, "#outbox-list li")
+            queued = rows.filter(has_text="Before the restart.")
+            expect(queued).to_have_attribute("data-state", "queued")
+        # Written while the joiner is away: not sent.
+        expect(dot).to_have_attribute("data-state", "amber")
+        comment_on_intro(page, "While it was away.")
+        unsent = rows.filter(has_text="While it was away.")
+        expect(unsent).to_have_attribute("data-state", "unsent")
+        # A new joiner, same page.
         with join(tmp_path / "bob", shared, "bob", port=port):
             expect(dot).to_have_attribute("data-state", "green", timeout=RECONNECT)
-            expect(row).to_have_attribute("data-state", "delivered")
-            # Its settings are believed too.
-            page.locator("h1").click()
-            page.keyboard.press("c")
-            expect(overlay(page, "#comment-mode")).to_have_attribute(
-                "aria-checked", "false"
-            )
-
-
-def test_a_restarted_joiner_keeps_what_is_still_pending(
-    tmp_path: Path, page: Page
-) -> None:
-    port = free_port()
-    with share(tmp_path, "serve", str(SITE)) as shared:
-        with join(tmp_path / "bob", shared, "bob", port=port) as bob:
-            _ = page.goto(bob.url)
-            comment_on_intro(page, "Still waiting.")
-            row = overlay(page, "#outbox-list li")
-            expect(row).to_have_attribute("data-state", "queued")
-        # Not delivered: the new joiner learns it from the share, and the
-        # page keeps it queued.
-        with join(tmp_path / "bob", shared, "bob", port=port):
-            expect(overlay(page, "#connection")).to_have_attribute(
-                "data-state", "green", timeout=RECONNECT
-            )
-            expect(overlay(page, "#badge")).to_have_text("1 queued")
-            expect(row).to_have_attribute("data-state", "queued")
+            expect(queued).to_have_attribute("data-state", "earlier")
+            expect(queued.locator(".state")).to_have_text("sent earlier")
+            expect(unsent).to_have_attribute("data-state", "unsent")
+            expect(overlay(page, "#badge")).to_have_text("0 queued")
+            # Not sent again, by a reload either.
+            page.wait_for_timeout(1000)
+            _ = page.reload()
+            expect(dot).to_have_attribute("data-state", "green")
+            expect(unsent).to_have_attribute("data-state", "unsent")
             [record] = recv_all(tmp_path)
-            assert record["comment"] == "Still waiting."
-            expect(row).to_have_attribute("data-state", "delivered")
+            assert record["comment"] == "Before the restart."
+            # Sent by hand, it goes out once, under the new key.
+            overlay(page, "#pill").click()
+            unsent.locator("button").click()
+            expect(unsent).to_have_attribute("data-state", "queued")
+            [record] = recv_all(tmp_path)
+            assert record["comment"] == "While it was away."
+            expect(unsent).to_have_attribute("data-state", "delivered")
+            # The one from before stays as it was.
+            expect(queued).to_have_attribute("data-state", "earlier")
 
 
 def test_a_second_tab_of_the_same_joiner(tmp_path: Path, browser: Browser) -> None:

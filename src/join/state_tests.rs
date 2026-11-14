@@ -147,13 +147,14 @@ proptest! {
 }
 
 #[test]
-fn a_restarted_joiner_waits_for_the_share_before_saying_what_is_pending() {
+fn a_joiner_waits_for_the_share_before_saying_what_is_pending() {
     let mut state = State::new(settings(Switch::Off));
     // Not admitted yet: nothing is known, not "nothing pending".
     assert_eq!(state.snapshot().mine, None);
     assert!(state.disconnected(None).is_empty());
     assert_eq!(state.snapshot().mine, None);
-    // The share holds one of this key's comments from before the restart.
+    // The share holds one of this key's comments from an earlier
+    // connection.
     let messages = state.admitted(author(1), &[id(1)]).unwrap();
     assert!(messages.contains(&ToPage::Mine {
         undelivered: Some(vec![id(1)])

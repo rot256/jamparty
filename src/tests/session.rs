@@ -318,7 +318,7 @@ async fn a_page_that_falls_behind_is_closed_and_comes_back() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_restarted_joiner_takes_what_is_pending_from_the_share() {
+async fn a_joiner_takes_what_is_pending_for_its_key_from_the_share() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let key = generate_key(&SystemRng);
@@ -333,8 +333,8 @@ async fn a_restarted_joiner_takes_what_is_pending_from_the_share() {
     let id = commented(&post_comment(&first, DRAFT).await).unwrap();
     first.stop().await;
 
-    // The same key, a new process: it knows nothing until admitted, and
-    // then what the share holds.
+    // The same key, a new connection: it knows nothing until admitted,
+    // and then what the share holds for that key.
     let again = joiner_with_key(share.token().clone(), share.direct_addrs(), "alice", key).await;
     connected(&again).await;
     let (_, hello) = PageSocket::hello(&again).await;

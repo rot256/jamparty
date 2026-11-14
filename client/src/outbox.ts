@@ -4,6 +4,13 @@
 // MAX_OUTBOX: delivered ones go first, then queued ones (the share has
 // those); unsent ones are never dropped, so a new comment is refused
 // while the outbox is full of them.
+//
+// Each entry keeps the joiner key it was made under. A joiner that
+// starts over has a new key, and the share tells comments apart by key
+// and ref: one sent again under the new key would be queued twice. So
+// entries of another key are never sent again by themselves (the person
+// may send one again by hand), and their delivery is not followed: the
+// share speaks of this key's comments only.
 
 import { MAX_OUTBOX, OUTBOX_KEY } from "./config";
 import type { CommentOutcome, Submission } from "./generated/api";
@@ -17,12 +24,17 @@ export type Send = (submission: Omit<Submission, "n">) => Promise<CommentOutcome
 
 type OutboxState = "queued" | "delivered" | "unsent" | "sending";
 
+/** How an entry is shown: its state, or `earlier` for one queued under another joiner key. */
+export type ShownState = OutboxState | "earlier";
+
 export interface OutboxEntry {
   draft: Draft;
   /** The page's id for the comment; sending it again never queues it twice. */
   ref: string;
   id: string | null;
   state: OutboxState;
+  /** The joiner key it was made under; null if not known. */
+  key: string | null;
   /** When it was written (ms since the epoch). */
   at: number;
 }
@@ -62,6 +74,7 @@ function parseEntry(value: unknown): OutboxEntry | null {
     ref: typeof value.ref === "string" ? value.ref : crypto.randomUUID(),
     id: typeof value.id === "string" ? value.id : null,
     state: parseState(value.state),
+    key: typeof value.key === "string" ? value.key : null,
     at: typeof value.at === "number" ? value.at : Date.now(),
   };
 }
@@ -86,8 +99,27 @@ export class Outbox {
    * share admitted it).
    */
   private undelivered: ReadonlySet<string> | null = null;
+  /** This joiner's key, once a hello said it. */
+  private key: string | null = null;
 
   constructor(private readonly send: Send) {}
+
+  /** The joiner's key, from its hello or link (null: not known yet, and kept). */
+  setKey(key: string | null): void {
+    if (key === null || key === this.key) return;
+    this.key = key;
+    this.changed();
+  }
+
+  /** Whether `entry` was made under another joiner key than this one's. */
+  private foreign(entry: OutboxEntry): boolean {
+    return this.key !== null && entry.key !== this.key;
+  }
+
+  /** How `entry` is shown. */
+  shown(entry: OutboxEntry): ShownState {
+    return entry.state === "queued" && this.foreign(entry) ? "earlier" : entry.state;
+  }
 
   /** Persists the list (bounded) and redraws. */
   changed(): void {
@@ -125,6 +157,8 @@ export class Outbox {
   /** A queued entry the share no longer holds was delivered. */
   private settle(entry: OutboxEntry): void {
     if (entry.state !== "queued" || entry.id === null || this.undelivered === null) return;
+    // The share's word is about this key's comments only.
+    if (this.foreign(entry)) return;
     if (!this.undelivered.has(entry.id)) entry.state = "delivered";
   }
 
@@ -153,7 +187,14 @@ export class Outbox {
         },
       };
     }
-    const entry: OutboxEntry = { draft, ref, id: null, state: "sending", at: Date.now() };
+    const entry: OutboxEntry = {
+      draft,
+      ref,
+      id: null,
+      state: "sending",
+      key: this.key,
+      at: Date.now(),
+    };
     this.entries.push(entry);
     this.changed();
     const outcome = await this.send({ ref, ...draft });
@@ -180,16 +221,26 @@ export class Outbox {
     this.changed();
   }
 
+  /**
+   * Sends an unsent entry again. One of another joiner key goes under
+   * this one's from now on: only ever by hand, since the share may have
+   * queued it under the other.
+   */
   async resend(entry: OutboxEntry): Promise<void> {
     if (entry.state !== "unsent") return;
+    entry.key = this.key;
     entry.state = "sending";
     this.changed();
     const outcome = await this.send({ ref: entry.ref, ...entry.draft });
     this.take(entry, outcome);
   }
 
+  /** Sends every unsent entry of this joiner key again. */
   async resendAll(): Promise<void> {
-    for (const entry of this.entries.filter((candidate) => candidate.state === "unsent")) {
+    const unsent = this.entries.filter(
+      (candidate) => candidate.state === "unsent" && !this.foreign(candidate),
+    );
+    for (const entry of unsent) {
       await this.resend(entry);
     }
   }

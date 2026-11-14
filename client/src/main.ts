@@ -95,7 +95,7 @@ function install(): void {
   };
 
   const showMine = (undelivered: string[] | null): void => {
-    // Unknown (a joiner that restarted, before the share said): as it was.
+    // Unknown (before the share first admitted the joiner): as it was.
     if (undelivered === null) return;
     pending = undelivered.length;
     ui.setPending(pending);
@@ -121,6 +121,7 @@ function install(): void {
 
   function applyHello(hello: Snapshot): void {
     you = hello.link.you?.key ?? null;
+    outbox.setKey(you);
     showMine(hello.mine);
     for (const answer of hello.answers) answers.add(answer);
     restoreDraft();
@@ -157,6 +158,7 @@ function install(): void {
     switch (slice.type) {
       case "link":
         you = slice.you?.key ?? null;
+        outbox.setKey(you);
         // Who is "you" may have changed: draw again.
         showPeople(here);
         connection.setLink(slice);

@@ -37,8 +37,8 @@ use zeroize::Zeroizing;
 
 use crate::{
     adapters::{
-        endpoint::{Discovery, NetConfig},
-        keyfile, runtime, settings,
+        endpoint::{Discovery, NetConfig, generate_key},
+        runtime, settings,
         t3::{self, T3Target, T3Url, ThreadId},
     },
     agent::guides::{self, Kind},
@@ -46,6 +46,7 @@ use crate::{
         ids::{CommentId, Sid},
         name::JoinerName,
         port::Port,
+        rng::SystemRng,
         token::{PartyToken, TokenError},
     },
     join::{JoinConfig, Joiner, Refused},
@@ -489,7 +490,9 @@ async fn join(
     } else {
         Discovery::Direct
     };
-    let key = keyfile::load_or_create(&keyfile::default_path()?)?;
+    // A key of this run's alone, never stored: shares cannot tell one join
+    // from the next. Reconnects within the run keep it.
+    let key = generate_key(&SystemRng);
     let config = JoinConfig {
         token,
         name,

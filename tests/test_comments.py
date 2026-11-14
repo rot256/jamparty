@@ -16,6 +16,7 @@ from support import (
     SITE,
     SocketTap,
     comment_on_intro,
+    hello,
     jampot,
     join,
     overlay,
@@ -104,12 +105,13 @@ def test_connection_indicator_and_unsent_comments(tmp_path: Path, page: Page) ->
         expect(entry.locator("button")).to_have_text("send again")
 
 
-FILL_OUTBOX = """(count) => {
+FILL_OUTBOX = """([count, key]) => {
     const entries = Array.from({ length: count }, (_, index) => ({
         draft: { page: location.href, selector: "#intro", selectedText: null, comment: `old ${index}` },
         ref: `old-${index}`,
         id: null,
         state: "unsent",
+        key,
         at: Date.now(),
     }));
     sessionStorage.setItem("jampot-outbox-v1", JSON.stringify(entries));
@@ -127,7 +129,9 @@ def test_a_full_outbox_refuses_a_new_comment(tmp_path: Path, page: Page) -> None
         tap = SocketTap(page)
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        _ = page.evaluate(FILL_OUTBOX, 20)
+        link = cast(dict[str, object], hello(joined)["link"])
+        key = cast(dict[str, object], link["you"])["key"]
+        _ = page.evaluate(FILL_OUTBOX, [20, key])
         tap.hold = {"comment_reply"}
         _ = page.reload()
         rows = overlay(page, "#outbox-list li")

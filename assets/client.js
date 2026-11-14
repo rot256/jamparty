@@ -1290,15 +1290,17 @@ function relativeTime(at, now = Date.now()) {
   const hours = Math.floor(minutes / 60);
   return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
 }
-function stateText(entry) {
-  switch (entry.state) {
+function stateText(state) {
+  switch (state) {
     case "unsent":
       return "not sent";
     case "sending":
       return "sending";
+    case "earlier":
+      return "sent earlier";
     case "queued":
     case "delivered":
-      return entry.state;
+      return state;
   }
 }
 var CommentList = class {
@@ -1363,7 +1365,8 @@ var CommentList = class {
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
     outboxList.replaceChildren(...entries.map((entry) => {
       const item = document.createElement("li");
-      item.dataset.state = entry.state;
+      const shown = this.outbox.shown(entry);
+      item.dataset.state = shown;
       const row = document.createElement("div");
       row.className = "row";
       const where = document.createElement("span");
@@ -1372,7 +1375,7 @@ var CommentList = class {
       where.title = entry.draft.selector || "the whole page";
       const state = document.createElement("span");
       state.className = "state";
-      state.textContent = stateText(entry);
+      state.textContent = stateText(shown);
       row.append(where, state);
       const text = document.createElement("p");
       text.className = "text";
@@ -1492,6 +1495,7 @@ function parseEntry(value) {
     ref: typeof value.ref === "string" ? value.ref : crypto.randomUUID(),
     id: typeof value.id === "string" ? value.id : null,
     state: parseState(value.state),
+    key: typeof value.key === "string" ? value.key : null,
     at: typeof value.at === "number" ? value.at : Date.now()
   };
 }
@@ -1518,6 +1522,22 @@ var Outbox = class {
    * share admitted it).
    */
   undelivered = null;
+  /** This joiner's key, once a hello said it. */
+  key = null;
+  /** The joiner's key, from its hello or link (null: not known yet, and kept). */
+  setKey(key) {
+    if (key === null || key === this.key) return;
+    this.key = key;
+    this.changed();
+  }
+  /** Whether `entry` was made under another joiner key than this one's. */
+  foreign(entry) {
+    return this.key !== null && entry.key !== this.key;
+  }
+  /** How `entry` is shown. */
+  shown(entry) {
+    return entry.state === "queued" && this.foreign(entry) ? "earlier" : entry.state;
+  }
   /** Persists the list (bounded) and redraws. */
   changed() {
     while (this.entries.length > MAX_OUTBOX) {
@@ -1550,6 +1570,7 @@ var Outbox = class {
   /** A queued entry the share no longer holds was delivered. */
   settle(entry) {
     if (entry.state !== "queued" || entry.id === null || this.undelivered === null) return;
+    if (this.foreign(entry)) return;
     if (!this.undelivered.has(entry.id)) entry.state = "delivered";
   }
   /**
@@ -1576,7 +1597,14 @@ var Outbox = class {
         }
       };
     }
-    const entry = { draft, ref, id: null, state: "sending", at: Date.now() };
+    const entry = {
+      draft,
+      ref,
+      id: null,
+      state: "sending",
+      key: this.key,
+      at: Date.now()
+    };
     this.entries.push(entry);
     this.changed();
     const outcome = await this.send({ ref, ...draft });
@@ -1600,15 +1628,25 @@ var Outbox = class {
     }
     this.changed();
   }
+  /**
+   * Sends an unsent entry again. One of another joiner key goes under
+   * this one's from now on: only ever by hand, since the share may have
+   * queued it under the other.
+   */
   async resend(entry) {
     if (entry.state !== "unsent") return;
+    entry.key = this.key;
     entry.state = "sending";
     this.changed();
     const outcome = await this.send({ ref: entry.ref, ...entry.draft });
     this.take(entry, outcome);
   }
+  /** Sends every unsent entry of this joiner key again. */
   async resendAll() {
-    for (const entry of this.entries.filter((candidate) => candidate.state === "unsent")) {
+    const unsent = this.entries.filter(
+      (candidate) => candidate.state === "unsent" && !this.foreign(candidate)
+    );
+    for (const entry of unsent) {
       await this.resend(entry);
     }
   }
@@ -2792,6 +2830,7 @@ function install() {
   };
   function applyHello(hello) {
     you = hello.link.you?.key ?? null;
+    outbox.setKey(you);
     showMine(hello.mine);
     for (const answer of hello.answers) answers.add(answer);
     restoreDraft();
@@ -2817,6 +2856,7 @@ function install() {
     switch (slice.type) {
       case "link":
         you = slice.you?.key ?? null;
+        outbox.setKey(you);
         showPeople(here);
         connection.setLink(slice);
         break;
