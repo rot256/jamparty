@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 
 use crate::{
     core::port::Port,
-    join::Fallback,
+    join::{Fallback, Unavailable},
     tests::harness::{fixture_dir, joiner_on, share_files, share_proxy},
 };
 
@@ -73,6 +73,20 @@ async fn a_port_taken_on_the_ipv6_side_falls_back_too() {
     let joiner = joiner_on(&share, None).await.unwrap();
     assert_ne!(joiner.local_addr().port(), u16::from(port));
     assert!(joiner.fallback().is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wildcard_listener_on_the_port_falls_back() {
+    let port = free_port();
+    let _service = TcpListener::bind((Ipv4Addr::UNSPECIFIED, u16::from(port))).unwrap();
+    let share = share_proxy(dev_server(port)).await;
+    let joiner = joiner_on(&share, None).await.unwrap();
+    assert_ne!(joiner.local_addr().port(), u16::from(port));
+    let Some(Fallback { wanted, why, .. }) = joiner.fallback() else {
+        panic!("no fallback");
+    };
+    assert_eq!(*wanted, port);
+    assert_eq!(*why, Unavailable::InUse);
 }
 
 #[tokio::test(flavor = "multi_thread")]

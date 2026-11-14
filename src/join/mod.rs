@@ -25,7 +25,7 @@ use std::{
     error::Error,
     fmt,
     io::{self, ErrorKind},
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -36,10 +36,12 @@ use iroh::endpoint::Connection;
 use iroh::{Endpoint, SecretKey};
 use nix::libc;
 use rootcause::prelude::{ResultExt, bail};
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{oneshot, watch},
     task::JoinSet,
+    time,
 };
 
 use crate::{
@@ -194,48 +196,97 @@ struct Bound {
 /// addresses.
 const BIND_ATTEMPTS: usize = 16;
 
+/// How long the check that nothing answers on the dev server's port waits
+/// for an answer.
+const PROBE_WAIT: Duration = Duration::from_millis(300);
+/// Connections waiting to be accepted, per listener.
+const BACKLOG: i32 = 1024;
+
 /// Binds the local server as `wanted`; with [`Wanted::Mirror`], says why
 /// it serves elsewhere if it does.
 async fn bind_local(wanted: Wanted) -> Result<(Bound, Option<Fallback>), Report> {
     match wanted {
         Wanted::Given(port) => {
-            let bound = bind_port(port)
-                .await
-                .context_with(|| format!("could not serve on port {port}"))?;
+            let bound =
+                bind_port(port).context_with(|| format!("could not serve on port {port}"))?;
             Ok((bound, None))
         }
-        Wanted::Mirror(port) => match bind_port(port).await {
-            Ok(bound) => Ok((bound, None)),
-            Err(error) => {
-                tracing::debug!(%error, %port, "the dev server's port cannot be had here");
-                let bound = bind_any().await?;
-                let fallback = Fallback {
-                    wanted: port,
-                    serving: bound.port,
-                    why: error.kind().into(),
-                };
-                Ok((bound, Some(fallback)))
+        Wanted::Mirror(port) => {
+            let mirrored = match unanswered(port).await {
+                Ok(()) => bind_port(port).map_err(|error| {
+                    tracing::debug!(%error, %port, "the dev server's port cannot be had here");
+                    Unavailable::from(error.kind())
+                }),
+                Err(why) => Err(why),
+            };
+            match mirrored {
+                Ok(bound) => Ok((bound, None)),
+                Err(why) => {
+                    let bound = bind_any()?;
+                    let fallback = Fallback {
+                        wanted: port,
+                        serving: bound.port,
+                        why,
+                    };
+                    Ok((bound, Some(fallback)))
+                }
             }
-        },
-        Wanted::Any => Ok((bind_any().await?, None)),
+        }
+        Wanted::Any => Ok((bind_any()?, None)),
     }
 }
 
+/// Checks that nothing answers on `port` of either loopback address: the
+/// share names the port, and the joiner must not take one in front of a
+/// local service that listens on it, as binding beside a wildcard
+/// listener can on some systems.
+async fn unanswered(port: Port) -> Result<(), Unavailable> {
+    for ip in [
+        IpAddr::from(Ipv4Addr::LOCALHOST),
+        IpAddr::from(Ipv6Addr::LOCALHOST),
+    ] {
+        let connect = TcpStream::connect(SocketAddr::new(ip, u16::from(port)));
+        if let Ok(Ok(_)) = time::timeout(PROBE_WAIT, connect).await {
+            tracing::debug!(%port, %ip, "something answers on the dev server's port here");
+            return Err(Unavailable::InUse);
+        }
+    }
+    Ok(())
+}
+
+/// A listener on `addr`. Without `SO_REUSEADDR` where it would let it bind
+/// beside another socket listening on the port (on macOS and the BSDs,
+/// beside a wildcard one, shadowing it for loopback); on Linux it never
+/// does, and it lets a joiner that starts over take its port back while
+/// old connections linger in TIME_WAIT. Close-on-exec, as socket2 makes
+/// every socket.
+fn listen(addr: SocketAddr) -> io::Result<TcpListener> {
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(cfg!(target_os = "linux"))?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(BACKLOG)?;
+    TcpListener::from_std(socket.into())
+}
+
 /// Both loopback addresses on `port`.
-async fn bind_port(port: Port) -> io::Result<Bound> {
-    let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, u16::from(port))).await?;
+fn bind_port(port: Port) -> io::Result<Bound> {
+    let v4 = listen(SocketAddr::from((Ipv4Addr::LOCALHOST, u16::from(port))))?;
     Ok(Bound {
-        listeners: with_ipv6(v4).await?,
+        listeners: with_ipv6(v4)?,
         port,
     })
 }
 
 /// Both loopback addresses on a free port.
-async fn bind_any() -> Result<Bound, Report> {
+fn bind_any() -> Result<Bound, Report> {
     for _ in 0..BIND_ATTEMPTS {
-        let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let v4 = listen(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
         let port = Port::try_from(v4.local_addr()?.port())?;
-        match with_ipv6(v4).await {
+        match with_ipv6(v4) {
             Ok(listeners) => return Ok(Bound { listeners, port }),
             Err(error) if error.kind() == ErrorKind::AddrInUse => {}
             Err(error) => return Err(error.into()),
@@ -247,9 +298,9 @@ async fn bind_any() -> Result<Bound, Report> {
 /// `v4` and a listener on [::1] at its port (`localhost` may resolve to
 /// either), so no other local user can take the IPv6 side. Without IPv6
 /// loopback, nobody can, and 127.0.0.1 alone will do.
-async fn with_ipv6(v4: TcpListener) -> io::Result<Vec<TcpListener>> {
+fn with_ipv6(v4: TcpListener) -> io::Result<Vec<TcpListener>> {
     let port = v4.local_addr()?.port();
-    match TcpListener::bind((Ipv6Addr::LOCALHOST, port)).await {
+    match listen(SocketAddr::from((Ipv6Addr::LOCALHOST, port))) {
         Ok(v6) => Ok(vec![v4, v6]),
         Err(error)
             if error.kind() == ErrorKind::AddrNotAvailable
@@ -435,7 +486,24 @@ impl Joiner {
 
 #[cfg(test)]
 mod tests {
-    use crate::{join::Refused, protocol::control::RefusedReason};
+    use std::net::{Ipv4Addr, TcpListener};
+
+    use crate::{
+        core::port::Port,
+        join::{Refused, Unavailable, unanswered},
+        protocol::control::RefusedReason,
+    };
+
+    #[tokio::test]
+    async fn a_port_something_answers_on_is_not_mirrored() {
+        // A service listening on every address answers on loopback; on
+        // macOS the joiner could otherwise bind 127.0.0.1 beside it.
+        let service = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let port = Port::try_from(service.local_addr().unwrap().port()).unwrap();
+        assert_eq!(unanswered(port).await, Err(Unavailable::InUse));
+        drop(service);
+        assert_eq!(unanswered(port).await, Ok(()));
+    }
 
     #[test]
     fn a_hello_the_share_cannot_read_may_mean_another_version() {
