@@ -173,6 +173,7 @@ mod tests {
     use crate::{
         adapters::runtime::{connect, listen},
         core::ids::{EndpointKey, Sid},
+        describe,
     };
 
     #[tokio::test]
@@ -208,7 +209,12 @@ mod tests {
         let stale = dir.join(format!("{}.sock", EndpointKey([4; 32]).sid()));
         drop(net::UnixListener::bind(&stale).unwrap());
         assert!(stale.exists());
-        assert!(connect(&dir, None).await.is_ok());
+        let skipped = connect(&dir, None).await.map(drop);
+        assert!(
+            skipped.is_ok(),
+            "{:?}",
+            skipped.map_err(|error| describe(&error))
+        );
         assert!(stale.exists(), "connect removed a socket");
         let (_listener, _next) = listen(&dir, &EndpointKey([5; 32]).sid()).unwrap();
         assert!(!stale.exists());
