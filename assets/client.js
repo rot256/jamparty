@@ -8,6 +8,8 @@ var MAX_PAGE_PATH = 512;
 var MAX_CURSOR_SELECTOR = 512;
 var FRACTION_ONE = 1e4;
 var RESERVED_KEYS = ["/", "Escape"];
+var MODIFIER_KEYS = ["Alt", "AltGraph", "CapsLock", "Control", "Fn", "FnLock", "Hyper", "Meta", "NumLock", "ScrollLock", "Shift", "Super", "Symbol"];
+var PAGE_KEYS = ["Enter", "Tab", " "];
 
 // client/src/capture.ts
 function truncate(value, length) {
@@ -99,6 +101,7 @@ var HOST_ID = "jampot";
 var DISMISSED_KEY = "jampot-dismissed-v1";
 var OUTBOX_KEY = "jampot-outbox-v1";
 var DRAFT_KEY = "jampot-draft-v1";
+var SETTINGS_COOKIE = "jampot-settings-v1";
 var MAX_OUTBOX = 20;
 var WATCHDOG_MS = 35e3;
 var RECONNECT_MIN_MS = 250;
@@ -560,12 +563,17 @@ var Panel = class {
       this.stopListening();
       return;
     }
-    if (["Shift", "Control", "Alt", "Meta", "CapsLock"].includes(event.key)) return;
+    if (MODIFIER_KEYS.includes(event.key)) return;
     const key = normalizeKey(event.key);
     const other = action === "commentMode" ? "showCursor" : "commentMode";
-    if (RESERVED_KEYS.includes(key) || key === " ") {
+    if (RESERVED_KEYS.includes(key)) {
       this.stopListening();
       this.message(`${keyLabel(key)} is used by jampot`);
+      return;
+    }
+    if (PAGE_KEYS.includes(key)) {
+      this.stopListening();
+      this.message(`${key === " " ? "Space" : key} is the page's`);
       return;
     }
     if (normalizeKey(settings.keys[other]) === key) {
@@ -1606,6 +1614,73 @@ var Outbox = class {
   }
 };
 
+// client/src/remembered.ts
+var MAX_AGE_SECS = 365 * 24 * 60 * 60;
+function isSwitch(value) {
+  return value === "on" || value === "off";
+}
+function isCorner2(value) {
+  return value === "bottom-right" || value === "bottom-left" || value === "top-right" || value === "top-left";
+}
+function parse2(value) {
+  if (!isRecord(value)) return {};
+  const change = {};
+  const { name, keys, commentMode, showCursor, corner } = value;
+  if (typeof name === "string") change.name = name;
+  if (isRecord(keys) && typeof keys.commentMode === "string" && typeof keys.showCursor === "string") {
+    change.keys = { commentMode: keys.commentMode, showCursor: keys.showCursor };
+  }
+  if (isSwitch(commentMode)) change.commentMode = commentMode;
+  if (isSwitch(showCursor)) change.showCursor = showCursor;
+  if (isCorner2(corner)) change.corner = corner;
+  return change;
+}
+function remembered() {
+  const prefix = `${SETTINGS_COOKIE}=`;
+  const cookie = document.cookie.split("; ").find((part) => part.startsWith(prefix));
+  if (cookie === void 0) return {};
+  try {
+    return parse2(JSON.parse(decodeURIComponent(cookie.slice(prefix.length))));
+  } catch {
+    return {};
+  }
+}
+function keep(change) {
+  const value = encodeURIComponent(JSON.stringify(change));
+  document.cookie = `${SETTINGS_COOKIE}=${value}; path=/; max-age=${MAX_AGE_SECS}; samesite=strict`;
+}
+function remember(change) {
+  keep({ ...remembered(), ...parse2(change) });
+}
+function forget() {
+  document.cookie = `${SETTINGS_COOKIE}=; path=/; max-age=0; samesite=strict`;
+}
+function missing(change, settings) {
+  const needed = {};
+  let any = false;
+  if (change.name !== void 0 && (change.name !== settings.name || settings.askName)) {
+    needed.name = change.name;
+    any = true;
+  }
+  if (change.keys !== void 0 && (change.keys.commentMode !== settings.keys.commentMode || change.keys.showCursor !== settings.keys.showCursor)) {
+    needed.keys = change.keys;
+    any = true;
+  }
+  if (change.commentMode !== void 0 && change.commentMode !== settings.commentMode) {
+    needed.commentMode = change.commentMode;
+    any = true;
+  }
+  if (change.showCursor !== void 0 && change.showCursor !== settings.showCursor) {
+    needed.showCursor = change.showCursor;
+    any = true;
+  }
+  if (change.corner !== void 0 && change.corner !== settings.corner) {
+    needed.corner = change.corner;
+    any = true;
+  }
+  return any ? needed : null;
+}
+
 // client/src/api.ts
 function parseMessage(data) {
   if (typeof data !== "string") return null;
@@ -2487,7 +2562,7 @@ var MARKUP = `
       <input id="name-input" type="text" maxlength="${MAX_NAME}" autocomplete="nickname" spellcheck="false" required>
       <div id="name-error" role="alert"></div>
       <div id="name-foot">
-        <span>Remembered on this computer; change it under the gear.</span>
+        <span>Remembered for this share in this browser; change it under the gear.</span>
         <button id="name-join" type="submit">Join</button>
       </div>
     </form>
@@ -2648,7 +2723,13 @@ function install() {
     }
   });
   const outbox = new Outbox((submission) => socket.comment(submission));
-  const changeSettings = (change) => socket.changeSettings(change);
+  const changeSettings = async (change) => {
+    const before = remembered();
+    remember(change);
+    const outcome = await socket.changeSettings(change);
+    if (outcome !== "saved" && socket.isOpen) keep(before);
+    return outcome;
+  };
   const answers = new Answers(ui);
   const dialog = new CommentDialog(ui, outbox, () => pending);
   const list = new CommentList(ui, outbox);
@@ -2714,10 +2795,23 @@ function install() {
     showMine(hello.mine);
     for (const answer of hello.answers) answers.add(answer);
     restoreDraft();
-    panel.show(hello.settings);
+    showSettings(hello.settings);
     showPeople(hello.people);
     onRevision(hello.revision);
     connection.setLink(hello.link);
+  }
+  function showSettings(settings) {
+    const change = missing(remembered(), settings);
+    if (change === null) {
+      panel.show(settings);
+      return;
+    }
+    panel.show({ ...settings, askName: settings.askName && change.name === void 0 });
+    void socket.changeSettings(change).then((outcome) => {
+      if (outcome === "saved" || !socket.isOpen) return;
+      forget();
+      panel.show(settings);
+    });
   }
   function applySlice(slice) {
     switch (slice.type) {

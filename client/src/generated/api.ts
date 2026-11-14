@@ -8,6 +8,8 @@ export const MAX_PAGE_PATH = 512;
 export const MAX_CURSOR_SELECTOR = 512;
 export const FRACTION_ONE = 10000;
 export const RESERVED_KEYS: readonly string[] = ["/", "Escape"];
+export const MODIFIER_KEYS: readonly string[] = ["Alt", "AltGraph", "CapsLock", "Control", "Fn", "FnLock", "Hyper", "Meta", "NumLock", "ScrollLock", "Shift", "Super", "Symbol"];
+export const PAGE_KEYS: readonly string[] = ["Enter", "Tab", " "];
 
 export type CommentId = string;
 
@@ -63,7 +65,8 @@ export type PageSettings = {
  */
 name: JoinerName, 
 /**
- * No name was chosen yet (none saved, no `--name`): the page asks.
+ * No name was chosen yet (none in the settings file or the page, no
+ * `--name`): the page asks.
  */
 askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: Corner, };
 

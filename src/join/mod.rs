@@ -69,7 +69,8 @@ pub(crate) struct JoinConfig {
     pub(crate) name: Option<JoinerName>,
     /// The name when none is given or saved.
     pub(crate) default_name: JoinerName,
-    /// The settings file (`adapters::settings`); read at start.
+    /// The settings file (`adapters::settings`): read at start for the
+    /// defaults, never written.
     pub(crate) settings: PathBuf,
     /// The joiner's own iroh key.
     pub(crate) key: SecretKey,
@@ -288,8 +289,7 @@ impl Joiner {
             admission_wait,
         } = config;
         let preferences = Preferences {
-            saved: settings::load(&path)?,
-            path,
+            settings: settings::load(&path)?,
             given: name,
             default: default_name,
         };

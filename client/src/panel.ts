@@ -2,7 +2,7 @@
 // switches with their keys (rebindable), the name, and who is here.
 
 import { PALETTE } from "./config";
-import { RESERVED_KEYS } from "./generated/api";
+import { MODIFIER_KEYS, PAGE_KEYS, RESERVED_KEYS } from "./generated/api";
 import type {
   Corner,
   Keys,
@@ -208,12 +208,18 @@ export class Panel {
       this.stopListening();
       return;
     }
-    if (["Shift", "Control", "Alt", "Meta", "CapsLock"].includes(event.key)) return;
+    // A modifier goes with the key after it: wait for that.
+    if (MODIFIER_KEYS.includes(event.key)) return;
     const key = normalizeKey(event.key);
     const other: Action = action === "commentMode" ? "showCursor" : "commentMode";
-    if (RESERVED_KEYS.includes(key) || key === " ") {
+    if (RESERVED_KEYS.includes(key)) {
       this.stopListening();
       this.message(`${keyLabel(key)} is used by jampot`);
+      return;
+    }
+    if (PAGE_KEYS.includes(key)) {
+      this.stopListening();
+      this.message(`${key === " " ? "Space" : key} is the page's`);
       return;
     }
     if (normalizeKey(settings.keys[other]) === key) {

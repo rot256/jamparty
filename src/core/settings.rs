@@ -1,7 +1,7 @@
-//! The joiner's settings (docs/ui.md): its saved name, the overlay's key
-//! bindings, its two switches and the corner it sits in. The joiner
-//! process keeps them on disk (see `adapters::settings`); pages change
-//! them.
+//! The joiner's settings (docs/ui.md): its name, the overlay's key
+//! bindings, its two switches and the corner it sits in. Each join starts
+//! from the settings file (see `adapters::settings`); pages change them
+//! for that join.
 
 use serde::{Deserialize, Serialize};
 
@@ -31,10 +31,30 @@ pub(crate) enum Corner {
 const MAX_KEY: usize = 20;
 /// Keys jampot uses itself: `/` opens a page comment, Escape cancels.
 pub(crate) const RESERVED_KEYS: [&str; 2] = ["/", "Escape"];
+/// Keys pressed only with others: the overlay's rebinding waits past them.
+pub(crate) const MODIFIER_KEYS: [&str; 13] = [
+    "Alt",
+    "AltGraph",
+    "CapsLock",
+    "Control",
+    "Fn",
+    "FnLock",
+    "Hyper",
+    "Meta",
+    "NumLock",
+    "ScrollLock",
+    "Shift",
+    "Super",
+    "Symbol",
+];
+/// Keys a page needs for itself: forms, focus and buttons.
+pub(crate) const PAGE_KEYS: [&str; 3] = ["Enter", "Tab", " "];
 
 /// A key as the browser names it (`KeyboardEvent.key`): `c`, `F2`,
-/// `ArrowUp`; at most 20 characters, no control characters, not a key
-/// jampot uses itself.
+/// `ArrowUp`; at most 20 characters, no control characters, and none the
+/// overlay's rebinding refuses: not a key jampot uses itself, a modifier,
+/// or Enter, Tab or Space. Checked here too, since any page script can
+/// send a change.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
@@ -51,8 +71,12 @@ impl TryFrom<String> for KeyBinding {
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
         check_line(&raw, "a key", MAX_KEY)?;
-        if RESERVED_KEYS.contains(&raw.as_str()) {
+        let named = |keys: &[&str]| keys.iter().any(|key| key.eq_ignore_ascii_case(&raw));
+        if named(&RESERVED_KEYS) {
             return Err(Invalid::new(format!("{raw} is used by jampot")));
+        }
+        if named(&MODIFIER_KEYS) || named(&PAGE_KEYS) {
+            return Err(Invalid::new(format!("{raw} cannot be bound")));
         }
         Ok(Self(raw))
     }
@@ -235,6 +259,15 @@ mod tests {
             ("k", "K"),
             ("/", "x"),
             ("c", "Escape"),
+            ("c", "escape"),
+            ("Shift", "x"),
+            ("c", "Control"),
+            ("Alt", "x"),
+            ("c", "Meta"),
+            ("CapsLock", "x"),
+            ("c", "Enter"),
+            ("Tab", "x"),
+            (" ", "x"),
             ("", "x"),
             (" ", "x"),
             ("\n", "x"),

@@ -15,6 +15,7 @@ import { pageUrl, watchUrl } from "./location";
 import { NamePrompt } from "./name";
 import { Outbox } from "./outbox";
 import { type ChangeSettings, Panel, isEditing } from "./panel";
+import { forget, keep, missing, remember, remembered } from "./remembered";
 import { PageSocket, type Slice } from "./socket";
 import { Ui } from "./ui";
 
@@ -40,7 +41,16 @@ function install(): void {
     },
   });
   const outbox = new Outbox((submission) => socket.comment(submission));
-  const changeSettings: ChangeSettings = (change) => socket.changeSettings(change);
+  // The joiner takes a change for this join only; the page keeps it for
+  // the share, from before it goes (the tab may close before the reply),
+  // and takes it back if the joiner refuses it.
+  const changeSettings: ChangeSettings = async (change) => {
+    const before = remembered();
+    remember(change);
+    const outcome = await socket.changeSettings(change);
+    if (outcome !== "saved" && socket.isOpen) keep(before);
+    return outcome;
+  };
   const answers = new Answers(ui);
   const dialog = new CommentDialog(ui, outbox, () => pending);
   const list = new CommentList(ui, outbox);
@@ -114,10 +124,33 @@ function install(): void {
     showMine(hello.mine);
     for (const answer of hello.answers) answers.add(answer);
     restoreDraft();
-    panel.show(hello.settings);
+    showSettings(hello.settings);
     showPeople(hello.people);
     onRevision(hello.revision);
     connection.setLink(hello.link);
+  }
+
+  /**
+   * Shows the joiner's settings, after handing it what this share's
+   * pages changed if it does not have that yet (a joiner that started
+   * over): a remembered name then keeps the name prompt away.
+   */
+  function showSettings(settings: PageSettings): void {
+    const change = missing(remembered(), settings);
+    if (change === null) {
+      panel.show(settings);
+      return;
+    }
+    panel.show({ ...settings, askName: settings.askName && change.name === undefined });
+    void socket.changeSettings(change).then((outcome) => {
+      // Taken: the settings message before the reply showed it. Lost
+      // with the socket: the next hello tries again.
+      if (outcome === "saved" || !socket.isOpen) return;
+      // Refused (a jampot that checks more): forgotten, and the joiner's
+      // settings shown as they are.
+      forget();
+      panel.show(settings);
+    });
   }
 
   function applySlice(slice: Slice): void {

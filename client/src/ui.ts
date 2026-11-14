@@ -99,7 +99,7 @@ const MARKUP = `
       <input id="name-input" type="text" maxlength="${MAX_NAME}" autocomplete="nickname" spellcheck="false" required>
       <div id="name-error" role="alert"></div>
       <div id="name-foot">
-        <span>Remembered on this computer; change it under the gear.</span>
+        <span>Remembered for this share in this browser; change it under the gear.</span>
         <button id="name-join" type="submit">Join</button>
       </div>
     </form>

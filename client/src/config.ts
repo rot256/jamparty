@@ -22,6 +22,8 @@ export const HOST_ID = "jampot";
 export const DISMISSED_KEY = "jampot-dismissed-v1";
 export const OUTBOX_KEY = "jampot-outbox-v1";
 export const DRAFT_KEY = "jampot-draft-v1";
+/** The cookie that keeps the settings changed in this share's pages. */
+export const SETTINGS_COOKIE = "jampot-settings-v1";
 export const MAX_OUTBOX = 20;
 /** The joiner pings every 15 s; a socket silent for longer than this is dead. */
 export const WATCHDOG_MS = 35000;

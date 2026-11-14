@@ -447,10 +447,9 @@ def switch(page: Page, name: str) -> Locator:
     return overlay(page, f"#{name}")
 
 
-def settings_file(home: Path) -> dict[str, object]:
-    path = home / "config/jampot/settings.json"
-    assert path.stat().st_mode & 0o777 == 0o600
-    return cast(dict[str, object], json.loads(path.read_text()))
+def settings_path(home: Path) -> Path:
+    """The settings file of `home`: read by jampot, never written."""
+    return home / "config/jampot/settings.json"
 
 
 def eventually(what: str, check: Callable[[], bool]) -> None:

@@ -1,17 +1,13 @@
-//! The joiner's settings: the saved ones, the name for this run, and how
-//! pages see them.
-
-use std::path::{Path, PathBuf};
+//! The joiner's settings for this join: the defaults read from the
+//! settings file at start, the name for this run, the changes its pages
+//! made, and how pages see them. Pages change them for this join only;
+//! nothing a page does is written to disk.
 
 use serde::Serialize;
 
-use crate::{
-    Report,
-    adapters::settings,
-    core::{
-        name::JoinerName,
-        settings::{Corner, Keys, Settings, SettingsChange, Switch},
-    },
+use crate::core::{
+    name::JoinerName,
+    settings::{Corner, Keys, Settings, SettingsChange, Switch},
 };
 
 /// The settings as the page sees them.
@@ -21,7 +17,8 @@ use crate::{
 pub(crate) struct PageSettings {
     /// The name this joiner goes by now.
     pub(crate) name: JoinerName,
-    /// No name was chosen yet (none saved, no `--name`): the page asks.
+    /// No name was chosen yet (none in the settings file or the page, no
+    /// `--name`): the page asks.
     pub(crate) ask_name: bool,
     pub(crate) keys: Keys,
     pub(crate) comment_mode: Switch,
@@ -29,15 +26,14 @@ pub(crate) struct PageSettings {
     pub(crate) corner: Corner,
 }
 
-/// The joiner's settings: the saved ones, and the name for this run.
+/// The joiner's settings for this join.
 pub(crate) struct Preferences {
-    /// The settings file.
-    pub(crate) path: PathBuf,
-    pub(crate) saved: Settings,
+    /// The settings file's, changed by pages since.
+    pub(crate) settings: Settings,
     /// `jampot join --name`: this run's name, until one is chosen in the
     /// page.
     pub(crate) given: Option<JoinerName>,
-    /// The name when none is given or saved (`user@host`).
+    /// The name when none is given or chosen (`user@host`).
     pub(crate) default: JoinerName,
 }
 
@@ -47,7 +43,7 @@ impl Preferences {
     pub(crate) fn name(&self) -> JoinerName {
         self.given
             .clone()
-            .or_else(|| self.saved.name.clone())
+            .or_else(|| self.settings.name.clone())
             .unwrap_or_else(|| self.default.clone())
     }
 
@@ -59,7 +55,7 @@ impl Preferences {
             comment_mode,
             show_cursor,
             corner,
-        } = &self.saved;
+        } = &self.settings;
         PageSettings {
             name: self.name(),
             ask_name: name.is_none() && self.given.is_none(),
@@ -70,48 +66,13 @@ impl Preferences {
         }
     }
 
-    /// Takes settings [`save`] wrote; a name chosen in the page replaces
-    /// `--name` for the rest of the run.
-    pub(crate) fn take(&mut self, saved: Saved) -> PageSettings {
-        let Saved {
-            settings,
-            chose_name,
-        } = saved;
-        self.saved = settings;
-        match chose_name {
-            ChoseName::Yes => self.given = None,
-            ChoseName::No => {}
+    /// Applies a page's change for the rest of this join; a name chosen in
+    /// the page replaces `--name`.
+    pub(crate) fn change(&mut self, change: SettingsChange) -> PageSettings {
+        if change.name.is_some() {
+            self.given = None;
         }
+        self.settings = self.settings.with(change);
         self.page()
     }
-}
-
-/// Whether a change chose a name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ChoseName {
-    Yes,
-    No,
-}
-
-/// Settings written to the file, for [`Preferences::take`].
-#[derive(Debug)]
-#[must_use = "saved settings are to be taken"]
-pub(crate) struct Saved {
-    settings: Settings,
-    chose_name: ChoseName,
-}
-
-/// Saves `change` to the settings file at `path`: read, changed and
-/// written under its lock, since another joiner of this home may have
-/// changed other settings meanwhile. Blocks on the file.
-pub(crate) fn save(path: &Path, change: SettingsChange) -> Result<Saved, Report> {
-    let chose_name = if change.name.is_some() {
-        ChoseName::Yes
-    } else {
-        ChoseName::No
-    };
-    Ok(Saved {
-        settings: settings::update(path, change)?,
-        chose_name,
-    })
 }

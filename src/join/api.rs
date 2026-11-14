@@ -59,10 +59,10 @@ pub(crate) enum CommentOutcome {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) enum SettingsOutcome {
-    /// Saved; the `settings` message before this reply has them.
+    /// Taken for this join; the `settings` message before this reply has
+    /// them. The page keeps them for its share.
     Saved,
-    /// Not saved (an invalid change, a settings file that could not be
-    /// written): the settings stay as they were.
+    /// Not taken (an invalid change): the settings stay as they were.
     Refused { error: String },
 }
 
@@ -168,7 +168,8 @@ mod bindings {
             ids::{CommentId, EndpointKey, Fingerprint},
             name::{JoinerName, MAX_NAME},
             settings::{
-                Corner, KeyBinding, Keys, KeysFields, RESERVED_KEYS, SettingsChange, Switch,
+                Corner, KeyBinding, Keys, KeysFields, MODIFIER_KEYS, PAGE_KEYS, RESERVED_KEYS,
+                SettingsChange, Switch,
             },
         },
         join::{
@@ -244,14 +245,22 @@ mod bindings {
         for (name, value) in limits {
             out.push_str(&format!("export const {name} = {value};\n"));
         }
-        let reserved: Vec<String> = RESERVED_KEYS
-            .iter()
-            .map(|key| serde_json::to_string(key).unwrap())
-            .collect();
-        out.push_str(&format!(
-            "export const RESERVED_KEYS: readonly string[] = [{}];\n",
-            reserved.join(", ")
-        ));
+        // The keys a binding may not be, as the joiner checks them.
+        let keys: [(&str, &[&str]); 3] = [
+            ("RESERVED_KEYS", &RESERVED_KEYS),
+            ("MODIFIER_KEYS", &MODIFIER_KEYS),
+            ("PAGE_KEYS", &PAGE_KEYS),
+        ];
+        for (name, keys) in keys {
+            let keys: Vec<String> = keys
+                .iter()
+                .map(|key| serde_json::to_string(key).unwrap())
+                .collect();
+            out.push_str(&format!(
+                "export const {name}: readonly string[] = [{}];\n",
+                keys.join(", ")
+            ));
+        }
         for decl in decls {
             out.push_str("\nexport ");
             out.push_str(&decl);

@@ -1,4 +1,5 @@
-"""Settings: the control panel, keys, the name prompt and the settings file."""
+"""Settings: the control panel, keys, the name prompt, and the settings
+the page keeps for its share."""
 
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from support import (
     SITE,
     join,
     overlay,
-    settings_file,
+    settings_path,
     share,
     switch,
 )
@@ -116,6 +117,17 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         expect(overlay(page, "#panel-message")).to_have_text("/ is used by jampot")
         expect(chip).to_have_text("K")
         expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        # The page's own keys are refused; a modifier waits for its key.
+        for key in ["Enter", "Tab"]:
+            chip.click()
+            page.keyboard.press(key)
+            expect(overlay(page, "#panel-message")).to_have_text(f"{key} is the page's")
+            expect(chip).to_have_text("K")
+        chip.click()
+        page.keyboard.press("Shift")
+        expect(chip).to_have_text("press a key…")
+        page.keyboard.press("Escape")
+        expect(chip).to_have_text("K")
 
         # Comment mode back on: / is jampot's again.
         page.keyboard.press("k")
@@ -124,68 +136,102 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         expect(overlay(page, "textarea")).to_be_focused()
 
 
-def test_the_name_prompt_and_settings_on_disk(tmp_path: Path, browser: Browser) -> None:
+def test_the_name_prompt_and_settings_kept_for_the_share(
+    tmp_path: Path, browser: Browser
+) -> None:
     home = tmp_path / "dora"
     context = browser.new_context()
     try:
+        with share(tmp_path, "serve", str(SITE)) as shared:
+            with join(home, shared, name=None) as joined:
+                page = context.new_page()
+                _ = page.goto(joined.url)
+                prompt = overlay(page, "#name-dialog")
+                expect(prompt).to_be_visible()
+                expect(prompt).to_contain_text("Join the potluck.")
+                expect(prompt).to_contain_text(
+                    "Remembered for this share in this browser; change it under the gear."
+                )
+                name = overlay(page, "#name-input")
+                expect(name).not_to_have_value("")
+                name.fill("dora")
+                overlay(page, "#name-join").click()
+                expect(prompt).to_be_hidden()
+
+                # Under the gear: the name, and who is here.
+                overlay(page, "#gear").click()
+                expect(overlay(page, "#name-field")).to_have_value("dora")
+                expect(overlay(page, "#here-count")).to_have_text("1 here")
+                expect(overlay(page, ".avatar")).to_have_attribute(
+                    "title", "dora (you)"
+                )
+                # A change updates presence.
+                overlay(page, "#name-field").fill("dora.b")
+                overlay(page, "#name-field").press("Enter")
+                expect(overlay(page, ".avatar")).to_have_attribute(
+                    "title", "dora.b (you)"
+                )
+                expect(overlay(page, ".avatar")).to_have_text("DB")
+                # Keys and switches are kept too.
+                overlay(page, "#show-cursor").click()
+                expect(overlay(page, "#show-cursor")).to_have_attribute(
+                    "aria-checked", "true"
+                )
+                overlay(page, "#comment-mode-key").click()
+                page.keyboard.press("k")
+                expect(overlay(page, "#comment-mode-key")).to_have_text("K")
+                page.close()
+                # Never on disk.
+                assert not settings_path(home).exists()
+
+            # The joiner starts over (on another port): the page hands it
+            # what it keeps, and there is no prompt.
+            with join(home, shared, name=None) as joined:
+                page = context.new_page()
+                _ = page.goto(joined.url)
+                overlay(page, "#gear").click()
+                expect(overlay(page, "#name-field")).to_have_value("dora.b")
+                expect(overlay(page, "#show-cursor")).to_have_attribute(
+                    "aria-checked", "true"
+                )
+                expect(overlay(page, "#comment-mode-key")).to_have_text("K")
+                expect(overlay(page, ".avatar")).to_have_attribute(
+                    "title", "dora.b (you)"
+                )
+                expect(overlay(page, "#name-dialog")).to_be_hidden()
+                page.close()
+                assert not settings_path(home).exists()
+
+        # A new share is another origin: nothing kept, the prompt again.
         with (
             share(tmp_path, "serve", str(SITE)) as shared,
             join(home, shared, name=None) as joined,
         ):
             page = context.new_page()
             _ = page.goto(joined.url)
-            prompt = overlay(page, "#name-dialog")
-            expect(prompt).to_be_visible()
-            expect(prompt).to_contain_text("Join the potluck.")
-            expect(prompt).to_contain_text(
-                "Remembered on this computer; change it under the gear."
-            )
-            name = overlay(page, "#name-input")
-            expect(name).not_to_have_value("")
-            name.fill("dora")
-            overlay(page, "#name-join").click()
-            expect(prompt).to_be_hidden()
-            assert settings_file(home)["name"] == "dora"
-
-            # Under the gear: the name, and who is here.
-            overlay(page, "#gear").click()
-            expect(overlay(page, "#name-field")).to_have_value("dora")
-            expect(overlay(page, "#here-count")).to_have_text("1 here")
-            expect(overlay(page, ".avatar")).to_have_attribute("title", "dora (you)")
-            # A change updates presence.
-            overlay(page, "#name-field").fill("dora.b")
-            overlay(page, "#name-field").press("Enter")
-            expect(overlay(page, ".avatar")).to_have_attribute("title", "dora.b (you)")
-            expect(overlay(page, ".avatar")).to_have_text("DB")
-            # Keys and switches are kept too.
-            overlay(page, "#show-cursor").click()
-            overlay(page, "#comment-mode-key").click()
-            page.keyboard.press("k")
-            expect(overlay(page, "#comment-mode-key")).to_have_text("K")
-            page.close()
-            saved = settings_file(home)
-            assert saved["name"] == "dora.b"
-            assert saved["showCursor"] == "on"
-            assert saved["keys"] == {"commentMode": "k", "showCursor": "x"}
-
-        # A new share and a new joiner, the same home: no prompt, the same
-        # settings.
-        with (
-            share(tmp_path, "serve", str(SITE)) as shared,
-            join(home, shared, name=None) as joined,
-        ):
-            page = context.new_page()
-            _ = page.goto(joined.url)
-            overlay(page, "#gear").click()
-            expect(overlay(page, "#name-field")).to_have_value("dora.b")
-            expect(overlay(page, "#name-dialog")).to_be_hidden()
-            expect(overlay(page, "#show-cursor")).to_have_attribute(
-                "aria-checked", "true"
-            )
-            expect(overlay(page, "#comment-mode-key")).to_have_text("K")
-            expect(overlay(page, ".avatar")).to_have_attribute("title", "dora.b (you)")
+            expect(overlay(page, "#name-dialog")).to_be_visible()
+            expect(overlay(page, "#name-input")).not_to_have_value("dora.b")
     finally:
         context.close()
+
+
+def test_the_settings_file_gives_the_defaults(tmp_path: Path, page: Page) -> None:
+    path = settings_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    _ = path.write_text('{"name": "erin", "corner": "top-left"}')
+    path.chmod(0o600)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared, name=None) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(page.locator("#jampot")).to_have_attribute("data-corner", "top-left")
+        expect(overlay(page, "#name-dialog")).to_be_hidden()
+        overlay(page, "#gear").click()
+        expect(overlay(page, "#name-field")).to_have_value("erin")
+        overlay(page, '.corner[data-corner="bottom-right"]').click()
+        expect(page.locator("#jampot")).to_have_attribute("data-corner", "bottom-right")
+    assert path.read_text() == '{"name": "erin", "corner": "top-left"}'
 
 
 # Several joiners at once: alice, bob and carol, each with their own home

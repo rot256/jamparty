@@ -25,7 +25,7 @@ hyper-staticfile = "0.10.1"
 hyper-util = { version = "0.1.20", features = ["server", "http1", "client", "client-legacy", "tokio"] }
 iroh = "=1.4.1"
 jiff = "0.2.35"
-nix = { version = "0.31.3", features = ["fs", "hostname", "signal", "user"] }
+nix = { version = "0.31.3", features = ["hostname", "signal", "user"] }
 notify = "8.2.0"
 percent-encoding = "2.3.2"
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }

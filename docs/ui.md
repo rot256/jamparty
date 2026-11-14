@@ -83,7 +83,7 @@ text. Rows:
   browser menu, `/` types normally, nothing is intercepted. The pill stays.
 - Corner: the pill, the gear, both panels, notices and answers not
   anchored to an element move to that corner of the window; panels open
-  towards the middle. Saved with the other settings.
+  towards the middle. Kept with the other settings (see Name).
 - Show my cursor off: the page sends **no pointer data at all** (not
   "sent and hidden by others"). On: see Cursors.
 - Keys work only when no text field, textarea or contenteditable has
@@ -91,9 +91,11 @@ text. Rows:
   held key flips its switch once.
 - Rebinding: each key is shown as a chip; clicking a chip puts it in a
   listening state (`press a key…`, dashed outline); the next key press
-  becomes the binding. Escape cancels. A key already bound to another
-  action, or one jampot uses (`/`, Escape), is refused with a short message
-  instead of overwriting.
+  becomes the binding. Escape cancels; a modifier (Shift, Control, Alt,
+  Meta, Caps Lock) waits for the key pressed with it. A key already bound
+  to another action, one jampot uses (`/`, Escape), or one the page needs
+  (Enter, Tab, Space) is refused with a short message instead of
+  overwriting. The joiner refuses the same keys, whatever a page sends.
 - Bottom row: `N here` on the left, overlapping avatar circles with
   initials on the right (the joiner's own outlined, others filled in their
   colour); the full name on hover. No paths or locations.
@@ -128,16 +130,26 @@ text. Rows:
 
 ## Name
 
-- On first open, if no name is saved, the page shows a small dialog over a
-  dimmed page: "Join the potluck.", one Name field (prefilled with the
-  current default), a Join button, and the line "Remembered on this
-  computer; change it under the gear." The control panel gains a name field
-  to change it later.
-- Stored by the joiner process on disk, not in a cookie (each session is a
-  different `<sid>.localhost` origin, so a cookie would be lost per share):
-  `~/.config/jampot/settings.json` next to the key, mode 0600, holding the
-  name, the key bindings, the two switch states and the corner.
-  `jampot join --name` still overrides the name for one run.
+- On first open, if no name is chosen, the page shows a small dialog over
+  a dimmed page: "Join the potluck.", one Name field (prefilled with the
+  current default), a Join button, and the line "Remembered for this share
+  in this browser; change it under the gear." The control panel gains a
+  name field to change it later.
+- The share's pages run on the joiner's origin, as the overlay does, so
+  anything the overlay may do a share's script may do too. Settings
+  changed in a page therefore hold for that join only: the joiner never
+  writes them to disk, and no other share sees them. The page keeps them
+  per share in a host-only cookie on `<sid>.localhost` (cookies ignore the
+  port, so a joiner that falls back to another port finds them), holding
+  what was changed: the name, the key bindings, the two switch states and
+  the corner. When a page loads and its joiner lacks some of them (a
+  joiner that started over), it sends them as a change for this join; a
+  remembered name keeps the prompt away. A new share is a new origin and
+  starts from the defaults.
+- The defaults come from `~/.config/jampot/settings.json` (mode 0600, the
+  same fields), which the person writes and jampot only reads.
+  `jampot join --name` sets the name for one run, until one is chosen in
+  the page.
 - A name change mid-session is sent to the share and updates presence for
   everyone.
 
@@ -172,7 +184,8 @@ All of this is part of the version-1 wire format.
   same URL; nothing is forwarded for a joiner whose cursor is off (and the
   client sends none); addressed answers reach only the recipient;
   `--anchor` defaults to the author; an ambiguous `--to` is refused; the
-  settings file is written 0600 and read back.
+  settings file gives the defaults, and a page's change never reaches it
+  or another join; key bindings the overlay refuses are refused.
 - Browser: **every feature in this file is covered by Playwright**, in
   Chromium and Firefox, against the real binaries (one share, several
   `jampot join` processes, each with its own home directory and its own
@@ -186,9 +199,10 @@ All of this is part of the version-1 wire format.
     text field has focus; rebinding (new key works, old one doesn't,
     Escape cancels, a taken key is refused); comment mode off leaves
     right-click and `/` to the page;
-  - name prompt on first join; not shown again after a restart of share
-    and joiner (read from disk); a change under the gear updates presence;
-  - settings survive a new share (same home directory).
+  - name prompt on first join; not shown again when the joiner of the
+    same share starts over (the page's cookie), shown again for a new
+    share; a change under the gear updates presence;
+  - the settings file gives the defaults and is never written.
 
   Multi-client cases (two or three joiners at once, named alice, bob,
   carol):

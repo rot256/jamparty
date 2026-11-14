@@ -243,16 +243,7 @@ async fn handle(
             let session = Arc::clone(session);
             comments.spawn(async move { session.comment(page, submission).await });
         }
-        FromPage::Settings(change) => {
-            // Awaited, so the page's changes are saved in its order; in a
-            // task, so a socket that closes meanwhile does not stop a
-            // write half way.
-            let session = Arc::clone(session);
-            let saving = tokio::spawn(async move { session.change_settings(page, change).await });
-            if let Err(error) = saving.await {
-                tracing::warn!(%error, "a settings change failed");
-            }
-        }
+        FromPage::Settings(change) => session.change_settings(page, change),
     }
     Ok(())
 }

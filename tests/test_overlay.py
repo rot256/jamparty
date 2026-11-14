@@ -16,7 +16,7 @@ from support import (
     join,
     join_process,
     overlay,
-    settings_file,
+    settings_path,
     share,
     switch,
 )
@@ -260,8 +260,9 @@ def test_the_overlay_moves_to_any_corner(tmp_path: Path, page: Page) -> None:
             expect(answer).to_contain_text("Thanks, looking at it.")
             assert place("#agent-general .agent-message") == (False, True)
 
-        # Saved on disk: a new joiner with the same home starts there.
-        assert settings_file(tmp_path)["corner"] == "top-right"
+        # Kept by the page for this share, not on disk: a new joiner of it
+        # starts there.
+        assert not settings_path(tmp_path).exists()
         with join(tmp_path, shared) as joined:
             _ = page.goto(joined.url)
             expect(overlay(page, "#connection")).to_have_attribute(

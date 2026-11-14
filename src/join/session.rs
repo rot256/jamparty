@@ -3,22 +3,20 @@
 //! [`Session::commit`], which changes the state and queues the messages
 //! that say so to every page, and a reply to the page that asked, before
 //! it unlocks: pages hear of changes in the order they were made, after
-//! the `hello` they attached with. Settings are written to their file
-//! outside that lock, one change at a time.
+//! the `hello` they attached with. Settings a page changes hold for this
+//! join only: nothing a page does is written to disk.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use rootcause::prelude::report;
-use tokio::{sync, sync::watch, task};
+use tokio::sync::watch;
 
 use crate::{
     core::{ids::CommentId, name::JoinerName, settings::Switch, version::Incompatible},
-    describe,
     join::{
         api::{Change, CommentOutcome, RequestNumber, SettingsOutcome, Submission, ToPage},
         control::Control,
         pages::{Attached, Dropped, Full, PageId, Pages},
-        preferences::{self, Preferences},
+        preferences::Preferences,
         state::{Snapshot, State, TooMany},
         uplink::Uplink,
     },
@@ -60,9 +58,6 @@ pub(crate) struct Session {
     /// The state after each commit, for the local server and tests.
     snapshot: watch::Sender<Snapshot>,
     uplink: Uplink,
-    /// Held from writing a settings change to taking it, so changes are
-    /// written and taken in the order they came.
-    settings_writes: sync::Mutex<()>,
 }
 
 /// A reply to one page's request, queued after a commit's messages.
@@ -100,7 +95,6 @@ impl Session {
                 incompatible: None,
             }),
             uplink: Uplink::default(),
-            settings_writes: sync::Mutex::new(()),
         }
     }
 
@@ -282,37 +276,23 @@ impl Session {
         self.reply_comment(page, n, outcome);
     }
 
-    /// Saves a change from a page and tells every page. The file is
-    /// written on a blocking thread, outside the session's lock.
-    pub(crate) async fn change_settings(&self, page: PageId, change: Change) {
+    /// Applies a change from a page, for this join only, and tells every
+    /// page.
+    pub(crate) fn change_settings(&self, page: PageId, change: Change) {
         let Change { n, change } = change;
-        let _turn = self.settings_writes.lock().await;
-        let path = self.lock().preferences.path.clone();
-        let saved = task::spawn_blocking(move || preferences::save(&path, change))
-            .await
-            .unwrap_or_else(|error| Err(report!("the settings write failed: {error}")));
-        match saved {
-            Ok(saved) => self.commit(|inner| {
-                let settings = inner.preferences.take(saved);
-                Told {
-                    messages: inner.state.set_settings(settings),
-                    reply: Some(Reply {
-                        page,
-                        message: ToPage::SettingsReply {
-                            to: n,
-                            outcome: SettingsOutcome::Saved,
-                        },
-                    }),
-                }
-            }),
-            Err(error) => {
-                tracing::warn!(error = %describe(&error), "could not save the settings");
-                let outcome = SettingsOutcome::Refused {
-                    error: format!("could not save the settings: {}", describe(&error)),
-                };
-                self.reply_settings(page, n, outcome);
+        self.commit(|inner| {
+            let settings = inner.preferences.change(change);
+            Told {
+                messages: inner.state.set_settings(settings),
+                reply: Some(Reply {
+                    page,
+                    message: ToPage::SettingsReply {
+                        to: n,
+                        outcome: SettingsOutcome::Saved,
+                    },
+                }),
             }
-        }
+        });
         // A new name or cursor switch is news for the share.
         self.uplink.changed();
     }
@@ -419,15 +399,13 @@ impl Session {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::path::PathBuf;
-
     use crate::{
         core::settings::{Settings, Switch},
         join::{api::ToPage, pages::PAGE_QUEUE, preferences::Preferences, session::Session},
         protocol::presence::{CursorSelector, Fraction, PagePath, Position},
     };
 
-    /// A session with its cursor switch on, and a settings file nowhere.
+    /// A session with its cursor switch on.
     pub(crate) fn session() -> Session {
         let Settings {
             name,
@@ -437,8 +415,7 @@ pub(crate) mod tests {
             corner,
         } = Settings::default();
         Session::new(Preferences {
-            path: PathBuf::from("/nonexistent/settings.json"),
-            saved: Settings {
+            settings: Settings {
                 name,
                 keys,
                 comment_mode,
