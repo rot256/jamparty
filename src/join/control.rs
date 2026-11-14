@@ -17,6 +17,7 @@ use tokio::{
 use crate::{
     Report,
     adapters::lines,
+    core::text::Untrusted,
     protocol::{
         comment::Draft,
         control::{AckOutcome, CommentRef, Envelope, JoinerMessage},
@@ -186,7 +187,7 @@ impl Drop for Waiting<'_> {
 async fn write_lines(mut writer: SendStream, mut queued: mpsc::Receiver<Envelope<JoinerMessage>>) {
     while let Some(line) = queued.recv().await {
         if let Err(error) = lines::write(&mut writer, &line).await {
-            tracing::debug!(%error, "control stream write failed");
+            tracing::debug!(error = %Untrusted(&error), "control stream write failed");
             return;
         }
     }

@@ -26,6 +26,7 @@ use crate::{
     core::{
         ids::EndpointKey,
         name::JoinerName,
+        text::Untrusted,
         version::{JampotVersion, PROTOCOL},
     },
     protocol::{
@@ -60,7 +61,7 @@ pub(crate) async fn handle(
     let connection = match timeout_at(deadline, incoming).await {
         Ok(Ok(connection)) => connection,
         Ok(Err(error)) => {
-            tracing::debug!(%error, "incoming connection failed");
+            tracing::debug!(error = %Untrusted(&error), "incoming connection failed");
             return;
         }
         Err(_) => {
@@ -101,7 +102,7 @@ pub(crate) async fn handle(
             tracing::info!(fingerprint = %key.fingerprint(), reason = reason.as_str(), "joiner refused");
             refuse(&connection, send, reason).await;
         }
-        Err(error) => tracing::debug!(%error, "joiner left before admission"),
+        Err(error) => tracing::debug!(error = %Untrusted(&error), "joiner left before admission"),
     }
 }
 
@@ -157,7 +158,7 @@ async fn admission(
         ),
     };
     if let Err(error) = &first {
-        tracing::debug!(%error, "no usable hello");
+        tracing::debug!(error = %Untrusted(&error), "no usable hello");
     }
     Ok(match admit(first, &shared.token.secret) {
         Ok(name) => Admission::Admitted {
@@ -287,7 +288,7 @@ async fn joined(
                 })) => message,
                 Ok(None) => return Left::ControlStreamClosed,
                 Err(error) => {
-                    tracing::debug!(%error, "invalid control line");
+                    tracing::debug!(error = %Untrusted(&error), "invalid control line");
                     return Left::InvalidControlLine;
                 }
             };

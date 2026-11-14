@@ -13,6 +13,7 @@ use tokio::io;
 
 use crate::{
     adapters::http::{AppBody, HEADER_READ_TIMEOUT, RequestError},
+    core::text::Untrusted,
     protocol::control::SiteInfo,
     share::{files::Files, live::ReloadState, proxy::Proxy},
 };
@@ -60,7 +61,7 @@ pub(crate) async fn serve_stream(send: SendStream, recv: RecvStream, site: Site)
         .with_upgrades()
         .await;
     if let Err(error) = served {
-        tracing::debug!(%error, "request stream ended with an error");
+        tracing::debug!(error = %Untrusted(&error), "request stream ended with an error");
     }
 }
 
@@ -78,7 +79,7 @@ async fn handle(request: Request<Incoming>, site: Site) -> Response<AppBody> {
         }
     };
     result.unwrap_or_else(|error| {
-        tracing::debug!(status = %error.status, error = %error.message, "request refused");
+        tracing::debug!(status = %error.status, error = %Untrusted(&error.message), "request refused");
         error.into()
     })
 }

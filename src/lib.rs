@@ -47,6 +47,7 @@ use crate::{
         name::JoinerName,
         port::Port,
         rng::SystemRng,
+        text::Untrusted,
         token::{PartyToken, TokenError},
     },
     join::{JoinConfig, Joiner, ProxyLimits, Refused},
@@ -62,7 +63,8 @@ use crate::{
 pub use rootcause::Report;
 
 /// An error for people: its chain of contexts on one line, outermost
-/// first (`could not read <file>: permission denied`). The marker an
+/// first (`could not read <file>: permission denied`), control characters
+/// escaped (an error may quote what a share or joiner sent). The marker an
 /// `Option`'s `.context(…)` puts under its message ("Expected value of
 /// type …, but found None") says nothing to people and is left out.
 #[must_use]
@@ -70,7 +72,7 @@ pub fn describe(error: &Report) -> String {
     error
         .iter_reports()
         .filter(|report| report.downcast_current_context::<NoneError>().is_none())
-        .map(|report| report.format_current_context().to_string())
+        .map(|report| Untrusted(report.format_current_context()).to_string())
         .collect::<Vec<_>>()
         .join(": ")
 }

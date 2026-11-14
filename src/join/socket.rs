@@ -25,6 +25,7 @@ use tokio_websockets::{CloseCode, Limits, Message, ServerBuilder, WebSocketStrea
 
 use crate::{
     adapters::http::{AppBody, RequestError, empty_response},
+    core::text::Untrusted,
     join::{
         api::{CommentOutcome, FromPage, RequestNumber, SettingsOutcome, ToPage},
         pages::{Attached, PageId, frame},
@@ -71,7 +72,7 @@ pub(crate) fn open(mut request: Request<Incoming>, session: &Arc<Session>) -> Re
                     .serve(TokioIo::new(upgraded));
                 run(socket, &session, attached).await;
             }
-            Err(error) => tracing::debug!(%error, "the socket upgrade failed"),
+            Err(error) => tracing::debug!(error = %Untrusted(&error), "the socket upgrade failed"),
         }
         session.detach(page);
     });
@@ -124,7 +125,7 @@ async fn run(socket: Socket, session: &Arc<Session>, attached: Attached) {
             let message = match message {
                 Ok(message) => message,
                 Err(error) => {
-                    tracing::debug!(%error, "page socket failed");
+                    tracing::debug!(error = %Untrusted(&error), "page socket failed");
                     return Ended(CloseCode::PROTOCOL_ERROR, "invalid frame");
                 }
             };
@@ -223,7 +224,7 @@ async fn handle(
                 }
                 return Ok(());
             }
-            tracing::debug!(%error, "invalid page message");
+            tracing::debug!(error = %Untrusted(&error), "invalid page message");
             return Err(Ended(CloseCode::POLICY_VIOLATION, "invalid message"));
         }
     };

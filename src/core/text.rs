@@ -1,6 +1,50 @@
-//! Shared checks for short free-text fields.
+//! Shared checks for short free-text fields, and how text from the other
+//! side is written to logs and the terminal.
+
+use std::fmt::{self, Write};
 
 use crate::core::invalid::Invalid;
+
+/// Text from the other side, for logs and the terminal: what the share
+/// sends a joiner (its lines, responses and pages, and errors quoting
+/// them), or a joiner the share. Shown with its control characters, and
+/// the characters that reorder text, escaped (`\u{1b}`, `\r`, `\n`), so
+/// it can neither forge log lines nor drive the terminal. Every log or
+/// print of such text goes through this.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Untrusted<T>(pub(crate) T);
+
+impl<T: fmt::Display> fmt::Display for Untrusted<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(Escaping(f), "{}", self.0)
+    }
+}
+
+/// Writes to the formatter with unsafe characters escaped.
+struct Escaping<'a, 'b>(&'a mut fmt::Formatter<'b>);
+
+impl Write for Escaping<'_, '_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        for character in text.chars() {
+            if escaped(character) {
+                write!(self.0, "{}", character.escape_default())?;
+            } else {
+                self.0.write_char(character)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Control characters, and the bidirectional controls that make text
+/// read other than it is.
+fn escaped(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
 
 /// Checks that `value` is not blank, has at most `max_chars` characters and
 /// contains no control characters (newlines included).
@@ -39,7 +83,13 @@ pub(crate) fn check_len(value: &str, field: &str, max_chars: usize) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use crate::core::text::{check_len, check_line, check_text};
+    use crate::core::text::{Untrusted, check_len, check_line, check_text};
+
+    #[test]
+    fn untrusted_text_has_its_controls_escaped() {
+        let shown = Untrusted("a\r\nFORGED\u{1b}[2J\u{202e}b\tc é").to_string();
+        assert_eq!(shown, "a\\r\\nFORGED\\u{1b}[2J\\u{202e}b\\tc é");
+    }
 
     #[test]
     fn lines_and_texts() {

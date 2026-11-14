@@ -37,8 +37,12 @@ use crate::{
         AppBody, HEADER_READ_TIMEOUT, RequestError, full_body, javascript_response,
         map_incoming_response,
     },
-    core::request::{
-        FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade, is_navigation,
+    core::{
+        request::{
+            FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade,
+            is_navigation,
+        },
+        text::Untrusted,
     },
     join::{control::Control, session::Session, socket},
 };
@@ -156,7 +160,7 @@ pub(crate) async fn serve(
                 .with_upgrades()
                 .await;
             if let Err(error) = served {
-                tracing::debug!(%error, "local connection ended with an error");
+                tracing::debug!(error = %Untrusted(&error), "local connection ended with an error");
             }
         });
     }
@@ -246,7 +250,7 @@ async fn forward(
     let permit = Arc::new(permit);
     let limits = proxy.limits;
     let unreachable = |error: Report| {
-        tracing::debug!(%error, "could not forward to the share");
+        tracing::debug!(error = %Untrusted(&error), "could not forward to the share");
         RequestError::new(StatusCode::BAD_GATEWAY, "the share is not reachable")
     };
     let control = connection(session, connect_wait)
@@ -275,7 +279,7 @@ async fn forward(
         tokio::select! {
             result = connection.with_upgrades() => {
                 if let Err(error) = result {
-                    tracing::debug!(%error, "request stream ended with an error");
+                    tracing::debug!(error = %Untrusted(&error), "request stream ended with an error");
                 }
             }
             Err(_) = &mut abandoned => {
@@ -307,7 +311,7 @@ async fn forward(
                 Ok((local, share)) => {
                     tunnel(TokioIo::new(local), TokioIo::new(share), limits).await;
                 }
-                Err(error) => tracing::debug!(%error, "upgrade failed"),
+                Err(error) => tracing::debug!(error = %Untrusted(&error), "upgrade failed"),
             }
         });
     }
@@ -331,13 +335,13 @@ where
     tokio::select! {
         ended = &mut up => {
             if let Err(error) = ended {
-                tracing::debug!(%error, "the browser's side of a tunnel failed");
+                tracing::debug!(error = %Untrusted(&error), "the browser's side of a tunnel failed");
             }
             let _ = time::timeout(limits.half_close, &mut down).await;
         }
         ended = &mut down => {
             if let Err(error) = ended {
-                tracing::debug!(%error, "the share's side of a tunnel failed");
+                tracing::debug!(error = %Untrusted(&error), "the share's side of a tunnel failed");
             }
             let _ = time::timeout(limits.half_close, &mut up).await;
         }

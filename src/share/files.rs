@@ -18,6 +18,7 @@ use tokio::fs;
 
 use crate::{
     adapters::http::{AppBody, BodyError, RequestError, empty_response},
+    core::text::Untrusted,
     protocol::control::Revision,
     share::inject::{ClientMode, maybe_inject_client},
 };
@@ -51,14 +52,14 @@ impl Files {
             return Ok(empty_response(status));
         }
         let resolved = resolver.resolve_request(&request).await.map_err(|error| {
-            tracing::warn!(%error, "could not resolve static file");
+            tracing::warn!(error = %Untrusted(&error), "could not resolve static file");
             read_error()
         })?;
         let resolved = match resolved {
             ResolveResult::Found(file) => match fs::canonicalize(root.join(&file.path)).await {
                 Ok(path) if served(&path, root) => ResolveResult::Found(file),
                 Ok(path) => {
-                    tracing::warn!(path = %path.display(), "refused a symlink outside the root or to a dotfile");
+                    tracing::warn!(path = %Untrusted(path.display()), "refused a symlink outside the root or to a dotfile");
                     ResolveResult::NotFound
                 }
                 Err(error) if is_missing_path_error(&error) => ResolveResult::NotFound,
@@ -66,7 +67,7 @@ impl Files {
                     ResolveResult::PermissionDenied
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "could not verify resolved static file");
+                    tracing::warn!(error = %Untrusted(&error), "could not verify resolved static file");
                     return Err(read_error());
                 }
             },
@@ -88,7 +89,7 @@ impl Files {
             .cache_headers(None)
             .build(resolved)
             .map_err(|error| {
-                tracing::warn!(%error, "could not build static file response");
+                tracing::warn!(error = %Untrusted(&error), "could not build static file response");
                 read_error()
             })?;
         let (parts, body) = response.into_parts();
@@ -201,7 +202,7 @@ fn access_error(error: io::Error) -> Result<Option<StatusCode>, RequestError> {
     if is_missing_path_error(&error) {
         return Ok(Some(StatusCode::NOT_FOUND));
     }
-    tracing::warn!(%error, "static path access failed");
+    tracing::warn!(error = %Untrusted(&error), "static path access failed");
     Err(read_error())
 }
 

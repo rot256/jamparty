@@ -27,7 +27,7 @@ use url::Url;
 
 use crate::{
     adapters::http::{AppBody, RequestError, incoming_body, map_incoming_response},
-    core::{ids::Sid, port::Port},
+    core::{ids::Sid, port::Port, text::Untrusted},
     share::inject::{ClientMode, maybe_inject_client},
 };
 
@@ -201,7 +201,7 @@ impl Proxy {
 
         let outgoing = Request::from_parts(parts, incoming_body(body));
         let mut response = self.client.request(outgoing).await.map_err(|error| {
-            tracing::warn!(%error, "upstream request failed");
+            tracing::warn!(error = %Untrusted(&error), "upstream request failed");
             RequestError::new(StatusCode::BAD_GATEWAY, "upstream request failed")
         })?;
 
@@ -224,10 +224,10 @@ impl Proxy {
                             if let Err(error) =
                                 copy_bidirectional(&mut downstream, &mut upstream).await
                             {
-                                tracing::debug!(%error, "upgraded tunnel closed with an error");
+                                tracing::debug!(error = %Untrusted(&error), "upgraded tunnel closed with an error");
                             }
                         }
-                        Err(error) => tracing::debug!(%error, "upgrade failed"),
+                        Err(error) => tracing::debug!(error = %Untrusted(&error), "upgrade failed"),
                     }
                 });
             }

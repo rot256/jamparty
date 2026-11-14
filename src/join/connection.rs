@@ -15,6 +15,7 @@ use crate::{
     adapters::{endpoint, lines},
     core::{
         queue::backoff,
+        text::Untrusted,
         token::PartyToken,
         version::{Incompatible, JampotVersion, PROTOCOL},
     },
@@ -105,7 +106,7 @@ pub(crate) async fn run(dial: Dial, session: Arc<Session>, first: oneshot::Sende
                 failures = 1;
             }
             Ended::Failed(error) => {
-                tracing::info!(%error, "could not reach the share; retrying");
+                tracing::info!(error = %Untrusted(&error), "could not reach the share; retrying");
                 failures = failures.saturating_add(1);
             }
         }
@@ -250,7 +251,7 @@ async fn receive(recv: &mut BufReader<RecvStream>, control: &Control, session: &
             }
             Ok(None) => return,
             Err(error) => {
-                tracing::debug!(%error, "control stream ended");
+                tracing::debug!(error = %Untrusted(&error), "control stream ended");
                 return;
             }
         }

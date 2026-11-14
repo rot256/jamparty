@@ -14,6 +14,7 @@ mod fake_t3;
 mod harness;
 mod hostile_share;
 mod local_rules;
+mod logs;
 mod mirror;
 mod presence;
 mod proxy_limits;
