@@ -7,7 +7,7 @@ use crate::{
         comment::Author,
         control::{AnswerText, ShareMessage},
     },
-    share::hub::{Audience, Hub, MAX_ANSWERS, Outgoing},
+    share::hub::{Addressed, Audience, Hub, MAX_ANSWERS},
 };
 
 impl Hub {
@@ -57,11 +57,11 @@ impl Hub {
                 inner.answers.pop_front();
             }
             let audience = Audience::from(recipient.as_ref().map(|author| author.key));
-            inner.answers.push_back(Outgoing {
+            inner.answers.push_back(Addressed {
                 audience,
                 message: message.clone(),
             });
-            (Outgoing { audience, message }, recipient)
+            (Addressed { audience, message }, recipient)
         };
         match &recipient {
             Some(author) => {
@@ -69,7 +69,7 @@ impl Hub {
             }
             None => tracing::info!("answer sent to everyone"),
         }
-        let Outgoing { audience, message } = message;
+        let Addressed { audience, message } = message;
         self.send(audience, message);
         Ok(recipient)
     }

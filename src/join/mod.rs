@@ -11,9 +11,6 @@ mod preferences;
 mod session;
 mod socket;
 mod state;
-
-#[cfg(test)]
-pub(crate) use state::MAX_PENDING;
 mod uplink;
 #[cfg(test)]
 pub(crate) use crate::join::{pages::PAGE_QUEUE, uplink::REPORT_GAP};

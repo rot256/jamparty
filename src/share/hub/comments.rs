@@ -137,7 +137,7 @@ impl Hub {
     pub(crate) fn finish(&self, attempt: Attempt) {
         let result = DeliveryResult::from(&attempt);
         let now = self.clock.now();
-        let (delivered, status) = {
+        let delivered = {
             let mut inner = self.lock();
             let Ok(delivered) = inner.queue.finish(result, now) else {
                 tracing::warn!("delivery finished with nothing in flight");
@@ -150,32 +150,36 @@ impl Hub {
             };
             let changed = inner.status != status;
             inner.status.clone_from(&status);
-            (delivered, changed.then_some(status))
+            // Stamped before the lock goes: a comment queued in a slot
+            // these free is acknowledged after its author hears of them.
+            for (key, ids) in by_author(&delivered) {
+                self.send(Audience::Key(key), ShareMessage::Delivered { ids });
+            }
+            if changed {
+                self.broadcast(ShareMessage::Status { line: status });
+            }
+            delivered.len()
         };
         match attempt {
-            Attempt::Delivered => {
-                tracing::info!(count = delivered.len(), "comments delivered");
-            }
+            Attempt::Delivered => tracing::info!(count = delivered, "comments delivered"),
             Attempt::Failed { why } => tracing::warn!(%why, "delivery failed; retrying"),
             Attempt::Gone { why } => tracing::warn!(%why, "the target is gone; holding comments"),
             Attempt::Returned => tracing::info!("comments returned undelivered"),
         }
-        // Each author hears of its own comments only.
-        let mut authors: Vec<(EndpointKey, Vec<CommentId>)> = Vec::new();
-        for comment in &delivered {
-            let key = comment.author.key;
-            match authors.iter_mut().find(|(author, _)| *author == key) {
-                Some((_, ids)) => ids.push(comment.id),
-                None => authors.push((key, vec![comment.id])),
-            }
-        }
-        for (key, ids) in authors {
-            self.send(Audience::Key(key), ShareMessage::Delivered { ids });
-        }
-        if let Some(line) = status {
-            self.broadcast(ShareMessage::Status { line });
+    }
+}
+
+/// Delivered comments' ids by author: each author hears of its own only.
+fn by_author(delivered: &[Comment]) -> Vec<(EndpointKey, Vec<CommentId>)> {
+    let mut authors: Vec<(EndpointKey, Vec<CommentId>)> = Vec::new();
+    for comment in delivered {
+        let key = comment.author.key;
+        match authors.iter_mut().find(|(author, _)| *author == key) {
+            Some((_, ids)) => ids.push(comment.id),
+            None => authors.push((key, vec![comment.id])),
         }
     }
+    authors
 }
 
 /// The status lines joiners see; what went wrong is in the share's log.

@@ -86,22 +86,16 @@ impl Snapshot {
     }
 }
 
-/// This joiner's comments the share holds undelivered. The share sends a
-/// comment's acknowledgement before its delivery, and the joiner applies
-/// both in that order.
+/// This joiner's comments the share holds undelivered. The share sends
+/// acknowledgements and deliveries in the order it made them, a comment's
+/// acknowledgement before its delivery, and the joiner applies them in
+/// that order: its view never holds more than the share's queue for its
+/// key, [`MAX_QUEUED_PER_KEY`].
 #[derive(Debug, Default)]
 pub(crate) struct Mine {
     /// None until the share first admitted this joiner.
     undelivered: Option<BTreeSet<CommentId>>,
 }
-
-/// Comments this joiner holds as pending, at most. A share keeps
-/// [`MAX_QUEUED_PER_KEY`], but the joiner's view can lag it: the share
-/// sends a new comment's acknowledgement ahead of an earlier delivery, so
-/// for a moment the joiner still holds delivered ones. This bounds what a
-/// hostile share can make it hold, far past any honest lag; were an honest
-/// share to pass it, the reconnect's admission would set things right.
-pub(crate) const MAX_PENDING: usize = 10 * MAX_QUEUED_PER_KEY;
 
 /// The share claims more undelivered comments of this joiner than it can
 /// hold: it is not one to trust.
@@ -129,7 +123,7 @@ impl Mine {
 
     fn queued(&mut self, id: CommentId) -> Result<(), TooMany> {
         let undelivered = self.undelivered.get_or_insert_default();
-        if undelivered.len() >= MAX_PENDING && !undelivered.contains(&id) {
+        if undelivered.len() >= MAX_QUEUED_PER_KEY && !undelivered.contains(&id) {
             return Err(TooMany);
         }
         undelivered.insert(id);

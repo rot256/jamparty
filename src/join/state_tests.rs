@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use futures_util::FutureExt;
 use jiff::{SignedDuration, Timestamp};
 use proptest::{collection, prelude::*};
 
@@ -14,14 +15,17 @@ use crate::{
     join::{
         api::ToPage,
         preferences::PageSettings,
-        state::{MAX_PENDING, State, TooMany, follow},
+        state::{State, TooMany, follow},
     },
     protocol::{
         comment::{Author, Draft},
-        control::{AckOutcome, AnswerText, MAX_QUEUED_PER_KEY, Revision, ShareMessage, StatusLine},
+        control::{
+            AckOutcome, AnswerText, CommentRef, MAX_QUEUED_PER_KEY, Revision, ShareMessage,
+            StatusLine,
+        },
         presence::Person,
     },
-    share::hub::Hub,
+    share::hub::{Hub, Outbox},
 };
 
 fn settings(cursor: Switch) -> PageSettings {
@@ -203,8 +207,8 @@ fn no_more_comments_are_pending_than_a_share_can_claim() {
     assert_eq!(state.admitted(author(1), &over), Err(TooMany));
     assert_eq!(state.snapshot().mine, None, "nothing taken");
     state.admitted(author(1), &[]).unwrap();
-    // Acknowledgements may run ahead of deliveries, up to a bound.
-    for n in 0..MAX_PENDING {
+    // Nor may acknowledgements claim more.
+    for n in 0..MAX_QUEUED_PER_KEY {
         state
             .acknowledged(AckOutcome::Queued { id: nth(n) })
             .unwrap();
@@ -212,7 +216,7 @@ fn no_more_comments_are_pending_than_a_share_can_claim() {
     let before = state.snapshot();
     assert_eq!(
         state.acknowledged(AckOutcome::Queued {
-            id: nth(MAX_PENDING)
+            id: nth(MAX_QUEUED_PER_KEY)
         }),
         Err(TooMany)
     );
@@ -225,9 +229,35 @@ fn no_more_comments_are_pending_than_a_share_can_claim() {
     );
 }
 
-/// The share's writer sends a new comment's acknowledgement before an
-/// earlier delivery: a joiner whose view of a full queue lags must not
-/// take it for a share claiming too much.
+/// Takes what the outbox has ready, in its order, into `state`; returns
+/// the messages other than presence.
+fn take(outbox: &mut Outbox<'_>, state: &mut State) -> Vec<ShareMessage> {
+    let mut taken = Vec::new();
+    while let Some(message) = outbox.next().now_or_never() {
+        let message = message.unwrap();
+        match &message {
+            ShareMessage::Presence { .. } => continue,
+            ShareMessage::CommentAck { outcome, .. } => {
+                state.acknowledged(*outcome).unwrap();
+            }
+            ShareMessage::Admitted { .. }
+            | ShareMessage::Refused { .. }
+            | ShareMessage::Answer { .. }
+            | ShareMessage::Delivered { .. }
+            | ShareMessage::Reload { .. }
+            | ShareMessage::Status { .. }
+            | ShareMessage::Cursor { .. } => {
+                state.apply(message.clone());
+            }
+        }
+        taken.push(message);
+    }
+    taken
+}
+
+/// A new comment's acknowledgement does not overtake the delivery of an
+/// earlier batch: the joiner's view of a full queue never holds more than
+/// the share does.
 #[tokio::test]
 async fn an_ack_ahead_of_a_delivery_at_a_full_queue_is_taken() {
     let clock = Arc::new(ManualClock::new(
@@ -235,8 +265,9 @@ async fn an_ack_ahead_of_a_delivery_at_a_full_queue_is_taken() {
     ));
     let hub = Hub::new(Arc::clone(&clock) as _, Arc::new(SeededRng::new(7)));
     let alice = author(1);
-    let mut broadcasts = hub.subscribe();
-    let (presence, mut inbox) = hub.join(alice.clone()).unwrap();
+    let broadcasts = hub.subscribe();
+    let (presence, inbox) = hub.join(alice.clone()).unwrap();
+    let mut outbox = Outbox::new(&presence, alice.key, inbox, broadcasts);
     let draft = || -> Draft {
         serde_json::from_str(r#"{"page":"/","selector":"h1","comment":"hi"}"#).unwrap()
     };
@@ -245,26 +276,99 @@ async fn an_ack_ahead_of_a_delivery_at_a_full_queue_is_taken() {
     for n in 0..MAX_QUEUED_PER_KEY {
         let reference = format!("ref-{n}").try_into().unwrap();
         let outcome = presence.comment(&alice, reference, draft()).unwrap();
-        inbox.acks.try_recv().unwrap();
-        state.acknowledged(outcome).unwrap();
+        assert!(matches!(outcome, AckOutcome::Queued { .. }), "{outcome:?}");
+        take(&mut outbox, &mut state);
         clock.advance(SignedDuration::from_secs(6));
     }
-    while broadcasts.try_recv().is_ok() {}
-    hub.next_batch().await;
+    assert_eq!(state.snapshot().pending(), MAX_QUEUED_PER_KEY);
+    let batch = hub.next_batch().await;
     hub.finish(Attempt::Delivered);
-    let reference = "after-delivery".to_owned().try_into().unwrap();
-    let outcome = presence.comment(&alice, reference, draft()).unwrap();
-    // The writer's order: the acknowledgement first.
-    let ShareMessage::CommentAck { outcome: acked, .. } = inbox.acks.recv().await.unwrap() else {
-        panic!("an acknowledgement");
-    };
-    assert_eq!(acked, outcome);
-    assert!(state.acknowledged(acked).is_ok());
-    let delivered = broadcasts.recv().await.unwrap().message;
-    assert!(
-        matches!(delivered, ShareMessage::Delivered { .. }),
-        "{delivered:?}"
+    let reference: CommentRef = "after-delivery".to_owned().try_into().unwrap();
+    let outcome = presence
+        .comment(&alice, reference.clone(), draft())
+        .unwrap();
+    assert!(matches!(outcome, AckOutcome::Queued { .. }), "{outcome:?}");
+    let ids = batch.iter().map(|comment| comment.id).collect();
+    assert_eq!(
+        take(&mut outbox, &mut state),
+        [
+            ShareMessage::Delivered { ids },
+            ShareMessage::CommentAck { reference, outcome },
+        ]
     );
-    state.apply(delivered);
+    assert_eq!(
+        state.snapshot().pending(),
+        MAX_QUEUED_PER_KEY - batch.len() + 1
+    );
+}
+
+/// A comment queued in a slot a delivery just freed is acknowledged after
+/// that delivery, also when it is queued while `finish` is still running:
+/// the hook below queues it from another thread at the log line `finish`
+/// writes once its lock is gone.
+#[tokio::test]
+async fn a_comment_queued_as_a_batch_finishes_is_acked_after_it() {
+    use std::sync::Mutex;
+
+    use tracing_subscriber::{Layer, layer::Context, prelude::*};
+
+    /// Runs its action once, at the first event logged.
+    struct AtFirstEvent(Mutex<Option<Box<dyn FnOnce() + Send>>>);
+    impl<S: tracing::Subscriber> Layer<S> for AtFirstEvent {
+        fn on_event(&self, _: &tracing::Event<'_>, _: Context<'_, S>) {
+            let action = self.0.lock().unwrap().take();
+            if let Some(action) = action {
+                action();
+            }
+        }
+    }
+
+    let clock = Arc::new(ManualClock::new(
+        Timestamp::from_second(1_800_000_000).unwrap(),
+    ));
+    let hub = Hub::new(Arc::clone(&clock) as _, Arc::new(SeededRng::new(7)));
+    let alice = author(1);
+    let broadcasts = hub.subscribe();
+    let (presence, inbox) = hub.join(alice.clone()).unwrap();
+    let presence = Arc::new(presence);
+    let mut outbox = Outbox::new(&presence, alice.key, inbox, broadcasts);
+    let draft = || -> Draft {
+        serde_json::from_str(r#"{"page":"/","selector":"h1","comment":"hi"}"#).unwrap()
+    };
+    let mut state = State::new(settings(Switch::Off));
+    state.admitted(alice.clone(), &[]).unwrap();
+    for n in 0..MAX_QUEUED_PER_KEY {
+        let reference = format!("ref-{n}").try_into().unwrap();
+        presence.comment(&alice, reference, draft()).unwrap();
+        take(&mut outbox, &mut state);
+        clock.advance(SignedDuration::from_secs(6));
+    }
+    assert_eq!(hub.next_batch().await.len(), MAX_QUEUED_PER_KEY);
+    let reader = Arc::clone(&presence);
+    let author = alice.clone();
+    let during = AtFirstEvent(Mutex::new(Some(Box::new(move || {
+        std::thread::spawn(move || {
+            let reference = "during-finish".to_owned().try_into().unwrap();
+            let outcome = reader.comment(&author, reference, draft()).unwrap();
+            assert!(matches!(outcome, AckOutcome::Queued { .. }), "{outcome:?}");
+        })
+        .join()
+        .unwrap();
+    }))));
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(during), || {
+        hub.finish(Attempt::Delivered);
+    });
+    assert_eq!(hub.queued().len(), 1, "the comment went in during finish");
+    let taken = take(&mut outbox, &mut state);
+    assert!(
+        matches!(
+            taken.as_slice(),
+            [
+                ShareMessage::Delivered { .. },
+                ShareMessage::CommentAck { .. }
+            ]
+        ),
+        "{taken:?}"
+    );
     assert_eq!(state.snapshot().pending(), 1);
 }

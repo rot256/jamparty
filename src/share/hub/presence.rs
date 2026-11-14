@@ -17,7 +17,7 @@ use crate::{
         control::{AckOutcome, CommentRef, ShareMessage},
         presence::{PagePath, Person, Position, Whereabouts},
     },
-    share::hub::{Hub, PRESENCE_INTERVAL},
+    share::hub::{Ack, Hub, PRESENCE_INTERVAL},
 };
 
 /// Who `here` are, as their comments are signed.
@@ -98,7 +98,7 @@ pub(super) struct Seat {
     /// Other joiners' cursors, for its control stream.
     pub(super) cursors: mpsc::Sender<ShareMessage>,
     /// The acknowledgements of its comments, for its control stream.
-    pub(super) acks: mpsc::Sender<ShareMessage>,
+    pub(super) acks: mpsc::Sender<Ack>,
 }
 
 /// Why a joiner's message changed nothing.
@@ -172,10 +172,10 @@ impl Presence {
     }
 
     /// Queues a comment from this connection's `author` (see
-    /// [`Hub::comment`]) and queues its acknowledgement for this
-    /// connection under the hub's lock: before anything the comment leads
-    /// to, its delivery included, is broadcast. [`Ignored::Flood`] when
-    /// the connection has as many acknowledgements unread as it may.
+    /// [`Hub::comment`]) and stamps and queues its acknowledgement for
+    /// this connection under the hub's lock: before anything the comment
+    /// leads to, its delivery included, is broadcast. [`Ignored::Flood`]
+    /// when the connection has as many acknowledgements unread as it may.
     pub(crate) fn comment(
         &self,
         author: &Author,
@@ -198,7 +198,10 @@ impl Presence {
             let outcome = self
                 .hub
                 .queue_comment(inner, author, reference.clone(), draft);
-            permit.send(ShareMessage::CommentAck { reference, outcome });
+            // Under `inner`: the order lock comes second (see [`Hub`]).
+            let message = ShareMessage::CommentAck { reference, outcome };
+            self.hub
+                .stamped(|order| permit.send(Ack { order, message }));
             outcome
         };
         self.hub.wake_for(outcome);

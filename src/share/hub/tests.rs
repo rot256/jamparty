@@ -1,5 +1,6 @@
 use std::{slice, sync::Arc};
 
+use futures_util::FutureExt;
 use jiff::{SignedDuration, Timestamp};
 
 use crate::{
@@ -11,7 +12,7 @@ use crate::{
         control::{AckOutcome, CommentRef, MAX_QUEUED_PER_KEY, ShareMessage},
         presence::{Position, Whereabouts},
     },
-    share::hub::{ACK_QUEUE, Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, Outgoing},
+    share::hub::{ACK_QUEUE, Hub, Ignored, MAX_JOINERS, MAX_JOINERS_PER_KEY, Outbox, Outgoing},
 };
 
 fn hub() -> (Arc<Hub>, Arc<ManualClock>) {
@@ -303,17 +304,40 @@ fn cursors_go_only_to_other_people_on_the_same_page() {
     assert!(bob.cursor(Some(position("p"))).is_ok());
 }
 
+/// What `outbox` has ready, in the order its writer sends it, but
+/// presence.
+fn sent(outbox: &mut Outbox<'_>) -> Vec<ShareMessage> {
+    let mut sent = Vec::new();
+    while let Some(message) = outbox.next().now_or_never() {
+        match message.unwrap() {
+            ShareMessage::Presence { .. } => {}
+            other @ (ShareMessage::Admitted { .. }
+            | ShareMessage::Refused { .. }
+            | ShareMessage::CommentAck { .. }
+            | ShareMessage::Answer { .. }
+            | ShareMessage::Delivered { .. }
+            | ShareMessage::Reload { .. }
+            | ShareMessage::Status { .. }
+            | ShareMessage::Cursor { .. }) => sent.push(other),
+        }
+    }
+    sent
+}
+
 #[tokio::test]
-async fn the_ack_is_queued_for_its_connection_before_the_delivery() {
+async fn the_ack_goes_to_its_connection_before_the_delivery() {
     let (hub, _) = hub();
     let alice = author("alice", 1);
     let mut heard = hub.subscribe();
-    let (presence, mut inbox) = hub.join(alice.clone()).unwrap();
-    let (_other, mut other_inbox) = hub.join(alice.clone()).unwrap();
+    let broadcasts = hub.subscribe();
+    let (presence, inbox) = hub.join(alice.clone()).unwrap();
+    let mut outbox = Outbox::new(&presence, alice.key, inbox, broadcasts);
+    let other_broadcasts = hub.subscribe();
+    let (other, other_inbox) = hub.join(alice.clone()).unwrap();
+    let mut other_outbox = Outbox::new(&other, alice.key, other_inbox, other_broadcasts);
     let reference = fresh();
     // Delivered at once: the delivery task may finish before the
-    // connection's writer runs; the ack is queued already, and the writer
-    // reads acks first.
+    // connection's writer runs; the ack was stamped first.
     let AckOutcome::Queued { id } = presence
         .comment(&alice, reference.clone(), draft())
         .unwrap()
@@ -322,16 +346,19 @@ async fn the_ack_is_queued_for_its_connection_before_the_delivery() {
     };
     hub.next_batch().await;
     hub.finish(Attempt::Delivered);
-    let ack = inbox.acks.try_recv().unwrap();
     assert_eq!(
-        ack,
-        ShareMessage::CommentAck {
-            reference,
-            outcome: AckOutcome::Queued { id }
-        }
+        sent(&mut outbox),
+        [
+            ShareMessage::CommentAck {
+                reference,
+                outcome: AckOutcome::Queued { id }
+            },
+            ShareMessage::Delivered { ids: vec![id] },
+        ]
     );
-    assert!(
-        other_inbox.acks.try_recv().is_err(),
+    assert_eq!(
+        sent(&mut other_outbox),
+        [ShareMessage::Delivered { ids: vec![id] }],
         "acks are per connection"
     );
     // Only the delivery is broadcast.
@@ -350,6 +377,32 @@ async fn the_ack_is_queued_for_its_connection_before_the_delivery() {
         }
     }
     assert_eq!(broadcast, [ShareMessage::Delivered { ids: vec![id] }]);
+}
+
+#[tokio::test]
+async fn new_acks_do_not_hold_back_an_earlier_broadcast() {
+    let (hub, _) = hub();
+    let alice = author("alice", 1);
+    let broadcasts = hub.subscribe();
+    let (presence, inbox) = hub.join(alice.clone()).unwrap();
+    let mut outbox = Outbox::new(&presence, alice.key, inbox, broadcasts);
+    assert_eq!(sent(&mut outbox), [], "only presence so far");
+    let AckOutcome::Queued { id } = presence.comment(&alice, fresh(), draft()).unwrap() else {
+        panic!("not queued");
+    };
+    hub.next_batch().await;
+    hub.finish(Attempt::Delivered);
+    // A new ack comes before each message the writer takes.
+    let mut taken = Vec::new();
+    for _ in 0..ACK_QUEUE {
+        assert!(presence.comment(&alice, fresh(), draft()).is_ok());
+        taken.push(outbox.next().await.unwrap());
+    }
+    let delivered = ShareMessage::Delivered { ids: vec![id] };
+    assert!(
+        matches!(taken.as_slice(), [ShareMessage::CommentAck { .. }, second, ..] if *second == delivered),
+        "{taken:?}"
+    );
 }
 
 #[test]

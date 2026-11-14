@@ -4,6 +4,7 @@
 
 mod answers;
 mod comments;
+mod outbox;
 mod presence;
 #[cfg(test)]
 mod tests;
@@ -38,11 +39,14 @@ use crate::{
     share::hub::presence::{ConnectionId, Seat},
 };
 
-pub(crate) use crate::share::hub::presence::{Presence, flush_presence};
 #[cfg(test)]
 pub(crate) use crate::share::hub::{
     comments::{HELD, RETRYING},
     presence::Ignored,
+};
+pub(crate) use crate::share::hub::{
+    outbox::{Outbox, Stopped},
+    presence::{Presence, flush_presence},
 };
 
 /// Broadcast messages a slow joiner may fall behind by before it is
@@ -68,8 +72,17 @@ pub(crate) const ACK_QUEUE: usize = 64;
 /// Presence changes reach joiners at most this often, together.
 const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Locks: `inner`, then `order`, never the other way round. What must be
+/// stamped in step with a change to `inner` is stamped under it: a
+/// comment's acknowledgement as it is queued (see [`Presence::comment`]),
+/// a batch's delivery as it frees queue slots (see [`Hub::finish`]).
+/// Nothing takes `inner` while holding `order`.
 pub(crate) struct Hub {
     inner: Mutex<Inner>,
+    /// The next stamp for a broadcast or an acknowledgement: taken and the
+    /// message sent under this lock, together, so a connection's writer
+    /// can tell what was sent before what (see [`Outbox`]).
+    order: Mutex<Order>,
     broadcast: broadcast::Sender<Outgoing>,
     /// Poked when a comment is queued (or by tests after moving the clock).
     wakeup: Notify,
@@ -100,7 +113,7 @@ struct Inner {
     status: Option<StatusLine>,
     /// Recent comments' anchors and authors.
     anchors: VecDeque<(Anchor, Author)>,
-    answers: VecDeque<Outgoing>,
+    answers: VecDeque<Addressed>,
 }
 
 impl Hub {
@@ -118,6 +131,7 @@ impl Hub {
                 anchors: VecDeque::new(),
                 answers: VecDeque::new(),
             }),
+            order: Mutex::new(Order(0)),
             broadcast: broadcast::channel(BROADCAST_CAPACITY).0,
             wakeup: Notify::new(),
             presence_changed: Notify::new(),
@@ -147,9 +161,25 @@ impl Hub {
         self.send(Audience::Everyone, message);
     }
 
+    /// Takes `order`, possibly under `inner` (see [`Hub`]).
     fn send(&self, audience: Audience, message: ShareMessage) {
-        // No receivers means no joiners: nothing to tell.
-        let _ = self.broadcast.send(Outgoing { audience, message });
+        self.stamped(|order| {
+            // No receivers means no joiners: nothing to tell.
+            let _ = self.broadcast.send(Outgoing {
+                order,
+                audience,
+                message,
+            });
+        });
+    }
+
+    /// Runs `send` with the next stamp, under the order lock: whatever it
+    /// sends is in its channel before anything stamped later.
+    fn stamped<T>(&self, send: impl FnOnce(Order) -> T) -> T {
+        let mut next = self.order.lock().unwrap_or_else(PoisonError::into_inner);
+        let order = *next;
+        *next = order.next();
+        send(order)
     }
 
     /// Adds an admitted joiner to presence until the returned guard drops;
@@ -284,9 +314,9 @@ impl Audience {
 
 /// What one connection is sent besides the hub's broadcasts.
 pub(crate) struct Inbox {
-    /// The acknowledgements of its comments, each queued before anything
-    /// the comment leads to is broadcast: read them first.
-    pub(crate) acks: mpsc::Receiver<ShareMessage>,
+    /// The acknowledgements of its comments, each stamped and queued
+    /// before anything the comment leads to is broadcast.
+    pub(crate) acks: mpsc::Receiver<Ack>,
     /// Other joiners' cursors on its page.
     pub(crate) cursors: mpsc::Receiver<ShareMessage>,
 }
@@ -297,9 +327,36 @@ impl From<Option<EndpointKey>> for Audience {
     }
 }
 
+/// Where a broadcast or an acknowledgement stands among the others: one
+/// counter stamps both, so a connection sends them as the hub did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Order(u64);
+
+impl Order {
+    fn next(self) -> Self {
+        // A share does not send 2^64 messages.
+        Self(self.0.saturating_add(1))
+    }
+}
+
+/// One connection's acknowledgement of its comment.
+#[derive(Clone, Debug)]
+pub(crate) struct Ack {
+    pub(super) order: Order,
+    pub(super) message: ShareMessage,
+}
+
 /// A message from the hub to the joiners' control streams.
 #[derive(Clone, Debug)]
 pub(crate) struct Outgoing {
+    pub(crate) order: Order,
     pub(crate) audience: Audience,
     pub(crate) message: ShareMessage,
+}
+
+/// A message for some joiners, kept to be sent again (recent answers).
+#[derive(Clone, Debug)]
+struct Addressed {
+    audience: Audience,
+    message: ShareMessage,
 }

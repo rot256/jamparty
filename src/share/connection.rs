@@ -15,10 +15,7 @@ use iroh::endpoint::{Connection, Incoming, RecvStream, SendStream, VarInt};
 use rootcause::prelude::report;
 use tokio::{
     io::{AsyncReadExt, BufReader, Chain},
-    sync::{
-        OwnedSemaphorePermit,
-        broadcast::{self, error::RecvError},
-    },
+    sync::{OwnedSemaphorePermit, broadcast},
     task::JoinSet,
     time::{Instant, timeout, timeout_at},
 };
@@ -41,7 +38,7 @@ use crate::{
         Shared,
         admission::admit,
         http::serve_stream,
-        hub::{Inbox, Outgoing, Presence},
+        hub::{Inbox, Outbox, Outgoing, Presence, Stopped},
     },
 };
 
@@ -216,6 +213,15 @@ impl Left {
     }
 }
 
+impl From<Stopped> for Left {
+    fn from(stopped: Stopped) -> Self {
+        match stopped {
+            Stopped::FellBehind => Self::FellBehind,
+            Stopped::ShareStopped => Self::ShareStopped,
+        }
+    }
+}
+
 impl fmt::Display for Left {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
@@ -227,13 +233,13 @@ async fn joined(
     connection: &Connection,
     mut send: SendStream,
     mut recv: ControlReader,
-    mut broadcasts: broadcast::Receiver<Outgoing>,
+    broadcasts: broadcast::Receiver<Outgoing>,
     seated: (Presence, Inbox),
     author: &Author,
     shared: &Arc<Shared>,
 ) -> Left {
     // Presence is left when this returns.
-    let (presence, mut inbox) = seated;
+    let (presence, inbox) = seated;
     let presence = &presence;
     let mut greeting = vec![ShareMessage::Admitted {
         you: author.clone(),
@@ -268,9 +274,8 @@ async fn joined(
     };
 
     // Reading and writing run side by side so neither cancels the other
-    // mid-line. Acknowledgements are this connection's own, read first: one
-    // is queued before anything its comment leads to is broadcast, so it
-    // goes out before the delivery of its comment.
+    // mid-line. The writer sends acknowledgements and broadcasts in the
+    // hub's order (see [`Outbox`]).
     let reader = async {
         // Renamed by presence updates; comments are signed with the latest.
         let mut author = author.clone();
@@ -314,28 +319,12 @@ async fn joined(
             }
         }
     };
+    let mut outbox = Outbox::new(presence, author.key, inbox, broadcasts);
     let writer = async {
         loop {
-            let message = tokio::select! {
-                biased;
-                ack = inbox.acks.recv() => match ack {
-                    Some(ack) => ack,
-                    None => return Left::ShareStopped,
-                },
-                message = broadcasts.recv() => match message {
-                    // Answers and deliveries for someone else are not this
-                    // joiner's.
-                    Ok(Outgoing { audience, .. }) if !audience.includes(author.key) => {
-                        continue;
-                    }
-                    Ok(Outgoing { message, .. }) => presence.redact(message),
-                    Err(RecvError::Lagged(_)) => return Left::FellBehind,
-                    Err(RecvError::Closed) => return Left::ShareStopped,
-                },
-                cursor = inbox.cursors.recv() => match cursor {
-                    Some(cursor) => cursor,
-                    None => return Left::ShareStopped,
-                },
+            let message = match outbox.next().await {
+                Ok(message) => message,
+                Err(stopped) => return Left::from(stopped),
             };
             if lines::write(&mut send, &Envelope::from(message))
                 .await

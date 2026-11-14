@@ -5,7 +5,6 @@ use std::sync::atomic::Ordering;
 
 use crate::{
     core::{ids::CommentId, rng::SystemRng},
-    join::MAX_PENDING,
     protocol::control::{AckOutcome, Envelope, MAX_QUEUED_PER_KEY, ShareMessage},
     tests::{
         fake_share::fake_share,
@@ -31,7 +30,7 @@ fn fresh_ids(count: usize) -> Vec<CommentId> {
 #[tokio::test(flavor = "multi_thread")]
 async fn unsolicited_acks_past_what_a_share_keeps_drop_it() {
     let mut lines = vec![admitted(&[])];
-    for (index, id) in fresh_ids(MAX_PENDING + 1).into_iter().enumerate() {
+    for (index, id) in fresh_ids(MAX_QUEUED_PER_KEY + 1).into_iter().enumerate() {
         let ack = ShareMessage::CommentAck {
             reference: format!("unasked-{index}").try_into().unwrap(),
             outcome: AckOutcome::Queued { id },
@@ -50,7 +49,7 @@ async fn unsolicited_acks_past_what_a_share_keeps_drop_it() {
         share.hellos.load(Ordering::Relaxed) >= 2
     })
     .await;
-    assert!(joiner.watch().borrow().pending() <= MAX_PENDING);
+    assert!(joiner.watch().borrow().pending() <= MAX_QUEUED_PER_KEY);
 }
 
 #[tokio::test(flavor = "multi_thread")]
