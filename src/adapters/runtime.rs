@@ -166,9 +166,11 @@ const NO_SHARE: &str = "no share is running (start one with jampot serve or jamp
 mod tests {
     use std::{
         fs::{self, Permissions},
-        os::unix::{fs::PermissionsExt, net},
+        os::unix::fs::PermissionsExt,
         path::Path,
     };
+
+    use socket2::{Domain, SockAddr, Socket, Type};
 
     use crate::{
         adapters::runtime::{connect, listen},
@@ -205,9 +207,14 @@ mod tests {
         assert!(connect(&dir, Some(&gone)).await.is_err());
 
         // One that died without cleaning up is skipped, and left for the
-        // next share to remove.
+        // next share to remove. Its socket file is bound but listened on
+        // by no one. Closing a listener here would not do: a child that
+        // another test forks at that moment holds the listener open until
+        // it execs, and connect would find it running. So bind without
+        // listening, and hold the socket open as such a child would.
         let stale = dir.join(format!("{}.sock", EndpointKey([4; 32]).sid()));
-        drop(net::UnixListener::bind(&stale).unwrap());
+        let dead = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+        dead.bind(&SockAddr::unix(&stale).unwrap()).unwrap();
         assert!(stale.exists());
         let skipped = connect(&dir, None).await.map(drop);
         assert!(
@@ -216,6 +223,7 @@ mod tests {
             skipped.map_err(|error| describe(&error))
         );
         assert!(stale.exists(), "connect removed a socket");
+        drop(dead);
         let (_listener, _next) = listen(&dir, &EndpointKey([5; 32]).sid()).unwrap();
         assert!(!stale.exists());
         assert!(connect(&dir, Some(&first)).await.is_ok());
