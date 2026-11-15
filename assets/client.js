@@ -3,6 +3,7 @@
 // client/src/generated/api.ts
 var MAX_NAME = 40;
 var MAX_ANSWER_TIMEOUT = 3600;
+var DEFAULT_ANSWER_TIMEOUT = 30;
 var MAX_COMMENT = 1e4;
 var MAX_SELECTED_TEXT = 2e3;
 var MAX_PAGE_PATH = 512;
@@ -2665,7 +2666,7 @@ var styles = `
   button[type="submit"] { background: #161616; color: #fff; }
   button:disabled { cursor: wait; opacity: 0.55; }
 
-  .agent-timeout { position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
+  .agent-timeout { position: absolute; bottom: 0; left: 0; right: 0; height: 4px;
     background: #7b3221; transform-origin: left; pointer-events: none;
     animation: answer-countdown linear forwards; }
   @keyframes answer-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
@@ -2721,7 +2722,7 @@ var MARKUP = `
     </div>
     <div class="control">
       <label class="label" for="answer-timeout">Answer timeout (s; 0 = off)</label>
-      <input id="answer-timeout" type="number" required min="0" max="${MAX_ANSWER_TIMEOUT}" step="1" value="0">
+      <input id="answer-timeout" type="number" required min="0" max="${MAX_ANSWER_TIMEOUT}" step="1" value="${DEFAULT_ANSWER_TIMEOUT}">
     </div>
     <div class="control" id="corner-row">
       <span class="label" id="corner-label">Corner</span>

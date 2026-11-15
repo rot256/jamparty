@@ -85,7 +85,7 @@ text. Rows:
 | Comment mode | switch | on (open question, see end) | `C` |
 | Show my cursor | switch | **off** | `X` |
 | Clear answers | action | dismiss every visible answer | `D` |
-| Answer timeout | seconds | **off** (`0`) | — |
+| Answer timeout | seconds | **30** (`0` turns it off) | — |
 | Corner | four buttons ↖ ↗ ↙ ↘ | bottom right | |
 
 - Comment mode off: the page behaves normally: right-click shows the
@@ -113,8 +113,9 @@ text. Rows:
   visible answers. Timeout and Clear answers
   use the dismiss button's session dismissal behavior. Keys are ignored in
   text fields.
-- Settings JSON uses `answerTimeout` (seconds) and `keys.clearAnswers`
-  (default `"d"`), alongside `keys.commentMode` and `keys.showCursor`.
+- Settings JSON uses `answerTimeout` (seconds, default 30; 0 turns it
+  off) and `keys.clearAnswers` (default `"d"`), alongside
+  `keys.commentMode` and `keys.showCursor`.
   `jampot join --answer-timeout N --clear-answers-key KEY` overrides the
   settings file for a join; `--comment-mode-key` and `--show-cursor-key`
   override the other bindings. All bindings must be distinct, ignoring case.

@@ -3,6 +3,7 @@
 
 export const MAX_NAME = 40;
 export const MAX_ANSWER_TIMEOUT = 3600;
+export const DEFAULT_ANSWER_TIMEOUT = 30;
 export const MAX_COMMENT = 10000;
 export const MAX_SELECTED_TEXT = 2000;
 export const MAX_PAGE_PATH = 512;

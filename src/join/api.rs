@@ -168,9 +168,9 @@ mod bindings {
             ids::{CommentId, EndpointKey, Fingerprint},
             name::{JoinerName, MAX_NAME},
             settings::{
-                AnswerTimeout, Corner, DEFAULT_CLEAR_ANSWERS_KEY, KeyBinding, Keys, KeysFields,
-                MAX_ANSWER_TIMEOUT, MODIFIER_KEYS, PAGE_KEYS, RESERVED_KEYS, SettingsChange,
-                Switch,
+                AnswerTimeout, Corner, DEFAULT_ANSWER_TIMEOUT, DEFAULT_CLEAR_ANSWERS_KEY,
+                KeyBinding, Keys, KeysFields, MAX_ANSWER_TIMEOUT, MODIFIER_KEYS, PAGE_KEYS,
+                RESERVED_KEYS, SettingsChange, Switch,
             },
         },
         join::{
@@ -240,6 +240,10 @@ mod bindings {
         let limits = [
             ("MAX_NAME", MAX_NAME),
             ("MAX_ANSWER_TIMEOUT", usize::from(MAX_ANSWER_TIMEOUT)),
+            (
+                "DEFAULT_ANSWER_TIMEOUT",
+                usize::from(DEFAULT_ANSWER_TIMEOUT),
+            ),
             ("MAX_COMMENT", MAX_COMMENT),
             ("MAX_SELECTED_TEXT", MAX_SELECTED_TEXT),
             ("MAX_PAGE_PATH", MAX_PAGE_PATH),

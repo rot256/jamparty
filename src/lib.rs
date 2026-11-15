@@ -470,7 +470,8 @@ async fn share(
 /// Overrides of the settings file for this join only.
 #[derive(Clone, Debug, Default, clap::Args)]
 pub(crate) struct JoinSettings {
-    /// Dismiss answers after this many seconds (0 disables; maximum 3600).
+    /// Dismiss answers after this many seconds (default: 30; 0 disables;
+    /// maximum 3600).
     #[arg(long)]
     answer_timeout: Option<AnswerTimeout>,
     /// Key for dismissing all answers (default: d).

@@ -79,7 +79,7 @@ async fn a_pages_changes_hold_for_this_join_and_never_reach_the_file() {
     assert_eq!(settings["askName"], true, "{settings}");
     assert_eq!(settings["commentMode"], "on", "{settings}");
     assert_eq!(settings["showCursor"], "off", "{settings}");
-    assert_eq!(settings["answerTimeout"], 0, "{settings}");
+    assert_eq!(settings["answerTimeout"], 30, "{settings}");
 
     let (mut page, _) = PageSocket::hello(&first).await;
     let (mut other, _) = PageSocket::hello(&first).await;

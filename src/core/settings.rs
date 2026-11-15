@@ -31,6 +31,8 @@ pub(crate) enum Corner {
 const MAX_KEY: usize = 20;
 /// Largest supported answer timeout, in seconds.
 pub(crate) const MAX_ANSWER_TIMEOUT: u16 = 3600;
+/// Answers dismiss themselves after this long unless set otherwise.
+pub(crate) const DEFAULT_ANSWER_TIMEOUT: u16 = 30;
 /// Default key for dismissing all answers.
 pub(crate) const DEFAULT_CLEAR_ANSWERS_KEY: &str = "d";
 /// Keys jampot uses itself: `/` opens a page comment, Escape cancels.
@@ -93,10 +95,16 @@ impl From<KeyBinding> for String {
 }
 
 /// Seconds before an answer is dismissed: zero disables the timeout.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u16", into = "u16")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
 pub(crate) struct AnswerTimeout(u16);
+
+impl Default for AnswerTimeout {
+    fn default() -> Self {
+        Self(DEFAULT_ANSWER_TIMEOUT)
+    }
+}
 
 impl TryFrom<u16> for AnswerTimeout {
     type Error = Invalid;
@@ -330,7 +338,7 @@ mod tests {
         assert_eq!(defaults.corner, Corner::BottomRight);
         assert_eq!(
             serde_json::to_string(&defaults).unwrap(),
-            r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"d"},"commentMode":"on","showCursor":"off","corner":"bottom-right","answerTimeout":0}"#
+            r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"d"},"commentMode":"on","showCursor":"off","corner":"bottom-right","answerTimeout":30}"#
         );
         // Each corner, and only those.
         for (text, corner) in [
@@ -382,7 +390,7 @@ mod tests {
 
     #[test]
     fn timeout_bounds_defaults_and_changes() {
-        assert_eq!(u16::from(Settings::default().answer_timeout), 0);
+        assert_eq!(u16::from(Settings::default().answer_timeout), 30);
         for seconds in [0, 1, 3600] {
             let text = format!(r#"{{"answerTimeout":{seconds}}}"#);
             let settings: Settings = serde_json::from_str(&text).unwrap();

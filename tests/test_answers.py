@@ -2,7 +2,7 @@
 
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -23,11 +23,21 @@ from support import (
     overlay,
     pages,
     recv_all,
+    settings_path,
     share,
 )
 
 
+def without_answer_timeout(home: Path) -> None:
+    """Answers stay until dismissed, however slow the run."""
+    path = settings_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"answerTimeout":0}')
+    path.chmod(0o600)
+
+
 def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
         join(tmp_path, shared) as joined,
@@ -171,8 +181,6 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
 
 
 def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None:
-    from support import settings_path
-
     path = settings_path(tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text('{"answerTimeout":3600}')
@@ -230,6 +238,7 @@ def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None
 
 
 def test_clear_answers_key_and_rebinding(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
         join(tmp_path, shared) as joined,
@@ -276,18 +285,29 @@ def test_timeout_panel_can_enable_and_disable(tmp_path: Path, page: Page) -> Non
         join(tmp_path, shared) as joined,
     ):
         page.emulate_media(reduced_motion="reduce")
-        _ = page.goto(joined.url)
+        # The page's clock stands still from the start, so the default 30 s
+        # countdown cannot run out however slow the run is.
+        page.clock.install()
+        page.clock.pause_at(datetime.now(UTC) + timedelta(hours=1))
+        with page.expect_websocket() as opened:
+            _ = page.goto(joined.url)
+        socket = opened.value
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        _ = jampot(tmp_path, "send", "Kept answer.")
+        with socket.expect_event(
+            "framereceived", lambda frame: "Kept answer." in str(frame)
+        ):
+            _ = jampot(tmp_path, "send", "Kept answer.")
+        # Let the answer's placement frame run.
+        page.clock.run_for(32)
         answer = overlay(page, ".agent-message")
         expect(answer).to_be_visible()
+        bar = answer.locator(".agent-timeout")
+        expect(bar).to_have_css("animation-timing-function", "steps(30)")
         overlay(page, "#gear").click()
         field = overlay(page, "#answer-timeout")
-        expect(field).to_have_value("0")
-        page.clock.install()
+        expect(field).to_have_value("30")
         field.fill("3600")
         field.press("Tab")
-        bar = answer.locator(".agent-timeout")
         expect(bar).to_be_visible()
         expect(bar).to_have_css("animation-timing-function", "steps(3600)")
         page.clock.pause_at(
