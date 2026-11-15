@@ -498,8 +498,9 @@ mod tests {
         let service = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
         let port = Port::try_from(service.local_addr().unwrap().port()).unwrap();
         assert_eq!(unanswered(port).await, Err(Unavailable::InUse));
-        drop(service);
-        assert_eq!(unanswered(port).await, Ok(()));
+        // Dropping the listener does not reserve a free port: another
+        // process may take it, or a concurrent child may keep a forked
+        // copy alive until exec. The mirror tests cover an available port.
     }
 
     #[test]

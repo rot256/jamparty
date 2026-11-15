@@ -1,15 +1,19 @@
 //! The joiner serves a proxied site on the dev server's port when it can,
 //! so the dev server's own scripts that dial that port reach it.
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
+use std::{
+    io,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener},
+};
 
 use crate::{
     core::port::Port,
     join::{Fallback, Unavailable},
-    tests::harness::{fixture_dir, joiner_on, share_files, share_proxy},
+    tests::harness::{fixture_dir, joiner_on, share_files, share_proxy, within},
 };
 
-/// A port free on 127.0.0.1 and [::1] (as far as can be told).
+/// A candidate free on both loopbacks now. It cannot be reserved across
+/// Joiner::start, so callers must retry if someone takes it first.
 fn free_port() -> Port {
     let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = v4.local_addr().unwrap().port();
@@ -30,9 +34,22 @@ fn dev_server(port: Port) -> SocketAddr {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_joiner_serves_on_the_dev_servers_port() {
-    let port = free_port();
-    let share = share_proxy(dev_server(port)).await;
-    let joiner = joiner_on(&share, None).await.unwrap();
+    let (port, _share, joiner) = within("an uncontended mirrored port", async {
+        loop {
+            let port = free_port();
+            let share = share_proxy(dev_server(port)).await;
+            let joiner = joiner_on(&share, None).await.unwrap();
+            match joiner.fallback() {
+                Some(Fallback {
+                    why: Unavailable::InUse,
+                    ..
+                }) => continue,
+                Some(fallback) => panic!("{fallback}"),
+                None => return (port, share, joiner),
+            }
+        }
+    })
+    .await;
     assert_eq!(joiner.local_addr().port(), u16::from(port));
     assert!(joiner.fallback().is_none());
     assert!(
@@ -44,8 +61,8 @@ async fn the_joiner_serves_on_the_dev_servers_port() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_taken_port_falls_back_to_a_free_one() {
-    let port = free_port();
-    let _taken = TcpListener::bind((Ipv4Addr::LOCALHOST, u16::from(port))).unwrap();
+    let _taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = _taken.local_addr().unwrap().port().try_into().unwrap();
     let share = share_proxy(dev_server(port)).await;
     let joiner = joiner_on(&share, None).await.unwrap();
     let serving = joiner.local_addr().port();
@@ -65,10 +82,10 @@ async fn a_taken_port_falls_back_to_a_free_one() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_port_taken_on_the_ipv6_side_falls_back_too() {
-    let port = free_port();
-    let Ok(_taken) = TcpListener::bind((Ipv6Addr::LOCALHOST, u16::from(port))) else {
+    let Ok(_taken) = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) else {
         return; // No IPv6 loopback here: nobody can take that side.
     };
+    let port = _taken.local_addr().unwrap().port().try_into().unwrap();
     let share = share_proxy(dev_server(port)).await;
     let joiner = joiner_on(&share, None).await.unwrap();
     assert_ne!(joiner.local_addr().port(), u16::from(port));
@@ -77,8 +94,8 @@ async fn a_port_taken_on_the_ipv6_side_falls_back_too() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wildcard_listener_on_the_port_falls_back() {
-    let port = free_port();
-    let _service = TcpListener::bind((Ipv4Addr::UNSPECIFIED, u16::from(port))).unwrap();
+    let _service = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+    let port = _service.local_addr().unwrap().port().try_into().unwrap();
     let share = share_proxy(dev_server(port)).await;
     let joiner = joiner_on(&share, None).await.unwrap();
     assert_ne!(joiner.local_addr().port(), u16::from(port));
@@ -91,9 +108,29 @@ async fn a_wildcard_listener_on_the_port_falls_back() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_given_port_wins_and_is_not_traded() {
-    let (port, given) = (free_port(), free_port());
+    // Keep the announced port occupied and distinct from the given one.
+    let announced = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = announced.local_addr().unwrap().port().try_into().unwrap();
     let share = share_proxy(dev_server(port)).await;
-    let joiner = joiner_on(&share, Some(given)).await.unwrap();
+    let (given, joiner) = within("an uncontended given port", async {
+        loop {
+            let given = free_port();
+            match joiner_on(&share, Some(given)).await {
+                Ok(joiner) => return (given, joiner),
+                Err(error)
+                    if error.iter_reports().any(|report| {
+                        report
+                            .downcast_current_context::<io::Error>()
+                            .is_some_and(|error| error.kind() == io::ErrorKind::AddrInUse)
+                    }) =>
+                {
+                    continue;
+                }
+                Err(error) => panic!("{error:?}"),
+            }
+        }
+    })
+    .await;
     assert_eq!(joiner.local_addr().port(), u16::from(given));
     assert!(joiner.fallback().is_none());
     // Taken (by that joiner): an error, not another port.
