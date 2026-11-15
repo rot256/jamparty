@@ -287,6 +287,9 @@ async fn joined(
                     message,
                 })) => message,
                 Ok(None) => return Left::ControlStreamClosed,
+                // A read cut short by the connection closing is the joiner
+                // leaving, not a bad line.
+                Err(_) if connection.close_reason().is_some() => return Left::ConnectionClosed,
                 Err(error) => {
                     tracing::debug!(error = %Untrusted(&error), "invalid control line");
                     return Left::InvalidControlLine;
