@@ -322,7 +322,7 @@ pub(crate) struct Joiner {
     #[cfg(test)]
     port: Port,
     fallback: Option<Fallback>,
-    _tasks: JoinSet<()>,
+    tasks: JoinSet<()>,
 }
 
 impl Joiner {
@@ -402,7 +402,7 @@ impl Joiner {
             #[cfg(test)]
             port,
             fallback,
-            _tasks: tasks,
+            tasks,
         })
     }
 
@@ -476,7 +476,10 @@ impl Joiner {
         self.session.control()
     }
 
-    pub(crate) async fn stop(self) {
+    pub(crate) async fn stop(mut self) {
+        // Endpoint closure looks like a lost share to the connection loop.
+        // Finish cancelling that loop before closing the transport.
+        self.tasks.shutdown().await;
         self.endpoint.close().await;
     }
 }

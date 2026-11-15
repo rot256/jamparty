@@ -18,7 +18,10 @@ use std::path::Path;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use iroh::Endpoint;
-use tokio::{sync::Semaphore, task::JoinSet};
+use tokio::{
+    sync::{Semaphore, oneshot},
+    task::{JoinHandle, JoinSet},
+};
 
 #[cfg(test)]
 use crate::protocol::comment::{Author, Comment};
@@ -107,7 +110,10 @@ pub(crate) struct Shared {
 pub(crate) struct Share {
     endpoint: Endpoint,
     shared: Arc<Shared>,
-    _tasks: JoinSet<()>,
+    tasks: JoinSet<()>,
+    /// Stops [`accept`], which then waits for its connections.
+    stop_accepting: oneshot::Sender<()>,
+    accepting: JoinHandle<()>,
     _watcher: Option<LiveWatcher>,
     socket: SocketFile,
 }
@@ -152,17 +158,21 @@ impl Share {
         let mut tasks = JoinSet::new();
         let recv = delivery::start(target, Arc::clone(&shared.hub), &mut tasks);
         tasks.spawn(socket::serve(listener, Arc::clone(&shared.hub), recv));
-        tasks.spawn(accept(
+        let (stop_accepting, stopped) = oneshot::channel();
+        let accepting = tokio::spawn(accept(
             endpoint.clone(),
             Arc::new(Semaphore::new(max_unadmitted)),
             Arc::clone(&shared),
+            stopped,
         ));
         tasks.spawn(connection::forward_reloads(Arc::clone(&shared)));
         tasks.spawn(hub::flush_presence(Arc::clone(&shared.hub)));
         Ok(Self {
             endpoint,
             shared,
-            _tasks: tasks,
+            tasks,
+            stop_accepting,
+            accepting,
             _watcher: watcher,
             socket,
         })
@@ -218,15 +228,35 @@ impl Share {
     }
 
     /// Closes every connection and the endpoint; removes the socket.
-    pub(crate) async fn stop(self) {
+    pub(crate) async fn stop(mut self) {
+        // Cancel every task, and wait until each connection's is gone,
+        // before closing the endpoint: a connection still running would
+        // report the closing as its joiner leaving.
+        let _ = self.stop_accepting.send(());
+        let _ = self.accepting.await;
+        self.tasks.shutdown().await;
         self.endpoint.close().await;
         drop(self.socket);
     }
 }
 
-async fn accept(endpoint: Endpoint, unadmitted: Arc<Semaphore>, shared: Arc<Shared>) {
+/// Accepts joiners until `stop` fires or is dropped; then cancels the
+/// connections and returns once all of them have finished.
+async fn accept(
+    endpoint: Endpoint,
+    unadmitted: Arc<Semaphore>,
+    shared: Arc<Shared>,
+    mut stop: oneshot::Receiver<()>,
+) {
     let mut connections = JoinSet::new();
-    while let Some(incoming) = endpoint.accept().await {
+    loop {
+        let incoming = tokio::select! {
+            _ = &mut stop => break,
+            incoming = endpoint.accept() => match incoming {
+                Some(incoming) => incoming,
+                None => break,
+            },
+        };
         let Ok(permit) = Arc::clone(&unadmitted).try_acquire_owned() else {
             tracing::debug!("too many connections waiting for admission; refusing one");
             incoming.refuse();
@@ -236,4 +266,5 @@ async fn accept(endpoint: Endpoint, unadmitted: Arc<Semaphore>, shared: Arc<Shar
         // Reap finished connections so the set does not grow.
         while connections.try_join_next().is_some() {}
     }
+    connections.shutdown().await;
 }
