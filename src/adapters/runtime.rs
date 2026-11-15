@@ -111,7 +111,8 @@ pub(crate) fn listen(dir: &Path, id: &Sid) -> Result<(UnixListener, SocketFile),
 /// Connects to share `id`, or to the only running share when `id` is
 /// `None`. The directory and the share at the other end must be the
 /// user's; sockets of shares that died are skipped (the next share to
-/// start removes them).
+/// start removes them), and one that is there but cannot be reached is
+/// an error.
 pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, Report> {
     if fs::metadata(dir).is_err_and(|error| error.kind() == ErrorKind::NotFound) {
         bail!("{NO_SHARE}");
@@ -136,10 +137,24 @@ pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, 
         else {
             continue;
         };
-        if let Ok(stream) = UnixStream::connect(&path).await {
-            check_peer(&stream)?;
-            running.push((id, stream));
-        }
+        let stream = match UnixStream::connect(&path).await {
+            Ok(stream) => stream,
+            // Its share died, or stopped since the directory was read. (On
+            // macOS a share whose queue of connections is full refuses too,
+            // and looks like one that died; on Linux it is the error below.)
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::ConnectionRefused | ErrorKind::NotFound
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => Err(error)
+                .context_with(|| format!("could not reach the share at {}", path.display()))?,
+        };
+        check_peer(&stream)?;
+        running.push((id, stream));
     }
     let mut running = running.into_iter();
     match (running.next(), running.next()) {
@@ -234,5 +249,29 @@ mod tests {
         let error = connect(&dir, Some(&first)).await.unwrap_err().to_string();
         assert!(error.contains("0700"), "{error}");
         assert!(connect(&dir, None).await.is_err());
+    }
+
+    /// A share that is there but cannot be reached is reported, not taken
+    /// for one that died: skipping it could pick another share instead.
+    /// Linux only: there a full queue fails the connect with EAGAIN, while
+    /// macOS takes a backlog of 0 as its maximum and refuses when full.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn an_unreachable_share_is_reported() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("run");
+        let (_listener, _socket) = listen(&dir, &EndpointKey([1; 32]).sid()).unwrap();
+
+        // A share whose queue of connections is full: one waits, and the
+        // queue holds no more.
+        let busy = dir.join(format!("{}.sock", EndpointKey([2; 32]).sid()));
+        let listener = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+        listener.bind(&SockAddr::unix(&busy).unwrap()).unwrap();
+        listener.listen(0).unwrap();
+        let _waiting = std::os::unix::net::UnixStream::connect(&busy).unwrap();
+
+        let error = connect(&dir, None).await.map(drop).unwrap_err();
+        let error = describe(&error);
+        assert!(error.contains(&busy.display().to_string()), "{error}");
     }
 }
