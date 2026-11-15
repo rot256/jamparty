@@ -39,7 +39,6 @@ use crate::{
     adapters::{
         endpoint::{Discovery, NetConfig, generate_key},
         runtime, settings,
-        t3::{self, T3Target, T3Url, ThreadId},
     },
     agent::guides::{self, Kind},
     core::{
@@ -48,7 +47,7 @@ use crate::{
         port::Port,
         rng::SystemRng,
         settings::{AnswerTimeout, KeyBinding, SettingsOverride},
-        text::Untrusted,
+        text::{self, Untrusted},
         token::{PartyToken, TokenError},
     },
     join::{JoinConfig, Joiner, ProxyLimits, Refused},
@@ -185,18 +184,9 @@ struct ShareNet {
     local: bool,
 }
 
-/// Where comments go: the t3 target, a command, or (neither) `jampot recv`.
+/// Deliver comments to a command, or hold them for `jampot recv`.
 #[derive(Debug, Args)]
 struct Delivery {
-    /// T3 thread to deliver comments to (default: $T3CODE_THREAD_ID with --t3-url).
-    #[arg(long)]
-    thread: Option<ThreadId>,
-    /// T3's MCP URL (t3 target): https://, or http:// to this machine.
-    #[arg(long, value_name = "URL")]
-    t3_url: Option<T3Url>,
-    /// File holding the T3 token (t3 target).
-    #[arg(long, value_name = "FILE")]
-    t3_token_file: Option<PathBuf>,
     /// How long a command may take per batch before it is killed: seconds,
     /// or a number with s, m or h.
     #[arg(long, value_name = "SECS", default_value = "60", value_parser = timeout)]
@@ -353,55 +343,56 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
     }
 }
 
-/// The target the delivery options select, and a note for the startup
-/// output; `site` is what is shared, `env_thread` is `T3CODE_THREAD_ID`.
-/// jampot probes nothing: missing pieces are errors naming the option.
-fn target(
-    delivery: Delivery,
-    site: &str,
-    env_thread: Option<OsString>,
-) -> Result<(Target, Option<String>), Report> {
+/// Select delivery; inside T3 (`in_t3`: T3CODE_THREAD_ID is set), suggest
+/// the command target when none is given.
+fn target(delivery: Delivery, source: &Source, in_t3: bool) -> (Target, Option<String>) {
     let Delivery {
-        thread,
-        t3_url,
-        t3_token_file,
         command_timeout,
         command,
     } = delivery;
-    let t3 = thread.is_some() || t3_url.is_some() || t3_token_file.is_some();
-    if t3 && !command.is_empty() {
-        bail!("choose the t3 target (--thread, --t3-url) or a command after --, not both");
-    }
-    if t3 {
-        let url = t3_url.context("the t3 target needs T3's MCP URL: pass --t3-url")?;
-        let token_file = t3_token_file
-            .context("the t3 target needs a file holding the T3 token: pass --t3-token-file")?;
-        let thread = match thread {
-            Some(thread) => thread,
-            None => env_thread
-                .and_then(|thread| thread.into_string().ok())
-                .and_then(|thread| ThreadId::try_from(thread).ok())
-                .context("the t3 target needs a thread: pass --thread (or set T3CODE_THREAD_ID)")?,
-        };
-        let target = T3Target {
-            url,
-            token_file,
-            thread,
-            site: site.to_owned(),
-        };
-        return Ok((Target::T3(target), None));
-    }
     if !command.is_empty() {
-        let command = CommandTarget {
-            argv: command,
-            timeout: command_timeout,
-        };
-        return Ok((Target::Command(command), None));
+        return (
+            Target::Command(CommandTarget {
+                argv: command,
+                timeout: command_timeout,
+            }),
+            None,
+        );
     }
-    let note = env_thread.map(|_| {
-        "T3CODE_THREAD_ID is set, but without --t3-url comments wait for jampot recv".to_owned()
+    let note = in_t3.then(|| {
+        format!(
+            "inside T3, deliver to this thread with: jampot {} -- t3 thread send \"$T3CODE_THREAD_ID\" -",
+            source_args(source)
+        )
     });
-    Ok((Target::Recv, note))
+    (Target::Recv, note)
+}
+
+/// `source` as `jampot` arguments to paste: the mode, then the directory
+/// or URL quoted for the shell, or a placeholder when it cannot be shown
+/// exactly (not UTF-8) or safely (control characters).
+fn source_args(source: &Source) -> String {
+    let (mode, placeholder, value) = match source {
+        Source::Files(root) => ("serve", "<dir>", root.to_str().map(str::to_owned)),
+        Source::Proxy(upstream) => ("proxy", "<url>", Some(upstream.to_string())),
+    };
+    let value = value
+        .filter(|value| !value.chars().any(text::escaped))
+        .map_or_else(|| placeholder.to_owned(), |value| shell_quote(&value));
+    format!("{mode} {value}")
+}
+
+/// Quote a single POSIX shell argument, preserving apostrophes.
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&byte))
+    {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
 }
 
 fn net_config(discovery: Discovery) -> Result<NetConfig, Report> {
@@ -425,8 +416,9 @@ async fn share(
     } else {
         Discovery::Public
     };
-    let (mut target, note) = target(delivery, site, env::var_os("T3CODE_THREAD_ID"))?;
-    let goes_to = match &mut target {
+    let in_t3 = env::var_os("T3CODE_THREAD_ID").is_some();
+    let (target, note) = target(delivery, &source, in_t3);
+    let goes_to = match &target {
         Target::Recv => "jampot recv".to_owned(),
         Target::Command(command) => format!(
             "the command {}",
@@ -437,16 +429,6 @@ async fn share(
                 .collect::<Vec<_>>()
                 .join(" ")
         ),
-        Target::T3(t3) => {
-            let thread = t3::open(t3).await?;
-            let resolved = thread
-                .resolved_from
-                .map(|child| format!(", the top-level thread of {child}"))
-                .unwrap_or_default();
-            let goes_to = format!("the T3 thread {:?} ({}{resolved})", thread.title, thread.id);
-            t3.thread = thread.id;
-            goes_to
-        }
     };
     let config = ShareConfig::new(
         source,

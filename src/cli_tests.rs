@@ -5,7 +5,7 @@ use clap::{CommandFactory, Parser};
 use rootcause::{option_ext::OptionExt, prelude::ResultExt};
 
 use crate::{
-    Cli, Command, Delivery, Report, TokenArg,
+    Cli, Command, Delivery, Report, Source, TokenArg,
     core::{
         ids::EndpointKey,
         rng::SeededRng,
@@ -115,16 +115,19 @@ fn delivery(args: &[&str]) -> Delivery {
 
 #[test]
 fn delivery_options_choose_the_target() {
-    let choose = |args: &[&str], env: Option<&str>| {
-        target(delivery(args), "/srv/site", env.map(OsString::from))
+    let choose = |args: &[&str], in_t3: bool| {
+        target(delivery(args), &Source::Files("/srv/site".into()), in_t3)
     };
-    let (recv, note) = choose(&[], None).unwrap();
+    let (recv, note) = choose(&[], false);
     assert_eq!(recv, Target::Recv);
     assert!(note.is_none());
-    let (_, note) = choose(&[], Some("thread-1")).unwrap();
-    assert!(note.unwrap().contains("--t3-url"));
+    let (_, note) = choose(&[], true);
+    assert_eq!(
+        note.unwrap(),
+        r#"inside T3, deliver to this thread with: jampot serve /srv/site -- t3 thread send "$T3CODE_THREAD_ID" -"#
+    );
 
-    let (command, note) = choose(&["site", "--", "agent", "--flag"], None).unwrap();
+    let (command, note) = choose(&["site", "--", "agent", "--flag"], true);
     assert_eq!(
         command,
         Target::Command(CommandTarget {
@@ -134,7 +137,7 @@ fn delivery_options_choose_the_target() {
     );
     assert!(note.is_none());
     for (given, secs) in [("5", 5), ("90s", 90), ("2m", 120), ("1h", 3600)] {
-        let (command, _) = choose(&["--command-timeout", given, "--", "agent"], None).unwrap();
+        let (command, _) = choose(&["--command-timeout", given, "--", "agent"], false);
         assert!(
             matches!(&command, Target::Command(c) if c.timeout == Duration::from_secs(secs)),
             "{given}: {command:?}"
@@ -144,62 +147,38 @@ fn delivery_options_choose_the_target() {
         let args = ["jampot", "serve", "--command-timeout", bad, "--", "agent"];
         assert!(Cli::try_parse_from(args).is_err(), "{bad}");
     }
-    let both = choose(
-        &["--t3-url", "http://127.0.0.1:3773/mcp", "--", "agent"],
-        None,
-    );
-    assert!(both.unwrap_err().to_string().contains("not both"));
+    for option in ["--t3-url", "--t3-token-file", "--thread"] {
+        assert!(Cli::try_parse_from(["jampot", "serve", option, "value"]).is_err());
+    }
+}
 
-    let t3 = [
-        "--t3-url",
-        "http://127.0.0.1:3773/mcp",
-        "--t3-token-file",
-        "/run/t3-token",
-    ];
-    let (from_env, _) = choose(&t3, Some("thread-1")).unwrap();
-    let Target::T3(from_env) = from_env else {
-        panic!("not t3: {from_env:?}");
-    };
-    assert_eq!(from_env.thread.as_str(), "thread-1");
-    assert_eq!(from_env.site, "/srv/site");
-    assert_eq!(from_env.url.to_string(), "http://127.0.0.1:3773/mcp");
-    let given = [&t3[..], &["--thread", "thread-2"]].concat();
-    let (Target::T3(given), _) = choose(&given, Some("thread-1")).unwrap() else {
-        panic!("not t3");
-    };
-    assert_eq!(given.thread.as_str(), "thread-2");
+#[test]
+fn t3_startup_note_pastes_exactly_or_not_at_all() {
+    use std::{os::unix::ffi::OsStrExt, path::PathBuf};
 
-    // Each missing piece names its option; nothing is probed.
-    let missing = |args: &[&str], env: Option<&str>| choose(args, env).unwrap_err().to_string();
-    assert!(missing(&t3, None).contains("--thread"));
-    assert!(missing(&["--thread", "t"], None).contains("--t3-url"));
-    assert!(
-        missing(&["--t3-url", "http://127.0.0.1:3773/mcp"], Some("t")).contains("--t3-token-file")
-    );
-    // The URL and the thread are checked as the options are parsed.
-    let parsed = |args: &[&str]| {
-        Cli::try_parse_from(["jampot", "serve"].iter().chain(args))
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    };
-    assert!(parsed(&["--thread", ""]).is_err());
-    assert!(
-        parsed(&["--t3-url", "ftp://t3"])
-            .unwrap_err()
-            .contains("http")
-    );
-    // Plain http only to this machine.
-    let remote = |url: &str| parsed(&["--t3-url", url]);
-    assert!(remote("http://t3/mcp").unwrap_err().contains("https://"));
-    assert!(remote("http://10.0.0.1/mcp").is_err());
-    assert!(remote("http://localhost.evil.test/mcp").is_err());
-    for local in [
-        "https://t3/mcp",
-        "http://localhost:3773/mcp",
-        "http://127.0.0.2/mcp",
-        "http://[::1]:3773/mcp",
+    let files = |path: &[u8]| Source::Files(PathBuf::from(std::ffi::OsStr::from_bytes(path)));
+    for (source, shown) in [
+        (
+            files(b"/srv/it's a site"),
+            r#"serve '/srv/it'"'"'s a site'"#,
+        ),
+        (
+            Source::Proxy("http://127.0.0.1:8000/a b".parse().unwrap()),
+            "proxy http://127.0.0.1:8000/a%20b/",
+        ),
+        // Not UTF-8: pasting a lossy path would share another directory.
+        (files(b"/srv/\xffsite"), "serve <dir>"),
+        // Control characters would drive the terminal it is printed to.
+        (files(b"/srv/\x1b[2J\rsite"), "serve <dir>"),
+        (files("/srv/\u{202e}site".as_bytes()), "serve <dir>"),
     ] {
-        assert!(remote(local).is_ok(), "{local}");
+        let (_, note) = target(delivery(&[]), &source, true);
+        assert_eq!(
+            note.unwrap(),
+            format!(
+                r#"inside T3, deliver to this thread with: jampot {shown} -- t3 thread send "$T3CODE_THREAD_ID" -"#
+            )
+        );
     }
 }
 

@@ -33,7 +33,7 @@ pub(crate) enum DeliveryResult {
     /// The batch came back undelivered through no fault of the target
     /// (a `jampot recv` died before printing it): no backoff.
     Returned,
-    /// The target reports itself gone (e.g. the thread was deleted).
+    /// The target reports itself gone (e.g. the command cannot be started).
     Gone,
 }
 
@@ -46,7 +46,7 @@ pub(crate) enum Attempt {
     Failed {
         why: String,
     },
-    /// The target reports itself gone (e.g. the thread was deleted).
+    /// The target reports itself gone (e.g. the command cannot be started).
     Gone {
         why: String,
     },

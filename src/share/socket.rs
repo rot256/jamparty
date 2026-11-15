@@ -76,8 +76,11 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: RecvAccess) {
     let answer = match request {
         AgentRequest::Recv => match recv {
             RecvAccess::Open(requests) => return serve_recv(read, write, &requests).await,
-            RecvAccess::Elsewhere(target) => AgentReply::Error {
-                error: format!("this share delivers comments to {target}, not to jampot recv"),
+            RecvAccess::Command(program) => AgentReply::Error {
+                error: format!(
+                    "this share delivers comments to the command {}, not to jampot recv",
+                    program.to_string_lossy()
+                ),
             },
         },
         AgentRequest::Send {

@@ -5,24 +5,15 @@
 //!   it is delivered once that client says it printed it, and returned to
 //!   the queue (no backoff) if the client goes away first.
 //! - `command`: the batch goes to the command's stdin.
-//! - `t3`: the batch is a message to a T3 thread.
 
-use std::{ffi::OsString, fmt, sync::Arc, time::Duration};
+use std::{ffi::OsString, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
 };
 
-use crate::{
-    adapters::{
-        command,
-        t3::{T3Delivery, T3Target, ThreadId},
-    },
-    core::queue::Attempt,
-    protocol::comment::Comment,
-    share::hub::Hub,
-};
+use crate::{adapters::command, core::queue::Attempt, protocol::comment::Comment, share::hub::Hub};
 
 /// Where comments go.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,8 +22,6 @@ pub(crate) enum Target {
     Recv,
     /// Piped to a command.
     Command(CommandTarget),
-    /// Sent to a T3 thread (resolved at start).
-    T3(T3Target),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,25 +45,7 @@ pub(crate) enum RecvAccess {
     /// The target is `recv`: where clients queue up.
     Open(mpsc::Sender<RecvRequest>),
     /// Comments go elsewhere.
-    Elsewhere(Elsewhere),
-}
-
-/// Where comments go when not to `jampot recv`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Elsewhere {
-    /// A command, by its program.
     Command(OsString),
-    /// A T3 thread.
-    T3(ThreadId),
-}
-
-impl fmt::Display for Elsewhere {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Command(program) => write!(f, "the command {}", program.to_string_lossy()),
-            Self::T3(thread) => write!(f, "the T3 thread {thread}"),
-        }
-    }
 }
 
 /// Starts delivery; returns what `jampot recv` clients get.
@@ -88,12 +59,7 @@ pub(crate) fn start(target: Target, hub: Arc<Hub>, tasks: &mut JoinSet<()>) -> R
         Target::Command(command) => {
             let program = command.argv.first().cloned().unwrap_or_default();
             tasks.spawn(to_command(hub, command));
-            RecvAccess::Elsewhere(Elsewhere::Command(program))
-        }
-        Target::T3(target) => {
-            let thread = target.thread.clone();
-            tasks.spawn(to_t3(hub, T3Delivery::new(target)));
-            RecvAccess::Elsewhere(Elsewhere::T3(thread))
+            RecvAccess::Command(program)
         }
     }
 }
@@ -120,12 +86,5 @@ async fn to_command(hub: Arc<Hub>, target: CommandTarget) {
     loop {
         let batch = hub.next_batch().await;
         hub.finish(command::deliver(&target.argv, target.timeout, &batch).await);
-    }
-}
-
-async fn to_t3(hub: Arc<Hub>, t3: T3Delivery) {
-    loop {
-        let batch = hub.next_batch().await;
-        hub.finish(t3.deliver(&batch).await);
     }
 }

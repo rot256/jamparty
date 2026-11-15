@@ -38,7 +38,7 @@ impl Write for Escaping<'_, '_> {
 
 /// Control characters, and the bidirectional controls that make text
 /// read other than it is.
-fn escaped(character: char) -> bool {
+pub(crate) fn escaped(character: char) -> bool {
     character.is_control()
         || matches!(
             character,
