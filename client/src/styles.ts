@@ -84,7 +84,6 @@ export const styles = `
 
   #gear[aria-expanded="true"] { background: #2a2a2a; }
   #edit[aria-pressed="true"] { border-color: #2f80ed; background: #2f80ed; }
-  #edit:disabled { opacity: 0.4; cursor: default; }
 
   #list {
     position: fixed;

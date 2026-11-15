@@ -143,7 +143,7 @@ def test_edit_mode(tmp_path: Path, page: Page) -> None:
         assert page.evaluate("() => window.pressed") == 2
 
 
-def test_edit_mode_follows_comment_mode(tmp_path: Path, page: Page) -> None:
+def test_edit_mode_is_independent_of_comment_mode(tmp_path: Path, page: Page) -> None:
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
         join(tmp_path, shared) as joined,
@@ -172,28 +172,47 @@ def test_edit_mode_follows_comment_mode(tmp_path: Path, page: Page) -> None:
         page.keyboard.press("Escape")
         expect(dialog).not_to_be_visible()
 
-        # Turning comment mode off leaves edit mode: clicks are the page's.
+        # Turning comment mode off keeps edit mode and its click behavior.
         page.keyboard.press("c")
         expect(switch(page, "comment-mode")).to_have_attribute("aria-checked", "false")
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(button).to_be_enabled()
+        page.locator("#action").click()
+        expect(dialog).to_be_visible()
+        expect(overlay(page, "#dialog-label")).to_have_text("Comment:")
+        assert page.evaluate("() => window.pressed") == 0
+        textarea = overlay(page, "textarea")
+        textarea.fill("An edit with comment mode off.")
+        textarea.press("Enter")
+        expect(dialog).not_to_be_visible()
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        received = jampot(tmp_path, "recv")
+        assert "An edit with comment mode off." in received
+        expect(overlay(page, "#badge")).to_have_text("0 queued")
+        expect(button).to_have_attribute("aria-pressed", "true")
+
+        # Right-click still reaches the page, even while edit mode is on.
+        _ = page.evaluate("""() => {
+            window.contexts = 0;
+            document.addEventListener("contextmenu", (event) => {
+                if (!event.defaultPrevented) window.contexts += 1;
+                event.preventDefault();
+            });
+        }""")
+        page.locator("#action").click(button="right")
+        assert page.evaluate("() => window.contexts") == 1
+        expect(dialog).not_to_be_visible()
+
+        # The button can leave and re-enter edit mode with comment mode off.
+        button.click()
         expect(button).to_have_attribute("aria-pressed", "false")
-        expect(button).to_be_disabled()
         page.locator("#action").click()
         assert page.evaluate("() => window.pressed") == 1
-        expect(dialog).not_to_be_visible()
-        # While it is off, edit mode cannot be entered.
-        button.click(force=True)
-        expect(button).to_have_attribute("aria-pressed", "false")
-        page.locator("#action").click()
-        assert page.evaluate("() => window.pressed") == 2
-
-        # Comment mode on again: available again.
-        page.keyboard.press("c")
-        expect(button).to_be_enabled()
         button.click()
         expect(button).to_have_attribute("aria-pressed", "true")
         page.locator("#action").click()
         expect(dialog).to_be_visible()
-        assert page.evaluate("() => window.pressed") == 2
+        assert page.evaluate("() => window.pressed") == 1
 
 
 def test_the_overlay_moves_to_any_corner(tmp_path: Path, page: Page) -> None:

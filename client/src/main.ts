@@ -62,11 +62,7 @@ function install(): void {
     (position) => socket.send({ type: "cursor", position }),
   );
   const layer = new CursorLayer(ui);
-  const editMode = new EditMode(
-    ui,
-    dialog,
-    () => panel.commentMode,
-  );
+  const editMode = new EditMode(ui, dialog);
   editMode.onPagePress = () => {
     panel.close();
     list.close();
@@ -81,7 +77,6 @@ function install(): void {
     answers.setTimeoutSeconds(settings.answerTimeout);
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
-    editMode.refresh();
   };
 
   const connection = new Connection((view, reached) => {

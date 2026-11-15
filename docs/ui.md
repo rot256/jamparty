@@ -59,7 +59,7 @@ its own joiner's client.
 
 ## Edit mode
 
-- A select button (arrow icon) sits between the pill and the gear. Clicking
+- An edit button (pen icon) sits between the pill and the gear. Clicking
   it turns it blue (`#2f80ed`) and enters edit mode, as in a design tool.
 - In edit mode the element under the pointer is outlined in that blue, and
   a left click comments on it (the `Comment:` dialog, as a right-click
@@ -68,8 +68,9 @@ its own joiner's client.
   working normally.
 - It stays on after a comment. Escape leaves it (when a comment dialog is
   open, Escape closes the dialog first), as does clicking the button again.
-- Only while comment mode is on: with comment mode off the button is
-  disabled, and turning comment mode off leaves edit mode.
+- Independent of comment mode: the button is always available, and turning
+  comment mode off keeps edit mode on. With comment mode off, right-click
+  and `/` still reach the page; edit mode takes left clicks only.
 - Presses are taken before the page's own listeners (on the window, in the
   capture phase), so delegated handlers on the document do not run either.
 - Not saved: every page starts with it off.
@@ -88,7 +89,8 @@ text. Rows:
 | Corner | four buttons ↖ ↗ ↙ ↘ | bottom right | |
 
 - Comment mode off: the page behaves normally: right-click shows the
-  browser menu, `/` types normally, nothing is intercepted. The pill stays.
+  browser menu and `/` types normally. Edit mode can still take left clicks
+  to comment on elements. The pill stays.
 - Corner: the pill, the gear, both panels, notices and answers not
   anchored to an element move to that corner of the window; panels open
   towards the middle. Kept with the other settings (see Name).

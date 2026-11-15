@@ -2,7 +2,7 @@
 // under the pointer is outlined and a left click comments on it instead of
 // reaching the page (links do not navigate, buttons do not fire). It stays
 // on after a comment; Escape (with no dialog open) or its button leaves it.
-// It is only available while comment mode is on.
+// It works independently of comment mode.
 //
 // Presses are taken on `window` in the capture phase, before any listener
 // on the document or below it, so a site's delegated handlers do not run.
@@ -28,8 +28,6 @@ export class EditMode {
   constructor(
     private readonly ui: Ui,
     private readonly dialog: CommentDialog,
-    /** Whether edit mode may be on: while comment mode is on. */
-    private readonly allowed: () => boolean,
   ) {
     ui.edit.addEventListener("click", () => {
       if (this.on) this.leave();
@@ -50,15 +48,7 @@ export class EditMode {
     }, true);
   }
 
-  /** Follows whether edit mode may be on; leaves it when it may not. */
-  refresh(): void {
-    const allowed = this.allowed();
-    this.ui.edit.disabled = !allowed;
-    if (!allowed && this.on) this.leave();
-  }
-
   enter(): void {
-    if (!this.allowed()) return;
     this.on = true;
     this.ui.edit.setAttribute("aria-pressed", "true");
   }
