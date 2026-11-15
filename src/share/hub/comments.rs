@@ -131,6 +131,12 @@ impl Hub {
         }
     }
 
+    /// Installs a one-shot interleaving without depending on log filtering.
+    #[cfg(test)]
+    pub(crate) fn after_finish_unlock(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.after_finish_unlock.lock().unwrap() = Some(Box::new(hook));
+    }
+
     /// Records how the in-flight batch's attempt ended; what went wrong
     /// goes only to the share's log. Delivered ids go to each comment's
     /// author only; the status line follows the state.
@@ -160,6 +166,13 @@ impl Hub {
             }
             delivered.len()
         };
+        #[cfg(test)]
+        {
+            let hook = self.after_finish_unlock.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         match attempt {
             Attempt::Delivered => tracing::info!(count = delivered, "comments delivered"),
             Attempt::Failed { why } => tracing::warn!(%why, "delivery failed; retrying"),

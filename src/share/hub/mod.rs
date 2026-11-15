@@ -94,6 +94,9 @@ pub(crate) struct Hub {
     /// joiner sends.
     #[cfg(test)]
     cursors_received: AtomicUsize,
+    /// One-shot interleaving for tests, after finish releases `inner`.
+    #[cfg(test)]
+    after_finish_unlock: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 struct Inner {
@@ -139,6 +142,8 @@ impl Hub {
             rng,
             #[cfg(test)]
             cursors_received: AtomicUsize::new(0),
+            #[cfg(test)]
+            after_finish_unlock: Mutex::new(None),
         })
     }
 

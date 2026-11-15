@@ -336,25 +336,9 @@ async fn an_ack_ahead_of_a_delivery_at_a_full_queue_is_taken() {
 
 /// A comment queued in a slot a delivery just freed is acknowledged after
 /// that delivery, also when it is queued while `finish` is still running:
-/// the hook below queues it from another thread at the log line `finish`
-/// writes once its lock is gone.
+/// a test-only hook queues it from another thread once its lock is gone.
 #[tokio::test]
 async fn a_comment_queued_as_a_batch_finishes_is_acked_after_it() {
-    use std::sync::Mutex;
-
-    use tracing_subscriber::{Layer, layer::Context, prelude::*};
-
-    /// Runs its action once, at the first event logged.
-    struct AtFirstEvent(Mutex<Option<Box<dyn FnOnce() + Send>>>);
-    impl<S: tracing::Subscriber> Layer<S> for AtFirstEvent {
-        fn on_event(&self, _: &tracing::Event<'_>, _: Context<'_, S>) {
-            let action = self.0.lock().unwrap().take();
-            if let Some(action) = action {
-                action();
-            }
-        }
-    }
-
     let clock = Arc::new(ManualClock::new(
         Timestamp::from_second(1_800_000_000).unwrap(),
     ));
@@ -378,7 +362,7 @@ async fn a_comment_queued_as_a_batch_finishes_is_acked_after_it() {
     assert_eq!(hub.next_batch().await.len(), MAX_QUEUED_PER_KEY);
     let reader = Arc::clone(&presence);
     let author = alice.clone();
-    let during = AtFirstEvent(Mutex::new(Some(Box::new(move || {
+    hub.after_finish_unlock(move || {
         std::thread::spawn(move || {
             let reference = "during-finish".to_owned().try_into().unwrap();
             let outcome = reader.comment(&author, reference, draft()).unwrap();
@@ -386,10 +370,8 @@ async fn a_comment_queued_as_a_batch_finishes_is_acked_after_it() {
         })
         .join()
         .unwrap();
-    }))));
-    tracing::subscriber::with_default(tracing_subscriber::registry().with(during), || {
-        hub.finish(Attempt::Delivered);
     });
+    hub.finish(Attempt::Delivered);
     assert_eq!(hub.queued().len(), 1, "the comment went in during finish");
     let taken = take(&mut outbox, &mut state);
     assert!(
