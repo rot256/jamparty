@@ -16,11 +16,17 @@ cargo install --locked jampot
 jampot serve ./public                     # a static directory
 jampot proxy http://127.0.0.1:5173        # a running dev server
 jampot serve ./public -- ./on-comments.sh # hand comments to a command
-jampot serve ./public --t3-url <url> --t3-token-file <file> --thread <id>
+jampot serve ./public -- t3 thread send "$T3CODE_THREAD_ID" -
 ```
 
 Anyone with the printed token can see the site and comment until the
 share stops.
+
+Commands receive each comment batch as NDJSON on stdin, in the same format
+as `jampot recv`. Inside T3, the example queues comments as a new turn;
+start the share in the background. A subagent should pass the top-level
+thread's id. Failed commands retry with backoff, so skip duplicate comment
+ids. See [command delivery](docs/delivery.md) or `jampot agent t3`.
 
 ## Join
 

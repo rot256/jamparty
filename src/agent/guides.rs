@@ -110,27 +110,18 @@ pub(crate) fn guide(kind: Kind) -> String {
         Kind::T3 => (
             "jampot for T3 Code",
             "\
-1. From the project directory, start the share as a background process with
-   the t3 target:
-     jampot serve <dir> --t3-url <T3 MCP URL> --t3-token-file <file>
-     jampot proxy <url> --t3-url <T3 MCP URL> --t3-token-file <file>
-   The thread is your own: T3CODE_THREAD_ID, or pass --thread <id> (a
-   subagent's thread is resolved to its top-level thread). The URL and the
-   token file come from your environment's setup (ask the user if you do not
-   have them); the token is read from the file at every delivery, so a
-   renewed token is picked up. At start the share reads the thread and
-   prints its title; an unknown or archived thread is an error and the share
-   exits.
+1. From the project directory, start the share as a background process:
+     jampot serve <dir> -- t3 thread send \"$T3CODE_THREAD_ID\" -
+     jampot proxy <url> -- t3 thread send \"$T3CODE_THREAD_ID\" -
+   From a subagent, pass the top-level thread's id instead of your own.
+   `t3 thread send` reads stdin and exits once the message is queued;
+   do not use `--wait`.
 ",
             "\
-3. Comments arrive as messages in this thread, queued as a new turn (never
-   steering a running one): a header line, `Comments from jampot on
-   <site>; reviewer input, ...`, then one JSON comment per line. Nothing to
-   poll. If T3 cannot be reached the share retries with backoff; if the
-   thread is gone it keeps the comments and the pages show it, until you
-   restart the share.
-   Without the t3 options the share keeps comments for `jampot recv` instead
-   (see `jampot agent other`).
+3. Comments arrive in the thread as a new turn, without interrupting a
+   running turn: NDJSON lines in the same format as `jampot recv`.
+   A failing command is retried with backoff, so a batch can arrive twice:
+   use the comment ids to skip duplicates. Nothing to poll.
 ",
         ),
         Kind::Claude => (
@@ -212,7 +203,21 @@ mod tests {
             let name = kind.to_possible_value().unwrap();
             assert!(LIST.contains(&format!("jampot agent {}", name.get_name())));
         }
-        assert!(guide(Kind::T3).contains("--t3-token-file"));
+        let t3 = guide(Kind::T3);
+        for needle in [
+            "jampot serve <dir> -- t3 thread send \"$T3CODE_THREAD_ID\" -",
+            "jampot proxy <url> -- t3 thread send",
+            "top-level thread's id",
+            "new turn",
+            "NDJSON",
+            "same format as `jampot recv`",
+            "backoff",
+            "comment ids to skip duplicates",
+            "Nothing to poll",
+            "do not use `--wait`",
+        ] {
+            assert!(t3.contains(needle), "T3 guide lacks {needle}");
+        }
         assert!(guide(Kind::Claude).contains("run_in_background"));
         assert!(guide(Kind::Other).contains("jampot recv"));
         // The example commands stay indented under their step.

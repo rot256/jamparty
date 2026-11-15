@@ -242,7 +242,9 @@ def test_bare_jampot_and_the_agent_guides(tmp_path: Path) -> None:
     for kind in ["t3", "claude", "codex", "other"]:
         assert f"jampot agent {kind}" in guides
     assert "jampot recv" in jampot(tmp_path, "agent", "claude")
-    assert "--t3-url" in jampot(tmp_path, "agent", "t3")
+    t3 = jampot(tmp_path, "agent", "t3")
+    assert 't3 thread send "$T3CODE_THREAD_ID" -' in t3
+    assert "comment ids to skip duplicates" in t3
     help_text = jampot(tmp_path, "--help")
     assert "serve" in help_text and "recv" not in help_text
 
