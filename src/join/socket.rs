@@ -18,6 +18,7 @@ use hyper_util::rt::TokioIo;
 use serde::Deserialize;
 use sha1_smol::Sha1;
 use tokio::{
+    io::{AsyncRead, AsyncWrite},
     task::JoinSet,
     time::{self, MissedTickBehavior},
 };
@@ -46,8 +47,6 @@ pub(crate) const MAX_IN_FLIGHT: usize = 8;
 
 /// RFC 6455's key suffix for `Sec-WebSocket-Accept`.
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-type Socket = WebSocketStream<TokioIo<upgrade::Upgraded>>;
 
 /// `GET api/socket` with `Upgrade: websocket` (the request rules have
 /// checked `Host`, `Origin` and `Sec-Fetch-Site`): attaches the page and
@@ -112,7 +111,11 @@ struct Ended(CloseCode, &'static str);
 
 /// Runs one page's socket until either side closes it, or the joiner drops
 /// the page for falling behind.
-async fn run(socket: Socket, session: &Arc<Session>, attached: Attached) {
+async fn run(
+    socket: WebSocketStream<impl AsyncRead + AsyncWrite + Unpin>,
+    session: &Arc<Session>,
+    attached: Attached,
+) {
     let Attached {
         id,
         mut queue,
@@ -251,15 +254,144 @@ async fn handle(
 
 #[cfg(test)]
 mod tests {
-    use std::{future, sync::Arc};
+    use std::{future, sync::Arc, time::Duration};
 
+    use futures_util::{StreamExt, poll};
     use serde_json::{Value, json};
-    use tokio::task::JoinSet;
+    use tokio::{
+        io::{AsyncReadExt, duplex},
+        task::JoinSet,
+        time::{Instant, advance},
+    };
+    use tokio_websockets::{ClientBuilder, ServerBuilder};
 
     use crate::join::{
+        api::SettingsOutcome,
+        pages::PAGE_QUEUE,
         session::tests::session,
-        socket::{MAX_IN_FLIGHT, handle},
+        socket::{MAX_IN_FLIGHT, SEND_TIMEOUT, handle, run},
     };
+
+    #[tokio::test]
+    async fn a_page_that_falls_behind_is_closed_and_comes_back() {
+        let session = Arc::new(session());
+        let slow = session.attach().unwrap();
+        let mut quick = session.attach().unwrap();
+        let id = slow.id;
+        // No socket writer is running yet: overflow the real page queue
+        // without relying on TCP buffer sizes or racing a send deadline.
+        quick.queue.recv().await.unwrap(); // The quick page's hello.
+        for i in 0..PAGE_QUEUE {
+            let name = format!("n{i}");
+            session.change_settings(
+                id,
+                serde_json::from_value(json!({"n": i, "change": {"name": name}})).unwrap(),
+            );
+            let broadcast: Value =
+                serde_json::from_slice(&quick.queue.try_recv().unwrap()).unwrap();
+            assert_eq!(broadcast.pointer("/type"), Some(&json!("settings")));
+            assert_eq!(broadcast.pointer("/name"), Some(&json!(name)));
+            assert!(quick.queue.try_recv().is_err());
+            assert!(!quick.queue.is_closed());
+        }
+        assert!(slow.queue.is_closed());
+        let (server, client) = duplex(4096);
+        let socket = ServerBuilder::new().serve(server);
+        let mut page = ClientBuilder::new().take_over(client);
+        let reader = async {
+            let closed = page.next().await.unwrap().unwrap();
+            assert_eq!(
+                closed.as_close().map(|(code, _)| u16::from(code)),
+                Some(1013)
+            );
+        };
+        tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(run(socket, &session, slow), reader);
+        })
+        .await
+        .expect("the lagging page closes");
+        session.detach(id);
+        // Reattaching sends a new hello with the current settings, rather
+        // than the updates that were left in the old queue.
+        let again = session.attach().unwrap();
+        let (server, client) = duplex(4096);
+        let socket = ServerBuilder::new().serve(server);
+        let mut page = ClientBuilder::new().take_over(client);
+        let reader = async {
+            let message = page.next().await.unwrap().unwrap();
+            let hello: Value = serde_json::from_str(message.as_text().unwrap()).unwrap();
+            assert_eq!(hello.pointer("/type"), Some(&json!("hello")));
+            assert_eq!(
+                hello.pointer("/settings/name"),
+                Some(&json!(format!("n{}", PAGE_QUEUE - 1)))
+            );
+            drop(page);
+        };
+        tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(run(socket, &session, again), reader);
+        })
+        .await
+        .expect("the reconnected page receives its hello");
+        // The page drained above stayed attached throughout.
+        session.reply_settings(
+            quick.id,
+            serde_json::from_str("2").unwrap(),
+            SettingsOutcome::Saved,
+        );
+        let reply: Value = serde_json::from_slice(&quick.queue.recv().await.unwrap()).unwrap();
+        assert_eq!(reply.pointer("/type"), Some(&json!("settings_reply")));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_writer_expires_even_when_close_cannot_fit() {
+        let session = Arc::new(session());
+        let attached = session.attach().unwrap();
+        let id = attached.id;
+        let url = Some("/stalled".to_owned().try_into().unwrap());
+        session.visit(id, url.clone());
+        assert_eq!(session.whereabouts().url, url);
+
+        // One byte cannot hold even the hello's header. Polling run once
+        // starts its send and fills the duplex before any settings arrive.
+        let (server, mut client) = duplex(1);
+        let socket = ServerBuilder::new().serve(server);
+        let started = Instant::now();
+        {
+            let running = run(socket, &session, attached);
+            tokio::pin!(running);
+            assert!(poll!(&mut running).is_pending());
+            assert_eq!(Instant::now(), started);
+
+            for i in 0..PAGE_QUEUE {
+                session.change_settings(
+                    id,
+                    serde_json::from_value(json!({"n": i, "change": {"name": format!("n{i}")}}))
+                        .unwrap(),
+                );
+            }
+            assert_eq!(
+                session.whereabouts().url,
+                None,
+                "overflow detached the page"
+            );
+            assert!(poll!(&mut running).is_pending());
+
+            // Dropping a page cannot interrupt an in-progress send. Its
+            // deadline expires first; then the close has its own deadline.
+            advance(SEND_TIMEOUT).await;
+            assert!(poll!(&mut running).is_pending());
+            advance(SEND_TIMEOUT).await;
+            assert!(poll!(&mut running).is_ready());
+            assert_eq!(Instant::now() - started, SEND_TIMEOUT * 2);
+        }
+        let mut bytes = Vec::new();
+        client.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(
+            bytes.len(),
+            1,
+            "only a partial hello fits, with no close frame"
+        );
+    }
 
     #[tokio::test]
     async fn comments_in_flight_are_capped_per_page() {

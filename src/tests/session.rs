@@ -12,8 +12,7 @@ use crate::{
     adapters::endpoint::generate_key,
     agent,
     core::{ids::EndpointKey, rng::SystemRng},
-    join::PAGE_QUEUE,
-    protocol::{agent::Addressee, comment::Draft},
+    protocol::comment::Draft,
     share::hub::MAX_JOINERS_PER_KEY,
     tests::harness::{
         DRAFT, PageSocket, about, commented, connected, fixture_dir, get, join, joiner_with_key,
@@ -288,33 +287,6 @@ async fn every_page_hears_every_change_in_order() {
     assert_eq!(first.next_of("mine").await["undelivered"], json!([]));
     assert_eq!(second.next_of("mine").await["undelivered"], json!([id]));
     assert_eq!(second.next_of("mine").await["undelivered"], json!([]));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_page_that_falls_behind_is_closed_and_comes_back() {
-    let dir = fixture_dir();
-    let share = share_files(&dir).await;
-    let alice = join(&share, "alice").await;
-    // A page that reads nothing (a frozen tab), with little buffered for it.
-    let mut slow = PageSocket::open_slow(&alice).await;
-    let (mut page, _) = PageSocket::hello(&alice).await;
-    // Long answers, many more than a page's queue holds; the page that
-    // reads keeps up.
-    let long = format!("{} end", "x".repeat(9000));
-    for _ in 0..PAGE_QUEUE * 4 {
-        let stream = UnixStream::connect(share.socket_path()).await.unwrap();
-        let message = long.clone().try_into().unwrap();
-        agent::send(stream, message, None, Some(Addressee::Everyone))
-            .await
-            .unwrap();
-        page.next_of("answer").await;
-    }
-    // The slow one is closed ("try again later") once it reads what was
-    // queued before.
-    assert_eq!(slow.closed().await, Some(1013));
-    // A new socket starts afresh from a hello with the latest state.
-    let (_, hello) = PageSocket::hello(&alice).await;
-    assert!(!hello["answers"].as_array().unwrap().is_empty(), "{hello}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -20,10 +20,7 @@ use iroh::{Endpoint, SecretKey, endpoint::Connection};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::{
-    net::{TcpSocket, TcpStream},
-    time,
-};
+use tokio::{net::TcpStream, time};
 use tokio_websockets::{ClientBuilder, Message, WebSocketStream};
 
 use crate::{
@@ -357,15 +354,6 @@ impl PageSocket {
     /// is the first message waiting.
     pub(crate) async fn open(joiner: &Joiner) -> Self {
         let stream = TcpStream::connect(joiner.local_addr()).await.unwrap();
-        Self::open_on(joiner, stream).await
-    }
-
-    /// Opens the socket with a small receive buffer, as a page that reads
-    /// slowly.
-    pub(crate) async fn open_slow(joiner: &Joiner) -> Self {
-        let socket = TcpSocket::new_v4().unwrap();
-        socket.set_recv_buffer_size(4096).unwrap();
-        let stream = socket.connect(joiner.local_addr()).await.unwrap();
         Self::open_on(joiner, stream).await
     }
 
