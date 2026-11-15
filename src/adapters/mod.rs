@@ -7,6 +7,7 @@ pub(crate) mod endpoint;
 pub(crate) mod http;
 pub(crate) mod lines;
 pub(crate) mod mcp;
+pub(crate) mod output;
 pub(crate) mod runtime;
 pub(crate) mod settings;
 pub(crate) mod t3;

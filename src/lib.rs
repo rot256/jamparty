@@ -62,6 +62,12 @@ use crate::{
 /// Errors are rootcause reports; `main` prints them with [`describe`].
 pub use rootcause::Report;
 
+/// Installs the log output: `jampot: ...` lines on stderr, or fmt's
+/// detailed format when RUST_LOG is set.
+pub fn init_logging() {
+    adapters::output::init();
+}
+
 /// An error for people: its chain of contexts on one line, outermost
 /// first (`could not read <file>: permission denied`), control characters
 /// escaped (an error may quote what a share or joiner sent). The marker an
@@ -452,6 +458,8 @@ async fn share(
     {
         tracing::warn!("no relay reachable yet; joiners may not find this share");
     }
+    // Startup records stay on stdout for agents reading the token and id;
+    // ongoing diagnostics (including tracing) go to stderr.
     println!("jampot: sharing {site}{detail}");
     println!("jampot: token: {}", share.token());
     println!(
@@ -508,7 +516,7 @@ async fn join(
         admission_wait: ADMISSION_WAIT,
         proxy: ProxyLimits::JOIN,
     };
-    println!("jampot: connecting to the share…");
+    eprintln!("jampot: connecting to the share…");
     let joiner = tokio::select! {
         joiner = Joiner::start(config) => joiner?,
         signal = shutdown_signal() => return Ok(signal?),
@@ -517,10 +525,10 @@ async fn join(
         eprintln!("jampot: {note}");
     }
     if let Some(fallback) = joiner.fallback() {
-        println!("jampot: {fallback}");
+        eprintln!("jampot: {fallback}");
     }
     let url = joiner.url();
-    println!("jampot: open {url}");
+    eprintln!("jampot: open {url}");
     match open {
         Open::Browser => open_browser(&url),
         Open::No => {}
@@ -573,7 +581,13 @@ async fn shutdown_signal() -> io::Result<()> {
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
     tokio::select! {
-        result = ctrl_c() => result,
+        result = ctrl_c() => {
+            result?;
+            if std::io::IsTerminal::is_terminal(&io::stderr()) {
+                eprintln!();
+            }
+            Ok(())
+        },
         _ = terminate.recv() => Ok(()),
         _ = hangup.recv() => Ok(()),
     }

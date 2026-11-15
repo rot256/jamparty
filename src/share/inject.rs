@@ -84,7 +84,7 @@ pub(crate) async fn maybe_inject_client(
     // Bounded, whatever the body turns out to be: its Content-Length was
     // checked above, and the limit holds even if it lied.
     let read_error = |message: &str| {
-        tracing::warn!(message = %Untrusted(message), "could not read HTML response");
+        tracing::warn!(error = %Untrusted(message), "could not read HTML response");
         RequestError::new(body_error_status, "could not read HTML response")
     };
     let mut body = body;

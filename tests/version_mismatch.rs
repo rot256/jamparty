@@ -81,7 +81,7 @@ async fn join_names_both_versions_and_exits() {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            "jampot: the share runs jampot 999.0.0 (protocol 2); this is jampot {ours} \
+            "jampot: error: the share runs jampot 999.0.0 (protocol 2); this is jampot {ours} \
              (protocol 1). Install the share's version: cargo install --locked jampot@999.0.0"
         )),
         "{stderr}"

@@ -64,7 +64,7 @@ def test_a_wrong_token_is_refused(tmp_path: Path) -> None:
         with join_process(tmp_path, shared, wrong) as process:
             _ = process.wait_for("jampot: connecting to the share")
             # Refused before it serves anything: an error, no address.
-            output = process.wait_for("jampot: the share refused")
+            output = process.wait_for("jampot: error: the share refused")
             assert "token" in output
             assert process.process.wait(timeout=TIMEOUT) == 1
             assert not any(line.startswith("jampot: open") for line in process.seen)
