@@ -18,16 +18,20 @@ fn one_batch_in_flight_and_arrivals_form_the_next() {
     let mut queue = DeliveryQueue::new();
     queue.push(1).unwrap();
     queue.push(2).unwrap();
-    assert_eq!(queue.start(t0()), Some(vec![1, 2]));
+    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), Some(vec![1, 2]));
     assert_eq!(queue.state(), DeliveryState::InFlight);
     queue.push(3).unwrap();
-    assert_eq!(queue.start(t0()), None, "one delivery in flight");
+    assert_eq!(
+        queue.start(t0(), usize::MAX, |_| 1),
+        None,
+        "one delivery in flight"
+    );
     assert_eq!(queue.finish(DeliveryResult::Ok, t0()), Ok(vec![1, 2]));
     assert_eq!(queue.len(), 1);
-    assert_eq!(queue.start(t0()), Some(vec![3]));
+    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), Some(vec![3]));
     assert_eq!(queue.finish(DeliveryResult::Ok, t0()), Ok(vec![3]));
     assert!(queue.is_empty());
-    assert_eq!(queue.start(t0()), None);
+    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), None);
     assert_eq!(
         queue.finish(DeliveryResult::Ok, t0()),
         Err(QueueError::NotInFlight)
@@ -38,26 +42,35 @@ fn one_batch_in_flight_and_arrivals_form_the_next() {
 fn errors_back_off_and_retry_the_same_batch() {
     let mut queue = DeliveryQueue::new();
     queue.push(1).unwrap();
-    queue.start(t0()).unwrap();
+    queue.start(t0(), usize::MAX, |_| 1).unwrap();
     queue.push(2).unwrap();
     assert_eq!(queue.finish(DeliveryResult::Error, t0()), Ok(vec![]));
     assert_eq!(queue.wake_at(), Some(t0() + secs(1)));
-    assert_eq!(queue.start(t0()), None);
+    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), None);
     // Unchanged: the comment that arrived meanwhile waits for the next.
-    assert_eq!(queue.start(t0() + secs(1)), Some(vec![1]));
+    assert_eq!(
+        queue.start(t0() + secs(1), usize::MAX, |_| 1),
+        Some(vec![1])
+    );
     queue.finish(DeliveryResult::Error, t0() + secs(1)).unwrap();
     assert_eq!(queue.wake_at(), Some(t0() + secs(3)));
-    assert_eq!(queue.start(t0() + secs(3)), Some(vec![1]));
+    assert_eq!(
+        queue.start(t0() + secs(3), usize::MAX, |_| 1),
+        Some(vec![1])
+    );
     assert_eq!(
         queue.finish(DeliveryResult::Ok, t0() + secs(3)),
         Ok(vec![1])
     );
     assert_eq!(queue.state(), DeliveryState::Ready);
-    assert_eq!(queue.start(t0() + secs(3)), Some(vec![2]));
+    assert_eq!(
+        queue.start(t0() + secs(3), usize::MAX, |_| 1),
+        Some(vec![2])
+    );
     queue.finish(DeliveryResult::Ok, t0() + secs(3)).unwrap();
     // Success resets the backoff.
     queue.push(3).unwrap();
-    queue.start(t0() + secs(3)).unwrap();
+    queue.start(t0() + secs(3), usize::MAX, |_| 1).unwrap();
     queue.finish(DeliveryResult::Error, t0() + secs(3)).unwrap();
     assert_eq!(queue.wake_at(), Some(t0() + secs(4)));
 }
@@ -75,22 +88,22 @@ fn backoff_doubles_up_to_a_minute() {
 fn returned_batches_come_back_without_backoff() {
     let mut queue = DeliveryQueue::new();
     queue.push(1).unwrap();
-    queue.start(t0()).unwrap();
+    queue.start(t0(), usize::MAX, |_| 1).unwrap();
     queue.push(2).unwrap();
     assert_eq!(queue.finish(DeliveryResult::Returned, t0()), Ok(vec![]));
     assert_eq!(queue.state(), DeliveryState::Ready);
-    assert_eq!(queue.start(t0()), Some(vec![1]));
+    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), Some(vec![1]));
 }
 
 #[test]
 fn gone_holds_everything() {
     let mut queue = DeliveryQueue::new();
     queue.push(1).unwrap();
-    queue.start(t0()).unwrap();
+    queue.start(t0(), usize::MAX, |_| 1).unwrap();
     assert_eq!(queue.finish(DeliveryResult::Gone, t0()), Ok(vec![]));
     assert_eq!(queue.state(), DeliveryState::Held);
     queue.push(2).unwrap();
-    assert_eq!(queue.start(t0() + secs(86_400)), None);
+    assert_eq!(queue.start(t0() + secs(86_400), usize::MAX, |_| 1), None);
     assert_eq!(queue.wake_at(), None);
     assert_eq!(queue.len(), 2);
 }
@@ -102,7 +115,7 @@ fn cap_counts_the_batch_in_flight() {
         queue.push(n).unwrap();
     }
     assert_eq!(queue.push(MAX_QUEUED), Err(QueueError::Full));
-    queue.start(t0()).unwrap();
+    queue.start(t0(), usize::MAX, |_| 1).unwrap();
     assert_eq!(queue.push(MAX_QUEUED), Err(QueueError::Full));
     queue.finish(DeliveryResult::Ok, t0()).unwrap();
     assert_eq!(queue.push(MAX_QUEUED), Ok(()));
@@ -174,7 +187,7 @@ proptest! {
                         && !gone
                         && retry_at.is_none_or(|at| at <= now)
                         && undelivered > 0;
-                    match queue.start(now) {
+                    match queue.start(now, usize::MAX, |_| 1) {
                         Some(sent) => {
                             prop_assert!(may);
                             // A failed batch again unchanged, else everything
@@ -238,4 +251,31 @@ proptest! {
             prop_assert_eq!(queue.state(), expected);
         }
     }
+}
+
+#[test]
+fn bounded_prefix_retries_unchanged_and_remainder_starts_immediately() {
+    let mut queue = DeliveryQueue::new();
+    for size in [4, 6, 1, 9] {
+        queue.push(size).unwrap();
+    }
+    assert_eq!(queue.start(t0(), 10, |n| *n), Some(vec![4, 6]));
+    queue.finish(DeliveryResult::Error, t0()).unwrap();
+    queue.push(2).unwrap();
+    // A retry ignores even a changed limit and size function.
+    assert_eq!(queue.start(t0() + secs(1), 1, |_| 100), Some(vec![4, 6]));
+    queue.finish(DeliveryResult::Ok, t0() + secs(1)).unwrap();
+    assert_eq!(queue.start(t0() + secs(1), 10, |n| *n), Some(vec![1, 9]));
+    queue.finish(DeliveryResult::Ok, t0() + secs(1)).unwrap();
+    assert_eq!(queue.start(t0() + secs(1), 10, |n| *n), Some(vec![2]));
+}
+
+#[test]
+fn oversized_first_item_still_makes_progress() {
+    let mut queue = DeliveryQueue::new();
+    queue.push(11).unwrap();
+    queue.push(1).unwrap();
+    assert_eq!(queue.start(t0(), 10, |n| *n), Some(vec![11]));
+    queue.finish(DeliveryResult::Ok, t0()).unwrap();
+    assert_eq!(queue.start(t0(), 0, |n| *n), Some(vec![1]));
 }

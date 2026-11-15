@@ -1,5 +1,6 @@
 //! Delivery: one task per share takes batches from the hub's queue and
-//! hands them to the target.
+//! hands them to the target. Batches are at most about 100 KB of NDJSON;
+//! large backlogs go out as several batches, without a delay between successes.
 //!
 //! - `recv`: each batch waits for a `jampot recv` on the runtime socket;
 //!   it is delivered once that client says it printed it, and returned to
@@ -14,6 +15,11 @@ use tokio::{
 };
 
 use crate::{adapters::command, core::queue::Attempt, protocol::comment::Comment, share::hub::Hub};
+
+/// Below T3's 120,000 UTF-16-unit message limit: UTF-8 bytes are never
+/// fewer than UTF-16 units. 115,000 leaves a margin while fitting even a
+/// maximal comment whose characters all need six-byte JSON escapes.
+pub(crate) const MAX_BATCH_BYTES: usize = 115_000;
 
 /// Where comments go.
 #[derive(Clone, Debug, PartialEq, Eq)]

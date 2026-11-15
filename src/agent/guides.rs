@@ -56,7 +56,8 @@ const TOKEN: &str = "\
    the people the user names.
 ";
 
-const RECORD: &str = r#"Comments are JSON, one object per comment:
+const RECORD: &str = r#"Batches are at most about 100 KB; large backlogs arrive as several batches.
+Comments are JSON, one object per comment:
 
   {"id":"0f8fad5b-d9cb-469f-a165-70867728950e",
    "author":{"name":"alice@laptop","fingerprint":"0123456789",

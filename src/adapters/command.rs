@@ -101,6 +101,76 @@ mod tests {
 
     use crate::{adapters::command::deliver, core::queue::Attempt};
 
+    #[tokio::test]
+    async fn maximal_comments_fit_and_backlogs_reach_command_in_bounded_batches() {
+        use crate::{
+            core::{
+                ids::{CommentId, EndpointKey},
+                name::MAX_NAME,
+                queue::{DeliveryQueue, DeliveryResult},
+                rng::SeededRng,
+            },
+            protocol::{
+                comment::{
+                    Author, Comment, Draft, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT,
+                    MAX_SELECTOR,
+                },
+                line_size,
+            },
+            share::delivery::MAX_BATCH_BYTES,
+        };
+
+        // U+0000 takes the longest JSON escape (six bytes) and is valid
+        // in every free-text field, including a nonblank comment.
+        let draft = Draft::try_from(DraftFields {
+            page: "\0".repeat(MAX_PAGE).try_into().unwrap(),
+            selector: "\0".repeat(MAX_SELECTOR).try_into().unwrap(),
+            selected_text: Some("\0".repeat(MAX_SELECTED_TEXT)),
+            comment: "\0".repeat(MAX_COMMENT),
+        })
+        .unwrap();
+        let comment = Comment::new(
+            CommentId::generate(&SeededRng::new(1)),
+            Author::new(
+                "x".repeat(MAX_NAME).try_into().unwrap(),
+                EndpointKey([0xff; 32]),
+            ),
+            draft,
+        );
+        let size = line_size(&comment).unwrap();
+        assert!(size <= MAX_BATCH_BYTES, "maximal comment is {size} bytes");
+        eprintln!("maximal comment NDJSON: {size} bytes");
+        let now = jiff::Timestamp::from_second(1_800_000_000).unwrap();
+        let mut queue = DeliveryQueue::new();
+        for _ in 0..3 {
+            queue.push(comment.clone()).unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("batch");
+        let argv = [
+            "sh".into(),
+            "-c".into(),
+            "cat > \"$0\"".into(),
+            output.clone().into(),
+        ];
+        for _ in 0..3 {
+            let batch = queue
+                .start(now, MAX_BATCH_BYTES, |c| line_size(c).unwrap())
+                .unwrap();
+            assert_eq!(batch, vec![comment.clone()]);
+            assert_eq!(
+                deliver(&argv, Duration::from_secs(5), &batch).await,
+                Attempt::Delivered
+            );
+            let bytes = fs::read(&output).unwrap();
+            assert_eq!(bytes.len(), size);
+            assert_eq!(bytes.last(), Some(&b'\n'));
+            assert_eq!(serde_json::from_slice::<Comment>(&bytes).unwrap(), comment);
+            queue.finish(DeliveryResult::Ok, now).unwrap();
+        }
+        assert!(queue.is_empty());
+    }
+
     /// Whether `pid` still runs. A killed process whose parent died stays
     /// a zombie until init reaps it, and some inits (a container's node,
     /// say) never do; a zombie runs nothing, so it counts as gone.

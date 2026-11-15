@@ -1,8 +1,10 @@
 //! The share's comment queue and delivery state machine.
 //!
 //! Comments wait in order. One batch is out at a time: [`start`] hands out
-//! everything waiting, and comments arriving meanwhile form the next
-//! batch. [`finish`] reports the result: `Ok` drops the batch, `Error`
+//! the longest waiting prefix within the caller's encoded byte limit
+//! (at least one comment). The share uses about 100 KB of NDJSON per batch;
+//! large backlogs and new arrivals form later batches.
+//! [`finish`] reports the result: `Ok` drops the batch, `Error`
 //! keeps it and backs off on the injected clock, `Returned` keeps it with
 //! no backoff (the taker went away before it was delivered, e.g. a
 //! `jampot recv` that died), `Gone` keeps it and holds the queue for good
@@ -168,8 +170,14 @@ impl<T: Clone> DeliveryQueue<T> {
 
     /// The batch to send, if nothing is in flight, the backoff has passed
     /// and the target is not gone: the last batch again if it failed,
-    /// otherwise everything waiting.
-    pub(crate) fn start(&mut self, now: Timestamp) -> Option<Vec<T>> {
+    /// otherwise the longest prefix within `limit`, measured by `size`.
+    /// Always takes at least one item, even if that item exceeds the limit.
+    pub(crate) fn start(
+        &mut self,
+        now: Timestamp,
+        limit: usize,
+        size: impl Fn(&T) -> usize,
+    ) -> Option<Vec<T>> {
         let may_send = match self.state {
             DeliveryState::Ready => true,
             DeliveryState::Retrying { at } => at <= now,
@@ -182,7 +190,17 @@ impl<T: Clone> DeliveryQueue<T> {
             if self.waiting.is_empty() {
                 return None;
             }
-            self.batch = self.waiting.drain(..).collect();
+            let mut bytes = 0usize;
+            let mut count = 0;
+            for item in &self.waiting {
+                let next = size(item);
+                if count > 0 && bytes.checked_add(next).is_none_or(|total| total > limit) {
+                    break;
+                }
+                bytes = bytes.saturating_add(next);
+                count += 1;
+            }
+            self.batch = self.waiting.drain(..count).collect();
         }
         self.state = DeliveryState::InFlight;
         Some(self.batch.clone())

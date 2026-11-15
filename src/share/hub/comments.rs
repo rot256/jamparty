@@ -11,8 +11,12 @@ use crate::{
     protocol::{
         comment::{Author, Comment, Draft},
         control::{AckOutcome, Anchor, CommentRef, MAX_QUEUED_PER_KEY, ShareMessage, StatusLine},
+        line_size,
     },
-    share::hub::{Audience, Hub, Inner, MAX_ANCHORS, MAX_REFS},
+    share::{
+        delivery::MAX_BATCH_BYTES,
+        hub::{Audience, Hub, Inner, MAX_ANCHORS, MAX_REFS},
+    },
 };
 
 impl Hub {
@@ -111,7 +115,15 @@ impl Hub {
             let notified = self.wakeup.notified();
             let wake_at = {
                 let mut inner = self.lock();
-                if let Some(batch) = inner.queue.start(self.clock.now()) {
+                if let Some(batch) =
+                    inner
+                        .queue
+                        .start(self.clock.now(), MAX_BATCH_BYTES, |comment| {
+                            // One that cannot be encoded goes alone; its
+                            // delivery reports the error.
+                            line_size(comment).unwrap_or(usize::MAX)
+                        })
+                {
                     return batch;
                 }
                 inner.queue.wake_at()

@@ -57,9 +57,7 @@ impl Error for FrameError {}
 /// and written into a buffer of exactly its size, wiped on drop: a buffer
 /// that grew would leave the bytes it held behind, unwiped.
 pub(crate) fn encode_line<T: Serialize>(message: &T) -> Result<Zeroizing<Vec<u8>>, FrameError> {
-    let mut length = Length(0);
-    serde_json::to_writer(&mut length, message).map_err(FrameError::Json)?;
-    let length = length.0.saturating_add(1);
+    let length = line_size(message).map_err(FrameError::Json)?;
     if length > MAX_LINE_BYTES {
         return Err(FrameError::TooLong);
     }
@@ -67,6 +65,13 @@ pub(crate) fn encode_line<T: Serialize>(message: &T) -> Result<Zeroizing<Vec<u8>
     serde_json::to_writer(&mut *line, message).map_err(FrameError::Json)?;
     line.push(b'\n');
     Ok(line)
+}
+
+/// Encoded NDJSON size, including the newline, without allocating a buffer.
+pub(crate) fn line_size<T: Serialize>(message: &T) -> Result<usize, serde_json::Error> {
+    let mut length = Length(0);
+    serde_json::to_writer(&mut length, message)?;
+    Ok(length.0.saturating_add(1))
 }
 
 /// Counts the bytes written to it, keeping none.
