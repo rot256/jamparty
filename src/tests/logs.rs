@@ -6,8 +6,6 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 
-use tracing::Level;
-
 use crate::tests::{
     fake_share::fake_share,
     harness::{try_joiner, until, within},
@@ -46,18 +44,20 @@ impl io::Write for Captured {
     }
 }
 
-// On one thread, so the joiner's tasks log to this test's subscriber.
+// This is the suite's only logging subscriber. Keep it global: a callsite
+// first reached by another test must register against this subscriber too.
+// A scoped subscriber can cache "never" from that thread's empty default.
 #[tokio::test(flavor = "current_thread")]
 async fn a_control_line_with_escapes_is_logged_escaped() {
     let captured = Captured::default();
     let writer = captured.clone();
     let subscriber = tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
+        .with_env_filter("off,jampot::join::connection=debug")
         .with_ansi(false)
         .without_time()
         .with_writer(move || writer.clone())
         .finish();
-    let _default = tracing::subscriber::set_default(subscriber);
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 
     let forged = r#"{"version":1,"message":{"type":"\r\nFORGED LINE\u001b[2J"}}"#;
     let share = fake_share(vec![admitted(), forged.to_owned()]).await;
@@ -67,15 +67,14 @@ async fn a_control_line_with_escapes_is_logged_escaped() {
     )
     .await
     .unwrap();
+    let is_forged =
+        |line: &str| line.contains("control stream ended") && line.contains("FORGED LINE");
     until("the bad line to be logged", || {
-        captured.text().contains("control stream ended")
+        captured.text().lines().any(is_forged)
     })
     .await;
     let log = captured.text();
-    let line = log
-        .lines()
-        .find(|line| line.contains("control stream ended"))
-        .unwrap();
+    let line = log.lines().find(|line| is_forged(line)).unwrap();
     // On the one line, its line break and escape spelled out.
     assert!(
         line.contains(r"\n │ FORGED LINE\u{1b}[2J"),
