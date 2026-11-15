@@ -20,6 +20,12 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
+    ignore:
+      # typescript-eslint supports TypeScript < 6.1 only; take TypeScript 7
+      # by hand once it does.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
     cooldown:
       default-days: 7
 
