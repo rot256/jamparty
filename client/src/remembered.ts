@@ -6,7 +6,13 @@
 // port the joiner serves on.
 
 import { SETTINGS_COOKIE } from "./config";
-import type { Corner, PageSettings, SettingsChange, Switch } from "./generated/api";
+import {
+  type Corner,
+  MAX_ANSWER_TIMEOUT,
+  type PageSettings,
+  type SettingsChange,
+  type Switch,
+} from "./generated/api";
 import { isRecord } from "./json";
 
 /** Kept for a year; a share's origin lasts as long as the share. */
@@ -25,16 +31,19 @@ function isCorner(value: unknown): value is Corner {
 function parse(value: unknown): SettingsChange {
   if (!isRecord(value)) return {};
   const change: SettingsChange = {};
-  const { name, keys, commentMode, showCursor, corner } = value;
+  const { name, keys, commentMode, showCursor, corner, answerTimeout } = value;
   if (typeof name === "string") change.name = name;
   if (
     isRecord(keys) && typeof keys.commentMode === "string" &&
-    typeof keys.showCursor === "string"
+    typeof keys.showCursor === "string" && typeof keys.clearAnswers === "string"
   ) {
-    change.keys = { commentMode: keys.commentMode, showCursor: keys.showCursor };
+    change.keys = { commentMode: keys.commentMode, showCursor: keys.showCursor,
+      clearAnswers: keys.clearAnswers };
   }
   if (isSwitch(commentMode)) change.commentMode = commentMode;
   if (isSwitch(showCursor)) change.showCursor = showCursor;
+  if (typeof answerTimeout === "number" && Number.isInteger(answerTimeout) &&
+      answerTimeout >= 0 && answerTimeout <= MAX_ANSWER_TIMEOUT) change.answerTimeout = answerTimeout;
   if (isCorner(corner)) change.corner = corner;
   return change;
 }
@@ -83,7 +92,8 @@ export function missing(change: SettingsChange, settings: PageSettings): Setting
   if (
     change.keys !== undefined && (
       change.keys.commentMode !== settings.keys.commentMode ||
-      change.keys.showCursor !== settings.keys.showCursor
+      change.keys.showCursor !== settings.keys.showCursor ||
+      change.keys.clearAnswers !== settings.keys.clearAnswers
     )
   ) {
     needed.keys = change.keys;
@@ -95,6 +105,10 @@ export function missing(change: SettingsChange, settings: PageSettings): Setting
   }
   if (change.showCursor !== undefined && change.showCursor !== settings.showCursor) {
     needed.showCursor = change.showCursor;
+    any = true;
+  }
+  if (change.answerTimeout !== undefined && change.answerTimeout !== settings.answerTimeout) {
+    needed.answerTimeout = change.answerTimeout;
     any = true;
   }
   if (change.corner !== undefined && change.corner !== settings.corner) {

@@ -56,6 +56,7 @@ function install(): void {
   const list = new CommentList(ui, outbox);
   // The panel takes its keys before the page and the `/` handler below.
   const panel = new Panel(ui, changeSettings);
+  panel.onClearAnswers = () => { answers.clear(); };
   const sender = new CursorSender(
     ui,
     (position) => socket.send({ type: "cursor", position }),
@@ -77,6 +78,7 @@ function install(): void {
 
   const prompt = new NamePrompt(ui, changeSettings);
   panel.onSettings = (settings: PageSettings): void => {
+    answers.setTimeoutSeconds(settings.answerTimeout);
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
     editMode.refresh();

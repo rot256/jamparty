@@ -2,6 +2,7 @@
 
 // client/src/generated/api.ts
 var MAX_NAME = 40;
+var MAX_ANSWER_TIMEOUT = 3600;
 var MAX_COMMENT = 1e4;
 var MAX_SELECTED_TEXT = 2e3;
 var MAX_PAGE_PATH = 512;
@@ -9,6 +10,7 @@ var MAX_CURSOR_SELECTOR = 512;
 var FRACTION_ONE = 1e4;
 var MAX_ANSWERS = 100;
 var MAX_JOINERS = 64;
+var DEFAULT_CLEAR_ANSWERS_KEY = "d";
 var RESERVED_KEYS = ["/", "Escape"];
 var MODIFIER_KEYS = ["Alt", "AltGraph", "CapsLock", "Control", "Fn", "FnLock", "Hyper", "Meta", "NumLock", "ScrollLock", "Shift", "Super", "Symbol"];
 var PAGE_KEYS = ["Enter", "Tab", " "];
@@ -154,6 +156,7 @@ var Answers = class {
   shown = /* @__PURE__ */ new Map();
   dismissed = loadDismissed();
   placementFrame;
+  timeoutSeconds = 0;
   highlightTimer;
   /** The node of answer `id`, for comments on an answer. */
   node(id) {
@@ -183,9 +186,10 @@ var Answers = class {
   }
   add(answer) {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
-    for (const [id, shown] of this.shown) {
+    for (const [id, shown2] of this.shown) {
       if (this.shown.size < MAX_ANSWERS) break;
-      shown.node.remove();
+      shown2.stopTimer();
+      shown2.node.remove();
       this.shown.delete(id);
     }
     const node = document.createElement("article");
@@ -237,6 +241,7 @@ var Answers = class {
       if (link) this.followElementLink(link, event);
     });
     close.addEventListener("click", () => {
+      this.shown.get(answer.id)?.stopTimer();
       this.dismissed.add(answer.id);
       for (const id of this.dismissed) {
         if (this.dismissed.size <= MAX_ANSWERS) break;
@@ -247,8 +252,80 @@ var Answers = class {
       node.remove();
       this.schedulePlacement();
     });
-    this.shown.set(answer.id, { node, unavailable, anchor });
+    const shown = { node, unavailable, anchor, stopTimer: () => void 0 };
+    this.shown.set(answer.id, shown);
+    this.startTimer(shown);
     this.schedulePlacement();
+  }
+  /** Uses the same dismissal path as the close buttons. */
+  clear() {
+    for (const { node } of this.shown.values()) {
+      node.querySelector(".agent-dismiss")?.click();
+    }
+  }
+  /** A changed duration gives every visible answer a fresh countdown. */
+  setTimeoutSeconds(seconds) {
+    if (seconds === this.timeoutSeconds) return;
+    this.timeoutSeconds = seconds;
+    for (const shown of this.shown.values()) this.startTimer(shown);
+  }
+  startTimer(shown) {
+    shown.stopTimer();
+    if (this.timeoutSeconds === 0) return;
+    const { node } = shown;
+    const bar = document.createElement("div");
+    bar.className = "agent-timeout";
+    bar.setAttribute("aria-hidden", "true");
+    bar.style.animationDuration = `${this.timeoutSeconds}s`;
+    bar.style.setProperty("--answer-timeout-steps", String(this.timeoutSeconds));
+    node.append(bar);
+    let stopped = false;
+    let remaining = this.timeoutSeconds * 1e3;
+    let started;
+    let timer;
+    let hovering = node.matches(":hover");
+    const update = () => {
+      if (stopped) return;
+      const paused = hovering || node.contains(this.ui.shadow.activeElement);
+      if (paused && started !== void 0) {
+        remaining = Math.max(0, remaining - (performance.now() - started));
+        started = void 0;
+        clearTimeout(timer);
+        timer = void 0;
+      } else if (!paused && started === void 0) {
+        started = performance.now();
+        timer = window.setTimeout(() => {
+          node.querySelector(".agent-dismiss")?.click();
+        }, remaining);
+      }
+      bar.style.animationPlayState = paused ? "paused" : "running";
+    };
+    const enter = () => {
+      hovering = true;
+      update();
+    };
+    const leave = () => {
+      hovering = false;
+      update();
+    };
+    const focus = () => {
+      queueMicrotask(update);
+    };
+    node.addEventListener("mouseenter", enter);
+    node.addEventListener("mouseleave", leave);
+    node.addEventListener("focusin", focus);
+    node.addEventListener("focusout", focus);
+    shown.stopTimer = () => {
+      stopped = true;
+      clearTimeout(timer);
+      node.removeEventListener("mouseenter", enter);
+      node.removeEventListener("mouseleave", leave);
+      node.removeEventListener("focusin", focus);
+      node.removeEventListener("focusout", focus);
+      bar.remove();
+      shown.stopTimer = () => void 0;
+    };
+    update();
   }
   persistDismissed() {
     try {
@@ -426,7 +503,8 @@ function isCorner(value) {
 }
 var ACTION_NAMES = {
   commentMode: "comment mode",
-  showCursor: "show my cursor"
+  showCursor: "show my cursor",
+  clearAnswers: "clear answers"
 };
 function normalizeKey(key) {
   return key.length === 1 ? key.toLowerCase() : key;
@@ -454,6 +532,14 @@ var Panel = class {
   constructor(ui, changeSettings) {
     this.ui = ui;
     this.changeSettings = changeSettings;
+    ui.clearAnswers.addEventListener("click", () => {
+      this.onClearAnswers();
+    });
+    ui.answerTimeout.addEventListener("change", () => {
+      if (ui.answerTimeout.reportValidity()) {
+        void this.change({ answerTimeout: ui.answerTimeout.valueAsNumber });
+      }
+    });
     ui.gear.addEventListener("click", () => {
       this.toggle();
     });
@@ -497,12 +583,14 @@ var Panel = class {
   changeSettings;
   settings = null;
   listening = null;
+  /** Called by the clear button or its binding. */
+  onClearAnswers = () => void 0;
   /** Called when the panel opens (the comment list closes then). */
   onOpen = () => void 0;
   /** Called with the settings whenever they change. */
   onSettings = () => void 0;
   chips() {
-    return [["commentMode", this.ui.commentModeKey], ["showCursor", this.ui.showCursorKey]];
+    return [["commentMode", this.ui.commentModeKey], ["showCursor", this.ui.showCursorKey], ["clearAnswers", this.ui.clearAnswersKey]];
   }
   get isOpen() {
     return !this.ui.panel.hidden;
@@ -533,6 +621,7 @@ var Panel = class {
     this.settings = settings;
     const { ui } = this;
     ui.commentMode.setAttribute("aria-checked", String(settings.commentMode === "on"));
+    ui.answerTimeout.value = String(settings.answerTimeout);
     ui.showCursor.setAttribute("aria-checked", String(settings.showCursor === "on"));
     for (const [action, chip] of this.chips()) {
       if (this.listening !== action) chip.textContent = keyLabel(settings.keys[action]);
@@ -568,7 +657,8 @@ var Panel = class {
   listen(action) {
     this.stopListening();
     this.listening = action;
-    const chip = action === "commentMode" ? this.ui.commentModeKey : this.ui.showCursorKey;
+    const chip = this.chips().find(([name]) => name === action)?.[1];
+    if (chip === void 0) return;
     chip.dataset.listening = "true";
     chip.textContent = "press a key…";
     this.message("");
@@ -591,7 +681,9 @@ var Panel = class {
     }
     if (MODIFIER_KEYS.includes(event.key)) return;
     const key = normalizeKey(event.key);
-    const other = action === "commentMode" ? "showCursor" : "commentMode";
+    const other = this.chips().map(([name]) => name).find(
+      (name) => name !== action && normalizeKey(settings.keys[name]) === key
+    );
     if (RESERVED_KEYS.includes(key)) {
       this.stopListening();
       this.message(`${keyLabel(key)} is used by jampot`);
@@ -602,7 +694,7 @@ var Panel = class {
       this.message(`${key === " " ? "Space" : key} is the page's`);
       return;
     }
-    if (normalizeKey(settings.keys[other]) === key) {
+    if (other !== void 0) {
       this.stopListening();
       this.message(`${keyLabel(key)} is taken by ${ACTION_NAMES[other]}`);
       return;
@@ -619,11 +711,14 @@ var Panel = class {
     const settings = this.settings;
     if (settings === null || event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || isEditing(event)) return;
     const key = normalizeKey(event.key);
-    for (const action of ["commentMode", "showCursor"]) {
+    for (const action of ["commentMode", "showCursor", "clearAnswers"]) {
       if (normalizeKey(settings.keys[action]) === key) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        if (!event.repeat) this.flip(action);
+        if (!event.repeat) {
+          if (action === "clearAnswers") this.onClearAnswers();
+          else this.flip(action);
+        }
         return;
       }
     }
@@ -1726,13 +1821,18 @@ function isCorner2(value) {
 function parse2(value) {
   if (!isRecord(value)) return {};
   const change = {};
-  const { name, keys, commentMode, showCursor, corner } = value;
+  const { name, keys, commentMode, showCursor, corner, answerTimeout } = value;
   if (typeof name === "string") change.name = name;
-  if (isRecord(keys) && typeof keys.commentMode === "string" && typeof keys.showCursor === "string") {
-    change.keys = { commentMode: keys.commentMode, showCursor: keys.showCursor };
+  if (isRecord(keys) && typeof keys.commentMode === "string" && typeof keys.showCursor === "string" && typeof keys.clearAnswers === "string") {
+    change.keys = {
+      commentMode: keys.commentMode,
+      showCursor: keys.showCursor,
+      clearAnswers: keys.clearAnswers
+    };
   }
   if (isSwitch(commentMode)) change.commentMode = commentMode;
   if (isSwitch(showCursor)) change.showCursor = showCursor;
+  if (typeof answerTimeout === "number" && Number.isInteger(answerTimeout) && answerTimeout >= 0 && answerTimeout <= MAX_ANSWER_TIMEOUT) change.answerTimeout = answerTimeout;
   if (isCorner2(corner)) change.corner = corner;
   return change;
 }
@@ -1763,7 +1863,7 @@ function missing(change, settings) {
     needed.name = change.name;
     any = true;
   }
-  if (change.keys !== void 0 && (change.keys.commentMode !== settings.keys.commentMode || change.keys.showCursor !== settings.keys.showCursor)) {
+  if (change.keys !== void 0 && (change.keys.commentMode !== settings.keys.commentMode || change.keys.showCursor !== settings.keys.showCursor || change.keys.clearAnswers !== settings.keys.clearAnswers)) {
     needed.keys = change.keys;
     any = true;
   }
@@ -1773,6 +1873,10 @@ function missing(change, settings) {
   }
   if (change.showCursor !== void 0 && change.showCursor !== settings.showCursor) {
     needed.showCursor = change.showCursor;
+    any = true;
+  }
+  if (change.answerTimeout !== void 0 && change.answerTimeout !== settings.answerTimeout) {
+    needed.answerTimeout = change.answerTimeout;
     any = true;
   }
   if (change.corner !== void 0 && change.corner !== settings.corner) {
@@ -2570,6 +2674,15 @@ var styles = `
 
   button[type="submit"] { background: #161616; color: #fff; }
   button:disabled { cursor: wait; opacity: 0.55; }
+
+  .agent-timeout { position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
+    background: #7b3221; transform-origin: left; pointer-events: none;
+    animation: answer-countdown linear forwards; }
+  @keyframes answer-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .agent-timeout { animation-timing-function: steps(var(--answer-timeout-steps), end); }
+  }
+  #answer-timeout { width: 60px; min-width: 0; }
 `;
 
 // client/src/ui.ts
@@ -2610,6 +2723,15 @@ var MARKUP = `
       <span class="label" id="show-cursor-label">Show my cursor</span>
       <button class="chip" id="show-cursor-key" type="button" aria-label="Key for show my cursor">X</button>
       <button class="switch" id="show-cursor" type="button" role="switch" aria-checked="false" aria-labelledby="show-cursor-label"></button>
+    </div>
+    <div class="control">
+      <span class="label">Clear answers</span>
+      <button class="chip" id="clear-answers-key" type="button" aria-label="Key for clear answers">${DEFAULT_CLEAR_ANSWERS_KEY.toUpperCase()}</button>
+      <button id="clear-answers" type="button">Clear</button>
+    </div>
+    <div class="control">
+      <label class="label" for="answer-timeout">Answer timeout (s; 0 = off)</label>
+      <input id="answer-timeout" type="number" required min="0" max="${MAX_ANSWER_TIMEOUT}" step="1" value="0">
     </div>
     <div class="control" id="corner-row">
       <span class="label" id="corner-label">Corner</span>
@@ -2694,6 +2816,9 @@ var Ui = class _Ui {
   panel;
   commentModeKey;
   commentMode;
+  clearAnswersKey;
+  clearAnswers;
+  answerTimeout;
   showCursorKey;
   showCursor;
   nameField;
@@ -2760,6 +2885,9 @@ var Ui = class _Ui {
     this.panel = find("#panel", HTMLElement);
     this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
     this.commentMode = find("#comment-mode", HTMLButtonElement);
+    this.clearAnswersKey = find("#clear-answers-key", HTMLButtonElement);
+    this.clearAnswers = find("#clear-answers", HTMLButtonElement);
+    this.answerTimeout = find("#answer-timeout", HTMLInputElement);
     this.showCursorKey = find("#show-cursor-key", HTMLButtonElement);
     this.showCursor = find("#show-cursor", HTMLButtonElement);
     this.nameField = find("#name-field", HTMLInputElement);
@@ -2835,6 +2963,9 @@ function install() {
   const dialog = new CommentDialog(ui, outbox, () => pending);
   const list = new CommentList(ui, outbox);
   const panel = new Panel(ui, changeSettings);
+  panel.onClearAnswers = () => {
+    answers.clear();
+  };
   const sender = new CursorSender(
     ui,
     (position) => socket.send({ type: "cursor", position })
@@ -2860,6 +2991,7 @@ function install() {
   };
   const prompt = new NamePrompt(ui, changeSettings);
   panel.onSettings = (settings) => {
+    answers.setTimeoutSeconds(settings.answerTimeout);
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
     editMode.refresh();

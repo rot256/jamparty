@@ -173,6 +173,11 @@ def test_the_name_prompt_and_settings_kept_for_the_share(
                 )
                 expect(overlay(page, ".avatar")).to_have_text("DB")
                 # Keys and switches are kept too.
+                overlay(page, "#answer-timeout").fill("17")
+                overlay(page, "#answer-timeout").press("Tab")
+                overlay(page, "#clear-answers-key").click()
+                page.keyboard.press("q")
+                expect(overlay(page, "#clear-answers-key")).to_have_text("Q")
                 overlay(page, "#show-cursor").click()
                 expect(overlay(page, "#show-cursor")).to_have_attribute(
                     "aria-checked", "true"
@@ -191,6 +196,8 @@ def test_the_name_prompt_and_settings_kept_for_the_share(
                 _ = page.goto(joined.url)
                 overlay(page, "#gear").click()
                 expect(overlay(page, "#name-field")).to_have_value("dora.b")
+                expect(overlay(page, "#answer-timeout")).to_have_value("17")
+                expect(overlay(page, "#clear-answers-key")).to_have_text("Q")
                 expect(overlay(page, "#show-cursor")).to_have_attribute(
                     "aria-checked", "true"
                 )

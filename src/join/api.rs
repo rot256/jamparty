@@ -168,8 +168,9 @@ mod bindings {
             ids::{CommentId, EndpointKey, Fingerprint},
             name::{JoinerName, MAX_NAME},
             settings::{
-                Corner, KeyBinding, Keys, KeysFields, MODIFIER_KEYS, PAGE_KEYS, RESERVED_KEYS,
-                SettingsChange, Switch,
+                AnswerTimeout, Corner, DEFAULT_CLEAR_ANSWERS_KEY, KeyBinding, Keys, KeysFields,
+                MAX_ANSWER_TIMEOUT, MODIFIER_KEYS, PAGE_KEYS, RESERVED_KEYS, SettingsChange,
+                Switch,
             },
         },
         join::{
@@ -205,6 +206,7 @@ mod bindings {
             JoinerName::decl(&cfg),
             StatusLine::decl(&cfg),
             RefusedReason::decl(&cfg),
+            AnswerTimeout::decl(&cfg),
             Switch::decl(&cfg),
             Corner::decl(&cfg),
             KeyBinding::decl(&cfg),
@@ -237,6 +239,7 @@ mod bindings {
         // The limits the share enforces, for the client to stay within.
         let limits = [
             ("MAX_NAME", MAX_NAME),
+            ("MAX_ANSWER_TIMEOUT", usize::from(MAX_ANSWER_TIMEOUT)),
             ("MAX_COMMENT", MAX_COMMENT),
             ("MAX_SELECTED_TEXT", MAX_SELECTED_TEXT),
             ("MAX_PAGE_PATH", MAX_PAGE_PATH),
@@ -249,6 +252,10 @@ mod bindings {
         for (name, value) in limits {
             out.push_str(&format!("export const {name} = {value};\n"));
         }
+        out.push_str(&format!(
+            "export const DEFAULT_CLEAR_ANSWERS_KEY = {};\n",
+            serde_json::to_string(DEFAULT_CLEAR_ANSWERS_KEY).unwrap()
+        ));
         // The keys a binding may not be, as the joiner checks them.
         let keys: [(&str, &[&str]); 3] = [
             ("RESERVED_KEYS", &RESERVED_KEYS),

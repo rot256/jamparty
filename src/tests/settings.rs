@@ -27,6 +27,7 @@ async fn joiner(share: &Share, name: Option<&str>, settings: &Path) -> Joiner {
         name: name.map(|name| name.parse().unwrap()),
         default_name: "carol@box".parse().unwrap(),
         settings: settings.to_owned(),
+        overrides: Default::default(),
         key: generate_key(&SystemRng),
         net: net(),
         share_addrs: share.direct_addrs(),
@@ -78,6 +79,7 @@ async fn a_pages_changes_hold_for_this_join_and_never_reach_the_file() {
     assert_eq!(settings["askName"], true, "{settings}");
     assert_eq!(settings["commentMode"], "on", "{settings}");
     assert_eq!(settings["showCursor"], "off", "{settings}");
+    assert_eq!(settings["answerTimeout"], 0, "{settings}");
 
     let (mut page, _) = PageSocket::hello(&first).await;
     let (mut other, _) = PageSocket::hello(&first).await;
@@ -118,7 +120,7 @@ async fn a_pages_changes_hold_for_this_join_and_never_reach_the_file() {
     assert_eq!(settings["askName"], false, "{settings}");
     assert_eq!(
         settings["keys"],
-        json!({"commentMode": "k", "showCursor": "F2"}),
+        json!({"commentMode": "k", "showCursor": "F2", "clearAnswers": "d"}),
         "{settings}"
     );
     assert_eq!(settings["commentMode"], "off", "{settings}");
@@ -199,6 +201,10 @@ async fn key_bindings_the_overlay_refuses_are_refused() {
     // As are other invalid changes.
     for bad in [
         r#"{"keys":{"commentMode":"k","showCursor":"K"}}"#,
+        r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"C"}}"#,
+        r#"{"answerTimeout":3601}"#,
+        r#"{"answerTimeout":-1}"#,
+        r#"{"answerTimeout":1.5}"#,
         r#"{"name":"a b"}"#,
         r#"{"admin":true}"#,
     ] {
@@ -207,7 +213,10 @@ async fn key_bindings_the_overlay_refuses_are_refused() {
     }
     assert_eq!(settings_of(&joiner).await, before);
     let keys = page
-        .settings(r#"{"keys":{"commentMode":"k","showCursor":"F2"}}"#)
+        .settings(r#"{"keys":{"commentMode":"k","showCursor":"F2","clearAnswers":"q"},"answerTimeout":10}"#)
         .await;
     assert!(saved(&keys), "{keys}");
+    let changed = settings_of(&joiner).await;
+    assert_eq!(changed["answerTimeout"], 10);
+    assert_eq!(changed["keys"]["clearAnswers"], "q");
 }

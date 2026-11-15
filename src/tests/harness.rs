@@ -174,6 +174,7 @@ fn join_config(
         name: Some(name.parse().unwrap()),
         default_name: "joiner".parse().unwrap(),
         settings: settings_path(),
+        overrides: Default::default(),
         key,
         net: net(),
         share_addrs: addrs,

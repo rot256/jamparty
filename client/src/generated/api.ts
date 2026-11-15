@@ -2,6 +2,7 @@
 // Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings
 
 export const MAX_NAME = 40;
+export const MAX_ANSWER_TIMEOUT = 3600;
 export const MAX_COMMENT = 10000;
 export const MAX_SELECTED_TEXT = 2000;
 export const MAX_PAGE_PATH = 512;
@@ -9,6 +10,7 @@ export const MAX_CURSOR_SELECTOR = 512;
 export const FRACTION_ONE = 10000;
 export const MAX_ANSWERS = 100;
 export const MAX_JOINERS = 64;
+export const DEFAULT_CLEAR_ANSWERS_KEY = "d";
 export const RESERVED_KEYS: readonly string[] = ["/", "Escape"];
 export const MODIFIER_KEYS: readonly string[] = ["Alt", "AltGraph", "CapsLock", "Control", "Fn", "FnLock", "Hyper", "Meta", "NumLock", "ScrollLock", "Shift", "Super", "Symbol"];
 export const PAGE_KEYS: readonly string[] = ["Enter", "Tab", " "];
@@ -33,15 +35,17 @@ export type StatusLine = string;
 
 export type RefusedReason = "wrong_secret" | "bad_hello" | "full" | "incompatible";
 
+export type AnswerTimeout = number;
+
 export type Switch = "on" | "off";
 
 export type Corner = "bottom-right" | "bottom-left" | "top-right" | "top-left";
 
 export type KeyBinding = string;
 
-export type KeysFields = { commentMode: KeyBinding, showCursor: KeyBinding, };
+export type KeysFields = { commentMode: KeyBinding, showCursor: KeyBinding, clearAnswers: KeyBinding, };
 
-export type Keys = { commentMode: KeyBinding, showCursor: KeyBinding, };
+export type Keys = { commentMode: KeyBinding, showCursor: KeyBinding, clearAnswers: KeyBinding, };
 
 export type Author = { name: JoinerName, fingerprint: Fingerprint, key: EndpointKey, };
 
@@ -70,9 +74,9 @@ name: JoinerName,
  * No name was chosen yet (none in the settings file or the page, no
  * `--name`): the page asks.
  */
-askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: Corner, };
+askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: Corner, answerTimeout: AnswerTimeout, };
 
-export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Switch, showCursor?: Switch, corner?: Corner, };
+export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Switch, showCursor?: Switch, corner?: Corner, answerTimeout?: AnswerTimeout, };
 
 export type Answer = { id: CommentId, html: string, 
 /**

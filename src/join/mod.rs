@@ -51,6 +51,7 @@ use crate::{
         name::JoinerName,
         port::Port,
         request::LocalOrigin,
+        settings::SettingsOverride,
         token::PartyToken,
         version::{Incompatible, JampotVersion, mismatch_note},
     },
@@ -73,6 +74,7 @@ pub(crate) struct JoinConfig {
     /// The settings file (`adapters::settings`): read at start for the
     /// defaults, never written.
     pub(crate) settings: PathBuf,
+    pub(crate) overrides: SettingsOverride,
     /// The joiner's iroh key for this run: `jampot join` makes a fresh one
     /// each time and never stores it; reconnects keep it.
     pub(crate) key: SecretKey,
@@ -336,6 +338,7 @@ impl Joiner {
             name,
             default_name,
             settings: path,
+            overrides,
             key,
             net,
             share_addrs,
@@ -345,7 +348,7 @@ impl Joiner {
             proxy,
         } = config;
         let preferences = Preferences {
-            settings: settings::load(&path)?,
+            settings: overrides.apply(settings::load(&path)?)?,
             given: name,
             default: default_name,
         };

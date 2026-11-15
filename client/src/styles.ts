@@ -623,4 +623,13 @@ export const styles = `
 
   button[type="submit"] { background: #161616; color: #fff; }
   button:disabled { cursor: wait; opacity: 0.55; }
+
+  .agent-timeout { position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
+    background: #7b3221; transform-origin: left; pointer-events: none;
+    animation: answer-countdown linear forwards; }
+  @keyframes answer-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .agent-timeout { animation-timing-function: steps(var(--answer-timeout-steps), end); }
+  }
+  #answer-timeout { width: 60px; min-width: 0; }
 `;

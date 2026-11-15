@@ -413,6 +413,7 @@ pub(crate) mod tests {
             comment_mode,
             show_cursor: _,
             corner,
+            answer_timeout,
         } = Settings::default();
         Session::new(Preferences {
             settings: Settings {
@@ -421,6 +422,7 @@ pub(crate) mod tests {
                 comment_mode,
                 show_cursor: Switch::On,
                 corner,
+                answer_timeout,
             },
             given: None,
             default: "alice".parse().unwrap(),

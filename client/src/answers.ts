@@ -15,6 +15,7 @@ interface Shown {
   unavailable: HTMLElement;
   /** The selector it belongs next to; null when it is not anchored here. */
   anchor: string | null;
+  stopTimer: () => void;
 }
 
 interface Box {
@@ -43,6 +44,7 @@ export class Answers {
   private readonly shown = new Map<string, Shown>();
   private readonly dismissed = loadDismissed();
   private placementFrame: number | undefined;
+  private timeoutSeconds = 0;
   private highlightTimer: number | undefined;
 
   constructor(private readonly ui: Ui) {
@@ -91,6 +93,7 @@ export class Answers {
     // The oldest go first (a Map keeps the order answers came in).
     for (const [id, shown] of this.shown) {
       if (this.shown.size < MAX_ANSWERS) break;
+      shown.stopTimer();
       shown.node.remove();
       this.shown.delete(id);
     }
@@ -148,6 +151,7 @@ export class Answers {
       if (link) this.followElementLink(link, event);
     });
     close.addEventListener("click", () => {
+      this.shown.get(answer.id)?.stopTimer();
       this.dismissed.add(answer.id);
       for (const id of this.dismissed) {
         if (this.dismissed.size <= MAX_ANSWERS) break;
@@ -158,8 +162,76 @@ export class Answers {
       node.remove();
       this.schedulePlacement();
     });
-    this.shown.set(answer.id, { node, unavailable, anchor });
+    const shown: Shown = { node, unavailable, anchor, stopTimer: () => undefined };
+    this.shown.set(answer.id, shown);
+    this.startTimer(shown);
     this.schedulePlacement();
+  }
+
+  /** Uses the same dismissal path as the close buttons. */
+  clear(): void {
+    for (const { node } of this.shown.values()) {
+      node.querySelector<HTMLButtonElement>(".agent-dismiss")?.click();
+    }
+  }
+
+  /** A changed duration gives every visible answer a fresh countdown. */
+  setTimeoutSeconds(seconds: number): void {
+    if (seconds === this.timeoutSeconds) return;
+    this.timeoutSeconds = seconds;
+    for (const shown of this.shown.values()) this.startTimer(shown);
+  }
+
+  private startTimer(shown: Shown): void {
+    shown.stopTimer();
+    if (this.timeoutSeconds === 0) return;
+    const { node } = shown;
+    const bar = document.createElement("div");
+    bar.className = "agent-timeout";
+    bar.setAttribute("aria-hidden", "true");
+    bar.style.animationDuration = `${this.timeoutSeconds}s`;
+    bar.style.setProperty("--answer-timeout-steps", String(this.timeoutSeconds));
+    node.append(bar);
+    let stopped = false;
+    let remaining = this.timeoutSeconds * 1000;
+    let started: number | undefined;
+    let timer: number | undefined;
+    let hovering = node.matches(":hover");
+    const update = (): void => {
+      if (stopped) return;
+      const paused = hovering || node.contains(this.ui.shadow.activeElement);
+      if (paused && started !== undefined) {
+        remaining = Math.max(0, remaining - (performance.now() - started));
+        started = undefined;
+        clearTimeout(timer);
+        timer = undefined;
+      } else if (!paused && started === undefined) {
+        started = performance.now();
+        timer = window.setTimeout(() => {
+          node.querySelector<HTMLButtonElement>(".agent-dismiss")?.click();
+        }, remaining);
+      }
+      bar.style.animationPlayState = paused ? "paused" : "running";
+    };
+    const enter = (): void => { hovering = true; update(); };
+    const leave = (): void => { hovering = false; update(); };
+    // focusout fires before the new activeElement is installed.
+    const focus = (): void => { queueMicrotask(update); };
+    node.addEventListener("mouseenter", enter);
+    node.addEventListener("mouseleave", leave);
+    node.addEventListener("focusin", focus);
+    node.addEventListener("focusout", focus);
+    shown.stopTimer = () => {
+      stopped = true;
+      clearTimeout(timer);
+      node.removeEventListener("mouseenter", enter);
+      node.removeEventListener("mouseleave", leave);
+      node.removeEventListener("focusin", focus);
+      node.removeEventListener("focusout", focus);
+      bar.remove();
+      shown.stopTimer = () => undefined;
+    };
+    update();
   }
 
   private persistDismissed(): void {

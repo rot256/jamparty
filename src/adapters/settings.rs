@@ -89,13 +89,14 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
-            r#"{"name":"alice","keys":{"commentMode":"k","showCursor":"F2"},"showCursor":"on"}"#,
+            r#"{"name":"alice","keys":{"commentMode":"k","showCursor":"F2"},"showCursor":"on","answerTimeout":3600}"#,
         )
         .unwrap();
         fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
         let read = load(&path).unwrap();
         assert_eq!(read.name.map(String::from).as_deref(), Some("alice"));
         assert_eq!(read.show_cursor, Switch::On);
+        assert_eq!(u16::from(read.answer_timeout), 3600);
 
         fs::set_permissions(&path, Permissions::from_mode(0o644)).unwrap();
         let error = format!("{:?}", load(&path).unwrap_err());
@@ -103,6 +104,13 @@ mod tests {
         fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
         fs::write(&path, "nonsense").unwrap();
         assert!(load(&path).is_err());
+        for text in [
+            r#"{"answerTimeout":3601}"#,
+            r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"X"}}"#,
+        ] {
+            fs::write(&path, text).unwrap();
+            assert!(load(&path).is_err());
+        }
         // A key binding no page could choose is refused here too.
         fs::write(
             &path,

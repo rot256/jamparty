@@ -29,6 +29,10 @@ pub(crate) enum Corner {
 }
 
 const MAX_KEY: usize = 20;
+/// Largest supported answer timeout, in seconds.
+pub(crate) const MAX_ANSWER_TIMEOUT: u16 = 3600;
+/// Default key for dismissing all answers.
+pub(crate) const DEFAULT_CLEAR_ANSWERS_KEY: &str = "d";
 /// Keys jampot uses itself: `/` opens a page comment, Escape cancels.
 pub(crate) const RESERVED_KEYS: [&str; 2] = ["/", "Escape"];
 /// Keys pressed only with others: the overlay's rebinding waits past them.
@@ -88,6 +92,55 @@ impl From<KeyBinding> for String {
     }
 }
 
+/// Seconds before an answer is dismissed: zero disables the timeout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u16", into = "u16")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
+pub(crate) struct AnswerTimeout(u16);
+
+impl TryFrom<u16> for AnswerTimeout {
+    type Error = Invalid;
+
+    fn try_from(seconds: u16) -> Result<Self, Self::Error> {
+        if seconds > MAX_ANSWER_TIMEOUT {
+            return Err(out_of_range());
+        }
+        Ok(Self(seconds))
+    }
+}
+
+fn out_of_range() -> Invalid {
+    Invalid::new(format!(
+        "answer timeout must be 0 (off) or 1–{MAX_ANSWER_TIMEOUT} seconds"
+    ))
+}
+
+impl From<AnswerTimeout> for u16 {
+    fn from(timeout: AnswerTimeout) -> Self {
+        timeout.0
+    }
+}
+
+impl std::str::FromStr for AnswerTimeout {
+    type Err = Invalid;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        raw.parse::<u16>().map_err(|_| out_of_range())?.try_into()
+    }
+}
+
+impl std::str::FromStr for KeyBinding {
+    type Err = Invalid;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        raw.to_owned().try_into()
+    }
+}
+
+fn clear_answers_default() -> KeyBinding {
+    KeyBinding(DEFAULT_CLEAR_ANSWERS_KEY.to_owned())
+}
+
 /// The fields of [`Keys`]; only reachable through a validated one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -95,9 +148,11 @@ impl From<KeyBinding> for String {
 pub(crate) struct KeysFields {
     pub(crate) comment_mode: KeyBinding,
     pub(crate) show_cursor: KeyBinding,
+    #[serde(default = "clear_answers_default")]
+    pub(crate) clear_answers: KeyBinding,
 }
 
-/// The keys that flip the switches; no two the same.
+/// The keys for overlay actions; no two the same.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "KeysFields", into = "KeysFields")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(as = "KeysFields"))]
@@ -107,11 +162,15 @@ impl TryFrom<KeysFields> for Keys {
     type Error = Invalid;
 
     fn try_from(fields: KeysFields) -> Result<Self, Self::Error> {
-        if fields.comment_mode.same_key(&fields.show_cursor) {
-            return Err(Invalid::new(format!(
-                "{} is bound twice",
-                fields.comment_mode.0
-            )));
+        let keys = [
+            &fields.comment_mode,
+            &fields.show_cursor,
+            &fields.clear_answers,
+        ];
+        for (index, key) in keys.iter().enumerate() {
+            if keys.iter().skip(index + 1).any(|other| key.same_key(other)) {
+                return Err(Invalid::new(format!("{} is bound twice", key.0)));
+            }
         }
         Ok(Self(fields))
     }
@@ -128,6 +187,7 @@ impl Default for Keys {
         Self(KeysFields {
             comment_mode: KeyBinding("c".to_owned()),
             show_cursor: KeyBinding("x".to_owned()),
+            clear_answers: clear_answers_default(),
         })
     }
 }
@@ -147,6 +207,8 @@ pub(crate) struct Settings {
     pub(crate) show_cursor: Switch,
     #[serde(default)]
     pub(crate) corner: Corner,
+    #[serde(default)]
+    pub(crate) answer_timeout: AnswerTimeout,
 }
 
 /// Comment mode starts on (docs/ui.md, open question: kept on).
@@ -167,7 +229,43 @@ impl Default for Settings {
             comment_mode: comment_mode_default(),
             show_cursor: show_cursor_default(),
             corner: Corner::default(),
+            answer_timeout: AnswerTimeout::default(),
         }
+    }
+}
+
+/// Overrides supplied for this join, independent of the CLI parser.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SettingsOverride {
+    pub(crate) answer_timeout: Option<AnswerTimeout>,
+    pub(crate) clear_answers_key: Option<KeyBinding>,
+    pub(crate) comment_mode_key: Option<KeyBinding>,
+    pub(crate) show_cursor_key: Option<KeyBinding>,
+}
+
+impl SettingsOverride {
+    pub(crate) fn apply(self, mut settings: Settings) -> Result<Settings, Invalid> {
+        let Self {
+            answer_timeout,
+            clear_answers_key,
+            comment_mode_key,
+            show_cursor_key,
+        } = self;
+        let mut keys = KeysFields::from(settings.keys);
+        if let Some(key) = clear_answers_key {
+            keys.clear_answers = key;
+        }
+        if let Some(key) = comment_mode_key {
+            keys.comment_mode = key;
+        }
+        if let Some(key) = show_cursor_key {
+            keys.show_cursor = key;
+        }
+        settings.keys = keys.try_into()?;
+        if let Some(timeout) = answer_timeout {
+            settings.answer_timeout = timeout;
+        }
+        Ok(settings)
     }
 }
 
@@ -191,6 +289,9 @@ pub(crate) struct SettingsChange {
     #[serde(default)]
     #[cfg_attr(test, ts(optional))]
     pub(crate) corner: Option<Corner>,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) answer_timeout: Option<AnswerTimeout>,
 }
 
 impl Settings {
@@ -203,6 +304,7 @@ impl Settings {
             comment_mode,
             show_cursor,
             corner,
+            answer_timeout,
         } = change;
         Self {
             name: name.or_else(|| self.name.clone()),
@@ -210,6 +312,7 @@ impl Settings {
             comment_mode: comment_mode.unwrap_or(self.comment_mode),
             show_cursor: show_cursor.unwrap_or(self.show_cursor),
             corner: corner.unwrap_or(self.corner),
+            answer_timeout: answer_timeout.unwrap_or(self.answer_timeout),
         }
     }
 }
@@ -227,7 +330,7 @@ mod tests {
         assert_eq!(defaults.corner, Corner::BottomRight);
         assert_eq!(
             serde_json::to_string(&defaults).unwrap(),
-            r#"{"keys":{"commentMode":"c","showCursor":"x"},"commentMode":"on","showCursor":"off","corner":"bottom-right"}"#
+            r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"d"},"commentMode":"on","showCursor":"off","corner":"bottom-right","answerTimeout":0}"#
         );
         // Each corner, and only those.
         for (text, corner) in [
@@ -274,6 +377,51 @@ mod tests {
             (&"a".repeat(21), "x"),
         ] {
             assert!(keys(comment, cursor).is_err(), "{comment:?} {cursor:?}");
+        }
+    }
+
+    #[test]
+    fn timeout_bounds_defaults_and_changes() {
+        assert_eq!(u16::from(Settings::default().answer_timeout), 0);
+        for seconds in [0, 1, 3600] {
+            let text = format!(r#"{{"answerTimeout":{seconds}}}"#);
+            let settings: Settings = serde_json::from_str(&text).unwrap();
+            let change: SettingsChange = serde_json::from_str(&text).unwrap();
+            assert_eq!(u16::from(settings.answer_timeout), seconds);
+            assert_eq!(Settings::default().with(change), settings);
+        }
+        for raw in ["-1", "3601", "65536", "1.5", "true", r#""10""#] {
+            let text = format!(r#"{{"answerTimeout":{raw}}}"#);
+            assert!(serde_json::from_str::<Settings>(&text).is_err(), "{text}");
+            assert!(
+                serde_json::from_str::<SettingsChange>(&text).is_err(),
+                "{text}"
+            );
+        }
+        let on = Settings::default().with(serde_json::from_str(r#"{"answerTimeout":10}"#).unwrap());
+        assert_eq!(
+            u16::from(
+                on.with(serde_json::from_str(r#"{"answerTimeout":0}"#).unwrap())
+                    .answer_timeout
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn clear_answers_defaults_and_conflicts() {
+        for (comment, cursor, clear, valid) in [
+            ("c", "x", "d", true),
+            ("k", "F2", "q", true),
+            ("d", "x", "D", false),
+            ("c", "D", "d", false),
+            ("c", "x", "Enter", false),
+            ("c", "x", "/", false),
+        ] {
+            let text = format!(
+                r#"{{"commentMode":{comment:?},"showCursor":{cursor:?},"clearAnswers":{clear:?}}}"#
+            );
+            assert_eq!(serde_json::from_str::<Keys>(&text).is_ok(), valid, "{text}");
         }
     }
 

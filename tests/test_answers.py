@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -167,3 +168,135 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
 
 
 # The overlay (docs/ui.md), one joiner at a time.
+
+
+def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None:
+    from support import settings_path
+
+    path = settings_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"answerTimeout":3600}')
+    path.chmod(0o600)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        page.clock.install()
+        _ = jampot(tmp_path, "send", "Timed answer with [focus](https://example.org).")
+        answer = overlay(page, ".agent-message")
+        expect(answer).to_be_visible()
+        overlay(page, "#gear").click()
+        # Freeze after layout, then start a fresh ten-second countdown.
+        # Every assertion uses paused time, independent of startup speed.
+        page.clock.pause_at(
+            datetime.fromtimestamp(
+                cast(int, page.evaluate("Date.now() + 10_000")) / 1000, UTC
+            )
+        )
+        field = overlay(page, "#answer-timeout")
+        field.fill("10")
+        field.press("Tab")
+        expect(answer.locator(".agent-timeout")).to_have_css(
+            "animation-duration", "10s"
+        )
+        overlay(page, "#gear").dispatch_event("click")
+        page.clock.run_for(3000)
+        answer.hover(force=True)
+        expect(answer.locator(".agent-timeout")).to_have_css(
+            "animation-play-state", "paused"
+        )
+        page.clock.run_for(20_000)
+        expect(answer).to_be_visible()
+        link = answer.locator("a")
+        link.focus()
+        page.mouse.move(0, 0)
+        page.clock.run_for(20_000)
+        expect(answer).to_be_visible()
+        _ = link.evaluate("node => node.blur()")
+        expect(answer.locator(".agent-timeout")).to_have_css(
+            "animation-play-state", "running"
+        )
+        page.clock.run_for(6000)
+        expect(answer).to_be_visible()
+        page.clock.run_for(1001)
+        expect(answer).to_have_count(0)
+        page.clock.resume()
+        _ = page.reload()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(answer).to_have_count(0)
+        assert path.read_text() == '{"answerTimeout":3600}'
+
+
+def test_clear_answers_key_and_rebinding(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jampot(tmp_path, "send", "First answer.")
+        _ = jampot(tmp_path, "send", "Second answer.")
+        answers = overlay(page, ".agent-message")
+        expect(answers).to_have_count(2)
+        expect(overlay(page, ".agent-timeout")).to_have_count(0)
+        _ = page.evaluate(
+            "() => { const field = document.createElement('input'); field.id = 'typing'; document.body.append(field); }"
+        )
+        page.locator("#typing").fill("d")
+        page.locator("#typing").press("d")
+        expect(answers).to_have_count(2)
+        page.locator("#typing").blur()
+        page.keyboard.press("d")
+        expect(answers).to_have_count(0)
+        _ = jampot(tmp_path, "send", "Third answer.")
+        expect(answers).to_have_count(1)
+        overlay(page, "#gear").click()
+        chip = overlay(page, "#clear-answers-key")
+        chip.click()
+        page.keyboard.press("c")
+        expect(overlay(page, "#panel-message")).to_contain_text("taken by comment mode")
+        chip.click()
+        page.keyboard.press("q")
+        expect(chip).to_have_text("Q")
+        overlay(page, "#gear").click()
+        page.keyboard.press("d")
+        expect(answers).to_have_count(1)
+        page.keyboard.press("q")
+        expect(answers).to_have_count(0)
+        _ = page.reload()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(answers).to_have_count(0)
+
+
+def test_timeout_panel_can_enable_and_disable(tmp_path: Path, page: Page) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        page.emulate_media(reduced_motion="reduce")
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jampot(tmp_path, "send", "Kept answer.")
+        answer = overlay(page, ".agent-message")
+        expect(answer).to_be_visible()
+        overlay(page, "#gear").click()
+        field = overlay(page, "#answer-timeout")
+        expect(field).to_have_value("0")
+        page.clock.install()
+        field.fill("3600")
+        field.press("Tab")
+        bar = answer.locator(".agent-timeout")
+        expect(bar).to_be_visible()
+        expect(bar).to_have_css("animation-timing-function", "steps(3600)")
+        page.clock.pause_at(
+            datetime.fromtimestamp(
+                cast(int, page.evaluate("Date.now() + 10_000")) / 1000, UTC
+            )
+        )
+        field.fill("0")
+        field.press("Tab")
+        expect(bar).to_have_count(0)
+        page.clock.fast_forward(3_600_001)
+        expect(answer).to_be_visible()

@@ -83,6 +83,8 @@ text. Rows:
 |---|---|---|---|
 | Comment mode | switch | on (open question, see end) | `C` |
 | Show my cursor | switch | **off** | `X` |
+| Clear answers | action | dismiss every visible answer | `D` |
+| Answer timeout | seconds | **off** (`0`) | — |
 | Corner | four buttons ↖ ↗ ↙ ↘ | bottom right | |
 
 - Comment mode off: the page behaves normally: right-click shows the
@@ -102,6 +104,20 @@ text. Rows:
   to another action, one jampot uses (`/`, Escape), or one the page needs
   (Enter, Tab, Space) is refused with a short message instead of
   overwriting. The joiner refuses the same keys, whatever a page sends.
+- Answer timeout dismisses each answer after 1–3600 seconds of unpaused
+  time; `0` disables it. A thin bar on the bottom shows the time left;
+  hover or focus inside the answer pauses it. Reduced motion updates the
+  bar once per second without smooth motion. A changed timeout restarts
+  visible answers. Timeout and Clear answers
+  use the dismiss button's session dismissal behavior. Keys are ignored in
+  text fields.
+- Settings JSON uses `answerTimeout` (seconds) and `keys.clearAnswers`
+  (default `"d"`), alongside `keys.commentMode` and `keys.showCursor`.
+  `jampot join --answer-timeout N --clear-answers-key KEY` overrides the
+  settings file for a join; `--comment-mode-key` and `--show-cursor-key`
+  override the other bindings. All bindings must be distinct, ignoring case.
+  Page changes remain in the per-share cookie and never write the
+  settings file.
 - Bottom row: `N here` on the left, overlapping avatar circles with
   initials on the right (the joiner's own outlined, others filled in their
   colour); the full name on hover. No paths or locations.

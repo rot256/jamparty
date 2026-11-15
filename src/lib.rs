@@ -47,6 +47,7 @@ use crate::{
         name::JoinerName,
         port::Port,
         rng::SystemRng,
+        settings::{AnswerTimeout, KeyBinding, SettingsOverride},
         text::Untrusted,
         token::{PartyToken, TokenError},
     },
@@ -131,6 +132,8 @@ enum Command {
         /// The party token printed by `jampot serve` or `jampot proxy`, or
         /// `-` to read it from stdin (out of `ps` and shell history).
         token: TokenArg,
+        #[command(flatten)]
+        settings: JoinSettings,
         /// Display name shown next to your comments (default: user@host).
         #[arg(long)]
         name: Option<JoinerName>,
@@ -307,6 +310,7 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
         }
         Command::Join {
             token,
+            settings,
             name,
             no_open,
             share_addr,
@@ -314,7 +318,7 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
         } => {
             let token = token.resolve(io::stdin().lock())?;
             let open = if no_open { Open::No } else { Open::Browser };
-            join(token, name, open, share_addr, port).await
+            join(token, name, open, share_addr, port, settings).await
         }
         Command::Agent { kind } => {
             match kind {
@@ -481,6 +485,40 @@ async fn share(
     Ok(())
 }
 
+/// Overrides of the settings file for this join only.
+#[derive(Clone, Debug, Default, clap::Args)]
+pub(crate) struct JoinSettings {
+    /// Dismiss answers after this many seconds (0 disables; maximum 3600).
+    #[arg(long)]
+    answer_timeout: Option<AnswerTimeout>,
+    /// Key for dismissing all answers (default: d).
+    #[arg(long)]
+    clear_answers_key: Option<KeyBinding>,
+    /// Key for toggling comment mode (default: c).
+    #[arg(long)]
+    comment_mode_key: Option<KeyBinding>,
+    /// Key for toggling your cursor (default: x).
+    #[arg(long)]
+    show_cursor_key: Option<KeyBinding>,
+}
+
+impl From<JoinSettings> for SettingsOverride {
+    fn from(args: JoinSettings) -> Self {
+        let JoinSettings {
+            answer_timeout,
+            clear_answers_key,
+            comment_mode_key,
+            show_cursor_key,
+        } = args;
+        Self {
+            answer_timeout,
+            clear_answers_key,
+            comment_mode_key,
+            show_cursor_key,
+        }
+    }
+}
+
 /// Whether `join` opens the browser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Open {
@@ -494,6 +532,7 @@ async fn join(
     open: Open,
     share_addrs: Vec<SocketAddr>,
     port: Option<Port>,
+    overrides: JoinSettings,
 ) -> Result<(), Report> {
     let discovery = if share_addrs.is_empty() {
         Discovery::Public
@@ -508,6 +547,7 @@ async fn join(
         name,
         default_name: default_name(),
         settings: settings::default_path()?,
+        overrides: overrides.into(),
         key,
         net: net_config(discovery)?,
         share_addrs,
@@ -596,3 +636,71 @@ async fn shutdown_signal() -> io::Result<()> {
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod cli_tests;
+
+#[cfg(test)]
+mod join_settings_tests {
+    use clap::Parser;
+
+    use crate::{
+        Cli, Command, JoinSettings,
+        core::settings::{Settings, SettingsOverride},
+    };
+
+    #[test]
+    fn join_setting_options_parse_and_validate() {
+        let cli = Cli::try_parse_from([
+            "jampot",
+            "join",
+            "-",
+            "--answer-timeout",
+            "3600",
+            "--clear-answers-key",
+            "q",
+            "--comment-mode-key",
+            "k",
+            "--show-cursor-key",
+            "F2",
+        ])
+        .unwrap();
+        let Some(Command::Join { settings, .. }) = cli.command else {
+            panic!("expected join")
+        };
+        let settings = SettingsOverride::from(settings)
+            .apply(Settings::default())
+            .unwrap();
+        assert_eq!(u16::from(settings.answer_timeout), 3600);
+        assert_eq!(
+            serde_json::to_value(settings.keys).unwrap(),
+            serde_json::json!({
+                "commentMode": "k", "showCursor": "F2", "clearAnswers": "q"
+            })
+        );
+        for value in ["-1", "3601", "1.5", "no"] {
+            assert!(
+                Cli::try_parse_from(["jampot", "join", "-", "--answer-timeout", value]).is_err()
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["jampot", "join", "-", "--clear-answers-key", "Enter"]).is_err()
+        );
+    }
+
+    #[test]
+    fn join_overrides_keep_defaults_and_check_conflicts() {
+        assert_eq!(
+            SettingsOverride::from(JoinSettings::default())
+                .apply(Settings::default())
+                .unwrap(),
+            Settings::default()
+        );
+        let cli = Cli::try_parse_from(["jampot", "join", "-", "--clear-answers-key", "C"]).unwrap();
+        let Some(Command::Join { settings, .. }) = cli.command else {
+            panic!("expected join")
+        };
+        assert!(
+            SettingsOverride::from(settings)
+                .apply(Settings::default())
+                .is_err()
+        );
+    }
+}

@@ -24,6 +24,7 @@ function isCorner(value: string | undefined): value is Corner {
 const ACTION_NAMES: Record<Action, string> = {
   commentMode: "comment mode",
   showCursor: "show my cursor",
+  clearAnswers: "clear answers",
 };
 
 /** A key as it is bound: single characters in lower case. */
@@ -66,6 +67,8 @@ export function colourOf(person: Person): string {
 export class Panel {
   private settings: PageSettings | null = null;
   private listening: Action | null = null;
+  /** Called by the clear button or its binding. */
+  onClearAnswers: () => void = () => undefined;
   /** Called when the panel opens (the comment list closes then). */
   onOpen: () => void = () => undefined;
   /** Called with the settings whenever they change. */
@@ -75,6 +78,12 @@ export class Panel {
     private readonly ui: Ui,
     private readonly changeSettings: ChangeSettings,
   ) {
+    ui.clearAnswers.addEventListener("click", () => { this.onClearAnswers(); });
+    ui.answerTimeout.addEventListener("change", () => {
+      if (ui.answerTimeout.reportValidity()) {
+        void this.change({ answerTimeout: ui.answerTimeout.valueAsNumber });
+      }
+    });
     ui.gear.addEventListener("click", () => { this.toggle(); });
     ui.commentMode.addEventListener("click", () => { this.flip("commentMode"); });
     ui.showCursor.addEventListener("click", () => { this.flip("showCursor"); });
@@ -107,7 +116,7 @@ export class Panel {
   }
 
   private chips(): [Action, HTMLButtonElement][] {
-    return [["commentMode", this.ui.commentModeKey], ["showCursor", this.ui.showCursorKey]];
+    return [["commentMode", this.ui.commentModeKey], ["showCursor", this.ui.showCursorKey], ["clearAnswers", this.ui.clearAnswersKey]];
   }
 
   get isOpen(): boolean {
@@ -145,6 +154,7 @@ export class Panel {
     this.settings = settings;
     const { ui } = this;
     ui.commentMode.setAttribute("aria-checked", String(settings.commentMode === "on"));
+    ui.answerTimeout.value = String(settings.answerTimeout);
     ui.showCursor.setAttribute("aria-checked", String(settings.showCursor === "on"));
     for (const [action, chip] of this.chips()) {
       if (this.listening !== action) chip.textContent = keyLabel(settings.keys[action]);
@@ -167,7 +177,7 @@ export class Panel {
     if (failed !== null) this.message(failed);
   }
 
-  private flip(action: Action): void {
+  private flip(action: "commentMode" | "showCursor"): void {
     const settings = this.settings;
     if (settings === null) return;
     const value = settings[action] === "on" ? "off" : "on";
@@ -185,7 +195,8 @@ export class Panel {
   private listen(action: Action): void {
     this.stopListening();
     this.listening = action;
-    const chip = action === "commentMode" ? this.ui.commentModeKey : this.ui.showCursorKey;
+    const chip = this.chips().find(([name]) => name === action)?.[1];
+    if (chip === undefined) return;
     chip.dataset.listening = "true";
     chip.textContent = "press a key…";
     this.message("");
@@ -211,7 +222,9 @@ export class Panel {
     // A modifier goes with the key after it: wait for that.
     if (MODIFIER_KEYS.includes(event.key)) return;
     const key = normalizeKey(event.key);
-    const other: Action = action === "commentMode" ? "showCursor" : "commentMode";
+    const other = this.chips().map(([name]) => name).find(
+      (name) => name !== action && normalizeKey(settings.keys[name]) === key,
+    );
     if (RESERVED_KEYS.includes(key)) {
       this.stopListening();
       this.message(`${keyLabel(key)} is used by jampot`);
@@ -222,7 +235,7 @@ export class Panel {
       this.message(`${key === " " ? "Space" : key} is the page's`);
       return;
     }
-    if (normalizeKey(settings.keys[other]) === key) {
+    if (other !== undefined) {
       this.stopListening();
       this.message(`${keyLabel(key)} is taken by ${ACTION_NAMES[other]}`);
       return;
@@ -243,12 +256,15 @@ export class Panel {
       event.metaKey || event.ctrlKey || event.altKey || isEditing(event)
     ) return;
     const key = normalizeKey(event.key);
-    for (const action of ["commentMode", "showCursor"] as const) {
+    for (const action of ["commentMode", "showCursor", "clearAnswers"] as const) {
       if (normalizeKey(settings.keys[action]) === key) {
         event.preventDefault();
         event.stopImmediatePropagation();
         // A held key flips once, not once per auto-repeat.
-        if (!event.repeat) this.flip(action);
+        if (!event.repeat) {
+          if (action === "clearAnswers") this.onClearAnswers();
+          else this.flip(action);
+        }
         return;
       }
     }

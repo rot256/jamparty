@@ -4,7 +4,7 @@
 // agent's answers and the dialogs.
 
 import { HOST_ID } from "./config";
-import { MAX_COMMENT, MAX_NAME } from "./generated/api";
+import { DEFAULT_CLEAR_ANSWERS_KEY, MAX_ANSWER_TIMEOUT, MAX_COMMENT, MAX_NAME } from "./generated/api";
 import { styles } from "./styles";
 
 const GEAR_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>`;
@@ -46,6 +46,15 @@ const MARKUP = `
       <span class="label" id="show-cursor-label">Show my cursor</span>
       <button class="chip" id="show-cursor-key" type="button" aria-label="Key for show my cursor">X</button>
       <button class="switch" id="show-cursor" type="button" role="switch" aria-checked="false" aria-labelledby="show-cursor-label"></button>
+    </div>
+    <div class="control">
+      <span class="label">Clear answers</span>
+      <button class="chip" id="clear-answers-key" type="button" aria-label="Key for clear answers">${DEFAULT_CLEAR_ANSWERS_KEY.toUpperCase()}</button>
+      <button id="clear-answers" type="button">Clear</button>
+    </div>
+    <div class="control">
+      <label class="label" for="answer-timeout">Answer timeout (s; 0 = off)</label>
+      <input id="answer-timeout" type="number" required min="0" max="${MAX_ANSWER_TIMEOUT}" step="1" value="0">
     </div>
     <div class="control" id="corner-row">
       <span class="label" id="corner-label">Corner</span>
@@ -131,6 +140,9 @@ export class Ui {
   readonly panel: HTMLElement;
   readonly commentModeKey: HTMLButtonElement;
   readonly commentMode: HTMLButtonElement;
+  readonly clearAnswersKey: HTMLButtonElement;
+  readonly clearAnswers: HTMLButtonElement;
+  readonly answerTimeout: HTMLInputElement;
   readonly showCursorKey: HTMLButtonElement;
   readonly showCursor: HTMLButtonElement;
   readonly nameField: HTMLInputElement;
@@ -199,6 +211,9 @@ export class Ui {
     this.panel = find("#panel", HTMLElement);
     this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
     this.commentMode = find("#comment-mode", HTMLButtonElement);
+    this.clearAnswersKey = find("#clear-answers-key", HTMLButtonElement);
+    this.clearAnswers = find("#clear-answers", HTMLButtonElement);
+    this.answerTimeout = find("#answer-timeout", HTMLInputElement);
     this.showCursorKey = find("#show-cursor-key", HTMLButtonElement);
     this.showCursor = find("#show-cursor", HTMLButtonElement);
     this.nameField = find("#name-field", HTMLInputElement);
