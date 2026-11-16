@@ -73,6 +73,7 @@ Comments are JSON, one object per comment:
                 use the path
   selector      CSS selector of the element; empty for a page comment;
                 `jamparty-agent:<id>` for a comment on one of your answers
+  choice        optional: the chosen label of a multiple-choice question
   selectedText  the text they selected, if any
   comment       what they wrote
 "#;
@@ -88,7 +89,18 @@ Who sees it:
 `--to` takes a name as shown next to the comments (names only); when two
 people share a name the share refuses and lists them as `key:<fingerprint>`:
 pass `--to key:<fingerprint>` then (the comment's author.fingerprint, or the
-full key). Answer questions; do not send acknowledgements or
+full key).
+
+Ask a multiple-choice question with 2–6 distinct single-line labels (80 characters max):
+  jamparty send --choice 'Keep it' --choice 'Make it bigger' 'Which heading size?'
+Audience rules above still apply. First answer wins at the share: the question
+is removed for everyone, including later joiners. The picker sees a brief
+"You chose: …" confirmation. The pick arrives as an ordinary comment with
+selector `jamparty-agent:<answer id>`, `comment` and optional `choice` both
+holding the chosen label, and the usual author. Typed comments on a question
+remain allowed and do not resolve it. recv, command and T3 delivery are unchanged.
+
+Answer questions; do not send acknowledgements or
 progress reports. Link to an element with
 [label](jamparty:<percent-encoded selector>).
 "#;

@@ -4,6 +4,8 @@
 export const MAX_NAME = 40;
 export const MAX_ANSWER_TIMEOUT = 3600;
 export const DEFAULT_ANSWER_TIMEOUT = 30;
+export const MAX_CHOICES = 6;
+export const MAX_CHOICE = 80;
 export const MAX_COMMENT = 10000;
 export const MAX_SELECTED_TEXT = 2000;
 export const MAX_PAGE_PATH = 512;
@@ -81,6 +83,8 @@ askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: C
 
 export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Switch, showCursor?: Switch, corner?: Corner, answerTimeout?: AnswerTimeout, };
 
+export type Choices = Array<string>;
+
 export type Answer = { id: CommentId, html: string, 
 /**
  * The selector of the comment it answers.
@@ -94,7 +98,7 @@ page?: CommentPage,
  * Addressed to this joiner alone (`jamparty send --to`, or an answer to
  * its comment); the page says so.
  */
-toYou: boolean, };
+toYou: boolean, choices: Choices, };
 
 export type Link = { 
 /**
@@ -141,13 +145,13 @@ revision: Revision | null, };
 
 export type RequestNumber = number;
 
-export type CommentOutcome = { "commented": { id: CommentId, } } | { "unsent": { error: string, } } | { "refused": { error: string, retryAfterSecs?: number, } };
+export type CommentOutcome = { "commented": { id: CommentId, } } | { "unsent": { error: string, } } | { "refused": { error: string, choiceRefused?: boolean, retryAfterSecs?: number, } };
 
 export type SettingsOutcome = "saved" | { "refused": { error: string, } };
 
-export type ToPage = { "type": "hello" } & Snapshot | { "type": "link" } & Link | { "type": "people", here: Array<Person>, } | { "type": "mine", undelivered: Array<CommentId> | null, } | { "type": "settings" } & PageSettings | { "type": "reload", revision: Revision, } | { "type": "answer" } & Answer | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, } | { "type": "comment_reply", to: RequestNumber, outcome: CommentOutcome, } | { "type": "settings_reply", to: RequestNumber, outcome: SettingsOutcome, } | { "type": "ping" };
+export type ToPage = { "type": "hello" } & Snapshot | { "type": "link" } & Link | { "type": "people", here: Array<Person>, } | { "type": "mine", undelivered: Array<CommentId> | null, } | { "type": "settings" } & PageSettings | { "type": "reload", revision: Revision, } | { "type": "answer" } & Answer | { "type": "answer_resolved", id: CommentId, } | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, } | { "type": "comment_reply", to: RequestNumber, outcome: CommentOutcome, } | { "type": "settings_reply", to: RequestNumber, outcome: SettingsOutcome, } | { "type": "ping" };
 
-export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage, selector: CommentSelector, selectedText: string | null, comment: string, };
+export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage, selector: CommentSelector, selectedText: string | null, choice?: string, comment: string, };
 
 export type Change = { n: RequestNumber, change: SettingsChange, };
 

@@ -134,6 +134,7 @@ export class PageSocket {
       case "mine":
       case "settings":
       case "reload":
+      case "answer_resolved":
       case "answer":
       case "cursor":
         if (this.ready) this.handlers.slice(message);

@@ -50,7 +50,7 @@ async fn send_to(
 ) -> Result<(), String> {
     let stream = UnixStream::connect(path).await.unwrap();
     let message = message.to_owned().try_into().unwrap();
-    agent::send(stream, message, anchor, to)
+    agent::send(stream, message, Default::default(), anchor, to)
         .await
         .map_err(|error| format!("{error:?}"))
 }

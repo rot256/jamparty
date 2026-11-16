@@ -44,6 +44,10 @@ pub(crate) enum CommentOutcome {
     /// long to wait.
     Refused {
         error: String,
+        // Only a share ChoiceRefused is terminal for a question.
+        #[serde(rename = "choiceRefused", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(test, ts(rename = "choiceRefused", optional))]
+        choice_refused: Option<bool>,
         #[serde(
             rename = "retryAfterSecs",
             with = "crate::core::secs::optional",
@@ -86,6 +90,9 @@ pub(crate) enum ToPage {
     },
     /// Added to the answers (an id seen before is not shown again).
     Answer(Answer),
+    AnswerResolved {
+        id: CommentId,
+    },
     /// Someone's pointer on page `url` (sent only to pages on it), or
     /// (none) they left it.
     Cursor {
@@ -122,6 +129,9 @@ pub(crate) struct Submission {
     pub(crate) selector: CommentSelector,
     #[serde(default)]
     pub(crate) selected_text: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) choice: Option<String>,
     pub(crate) comment: String,
 }
 
@@ -184,7 +194,9 @@ mod bindings {
         },
         protocol::{
             comment::{Author, CommentPage, CommentSelector, MAX_COMMENT, MAX_SELECTED_TEXT},
-            control::{CommentRef, RefusedReason, Revision, StatusLine},
+            control::{
+                Choices, CommentRef, MAX_CHOICE, MAX_CHOICES, RefusedReason, Revision, StatusLine,
+            },
             presence::{
                 Colour, CursorSelector, FRACTION_ONE, Fraction, MAX_CURSOR_SELECTOR, MAX_PAGE_PATH,
                 PagePath, Person, Position,
@@ -223,6 +235,7 @@ mod bindings {
             Position::decl(&cfg),
             PageSettings::decl(&cfg),
             SettingsChange::decl(&cfg),
+            Choices::decl(&cfg),
             Answer::decl(&cfg),
             Link::decl(&cfg),
             Snapshot::decl(&cfg),
@@ -246,6 +259,8 @@ mod bindings {
                 "DEFAULT_ANSWER_TIMEOUT",
                 usize::from(DEFAULT_ANSWER_TIMEOUT),
             ),
+            ("MAX_CHOICES", MAX_CHOICES),
+            ("MAX_CHOICE", MAX_CHOICE),
             ("MAX_COMMENT", MAX_COMMENT),
             ("MAX_SELECTED_TEXT", MAX_SELECTED_TEXT),
             ("MAX_PAGE_PATH", MAX_PAGE_PATH),

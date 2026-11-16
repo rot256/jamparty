@@ -40,7 +40,14 @@ function install(): void {
       else sender.setPlaced(false);
     },
   });
-  const outbox = new Outbox((submission) => socket.comment(submission));
+  const outbox = new Outbox(async (submission) => {
+    const outcome = await socket.comment(submission);
+    if (submission.choice !== undefined && "refused" in outcome &&
+      outcome.refused.choiceRefused === true) {
+      answers.remove(submission.selector.slice(AGENT_TARGET_PREFIX.length));
+    }
+    return outcome;
+  });
   // The joiner takes a change for this join only; the page keeps it for
   // the share, from before it goes (the tab may close before the reply),
   // and takes it back if the joiner refuses it.
@@ -51,7 +58,7 @@ function install(): void {
     if (outcome !== "saved" && socket.isOpen) keep(before);
     return outcome;
   };
-  const answers = new Answers(ui);
+  const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref));
   const dialog = new CommentDialog(ui, outbox, () => pending);
   const list = new CommentList(ui, outbox);
   // The panel takes its keys before the page and the `/` handler below.
@@ -172,6 +179,9 @@ function install(): void {
         break;
       case "reload":
         onRevision(slice.revision);
+        break;
+      case "answer_resolved":
+        answers.remove(slice.id);
         break;
       case "answer":
         answers.add(slice);

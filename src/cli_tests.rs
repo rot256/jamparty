@@ -70,6 +70,7 @@ fn agent_commands_parse_and_stay_out_of_help() {
         anchor,
         to,
         which,
+        choices: _,
     }) = send.command
     else {
         panic!("not send");

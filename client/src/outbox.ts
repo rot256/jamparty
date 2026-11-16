@@ -41,7 +41,7 @@ export interface OutboxEntry {
 
 function parseDraft(value: unknown): Draft | null {
   if (!isRecord(value)) return null;
-  const { page, selector, selectedText, comment } = value;
+  const { page, selector, selectedText, comment, choice } = value;
   if (typeof page !== "string" || typeof selector !== "string" || typeof comment !== "string") {
     return null;
   }
@@ -50,6 +50,7 @@ function parseDraft(value: unknown): Draft | null {
     selector,
     selectedText: typeof selectedText === "string" ? selectedText : null,
     comment,
+    ...(typeof choice === "string" ? { choice } : {}),
   };
 }
 
@@ -236,7 +237,11 @@ export class Outbox {
 
   /** Records what became of `entry`. */
   private take(entry: OutboxEntry, outcome: CommentOutcome): void {
-    if ("commented" in outcome) {
+    if (entry.draft.choice !== undefined && "refused" in outcome &&
+      outcome.refused.choiceRefused === true) {
+      const index = this.entries.indexOf(entry);
+      if (index !== -1) this.entries.splice(index, 1);
+    } else if ("commented" in outcome) {
       entry.id = outcome.commented.id;
       entry.state = "queued";
       // Delivered already if the joiner's latest word does not hold it.

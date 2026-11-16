@@ -91,6 +91,9 @@ pub(crate) enum JoinerMessage {
 /// its jamparty. Unknown fields are ignored (see the module).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Hello {
+    /// Understands choice questions and their resolution messages.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) choices: bool,
     pub(crate) secret: PartySecret,
     pub(crate) name: JoinerName,
     pub(crate) jamparty: JampartyVersion,
@@ -131,11 +134,15 @@ pub(crate) enum ShareMessage {
     Answer {
         id: CommentId,
         message: AnswerText,
+        #[serde(default, skip_serializing_if = "Choices::is_empty")]
+        choices: Choices,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         anchor: Option<Anchor>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<EndpointKey>,
     },
+    /// A question is no longer open (also removes stale copies).
+    AnswerResolved { id: CommentId },
     /// These comments reached the target.
     Delivered { ids: Vec<CommentId> },
     /// The shared content changed; pages reload.
@@ -320,6 +327,8 @@ pub(crate) enum AckOutcome {
     /// The share's queue is full, or holds as many of this joiner's
     /// comments as it takes.
     QueueFull,
+    /// Not an offered choice, outside the audience, or already answered.
+    ChoiceRefused,
 }
 
 pub(crate) const MAX_COMMENT_REF: usize = 64;
@@ -397,3 +406,43 @@ impl From<AnswerText> for String {
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;
+
+/// Offered labels, checked on both sides of the control stream.
+/// Empty for ordinary answers; otherwise 2–6 distinct single-line labels.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<String>", into = "Vec<String>")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "Array<string>"))]
+pub(crate) struct Choices(Vec<String>);
+
+pub(crate) const MAX_CHOICES: usize = 6;
+pub(crate) const MAX_CHOICE: usize = 80;
+
+impl Choices {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub(crate) fn contains(&self, choice: &str) -> bool {
+        self.0.iter().any(|label| label == choice)
+    }
+}
+
+impl TryFrom<Vec<String>> for Choices {
+    type Error = Invalid;
+    fn try_from(labels: Vec<String>) -> Result<Self, Self::Error> {
+        if !labels.is_empty() && !(2..=MAX_CHOICES).contains(&labels.len()) {
+            return Err(Invalid::new("offer 2 to 6 choices"));
+        }
+        for (index, label) in labels.iter().enumerate() {
+            check_line(label, "choice", MAX_CHOICE)?;
+            if labels.iter().take(index).any(|earlier| earlier == label) {
+                return Err(Invalid::new("choices must be distinct"));
+            }
+        }
+        Ok(Self(labels))
+    }
+}
+impl From<Choices> for Vec<String> {
+    fn from(choices: Choices) -> Self {
+        choices.0
+    }
+}

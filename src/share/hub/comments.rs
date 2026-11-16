@@ -9,13 +9,13 @@ use crate::{
         queue::{Attempt, DeliveryResult, DeliveryState, QueueError},
     },
     protocol::{
-        comment::{Author, Comment, Draft},
+        comment::{Author, Comment, Draft, DraftFields},
         control::{AckOutcome, Anchor, CommentRef, MAX_QUEUED_PER_KEY, ShareMessage, StatusLine},
         line_size,
     },
     share::{
         delivery::MAX_BATCH_BYTES,
-        hub::{Audience, Hub, Inner, MAX_ANCHORS, MAX_REFS},
+        hub::{Addressed, Audience, Hub, Inner, MAX_ANCHORS, MAX_REFS},
     },
 };
 
@@ -30,7 +30,14 @@ impl Hub {
         reference: CommentRef,
         draft: Draft,
     ) -> AckOutcome {
-        let outcome = self.queue_comment(&mut self.lock(), author, reference, draft);
+        let outcome = {
+            let mut inner = self.lock();
+            let (outcome, resolved) = self.queue_comment(&mut inner, author, reference, draft);
+            if let Some(Addressed { audience, message }) = resolved {
+                self.send(audience, message);
+            }
+            outcome
+        };
         self.wake_for(outcome);
         outcome
     }
@@ -41,17 +48,20 @@ impl Hub {
             AckOutcome::Queued { .. } => self.wakeup.notify_one(),
             AckOutcome::Delivered { .. }
             | AckOutcome::RateLimited { .. }
+            | AckOutcome::ChoiceRefused
             | AckOutcome::QueueFull => {}
         }
     }
 
+    /// Queues once and, only for a new winning pick, returns its resolution.
+    /// The caller stamps the acknowledgement before sending that resolution.
     pub(super) fn queue_comment(
         &self,
         inner: &mut Inner,
         author: &Author,
         reference: CommentRef,
         draft: Draft,
-    ) -> AckOutcome {
+    ) -> (AckOutcome, Option<Addressed>) {
         let earlier = inner
             .refs
             .iter()
@@ -59,12 +69,36 @@ impl Hub {
             .map(|(_, _, id)| *id);
         if let Some(id) = earlier {
             let held = inner.queue.iter().any(|comment| comment.id == id);
-            return if held {
-                AckOutcome::Queued { id }
-            } else {
-                AckOutcome::Delivered { id }
-            };
+            return (
+                if held {
+                    AckOutcome::Queued { id }
+                } else {
+                    AckOutcome::Delivered { id }
+                },
+                None,
+            );
         }
+        // Refs are checked first: retrying the winning pick gets its original id.
+        let fields = DraftFields::from(draft.clone());
+        let question = if let Some(choice) = &fields.choice {
+            let id = fields
+                .selector
+                .as_ref()
+                .strip_prefix("jamparty-agent:")
+                .and_then(|id| id.parse::<CommentId>().ok());
+            let offered = inner.answers.iter().find(|answer| {
+                answer.audience.includes(author.key)
+                    && matches!(&answer.message,
+                    ShareMessage::Answer { id: known, choices, .. }
+                    if Some(*known) == id && choices.contains(choice))
+            });
+            if fields.comment != *choice || offered.is_none() {
+                return (AckOutcome::ChoiceRefused, None);
+            }
+            id
+        } else {
+            None
+        };
         let clock = self.clock.as_ref();
         let limited = inner
             .global
@@ -72,9 +106,12 @@ impl Hub {
             .and_then(|()| inner.limiter.check(author.key, clock))
             .and_then(|()| inner.global.check((), clock));
         if let Err(limited) = limited {
-            return AckOutcome::RateLimited {
-                retry_after: limited.retry_after.unsigned_abs(),
-            };
+            return (
+                AckOutcome::RateLimited {
+                    retry_after: limited.retry_after.unsigned_abs(),
+                },
+                None,
+            );
         }
         let mine = inner
             .queue
@@ -82,7 +119,7 @@ impl Hub {
             .filter(|comment| comment.author.key == author.key)
             .count();
         if mine >= MAX_QUEUED_PER_KEY {
-            return AckOutcome::QueueFull;
+            return (AckOutcome::QueueFull, None);
         }
         let id = CommentId::generate(self.rng.as_ref());
         let comment = Comment::new(id, author.clone(), draft);
@@ -102,9 +139,20 @@ impl Hub {
                 }
                 inner.refs.push_back((author.key, reference, id));
                 tracing::info!(%id, author = %author.name, fingerprint = %author.fingerprint, "comment queued");
-                AckOutcome::Queued { id }
+                let resolved = if let Some(question) = question
+                    && let Some(answer) = inner.answers.iter_mut().find(|answer| {
+                        matches!(
+                            &answer.message, ShareMessage::Answer { id, .. } if *id == question
+                        )
+                    }) {
+                    answer.message = ShareMessage::AnswerResolved { id: question };
+                    Some(answer.clone())
+                } else {
+                    None
+                };
+                (AckOutcome::Queued { id }, resolved)
             }
-            Err(QueueError::Full | QueueError::NotInFlight) => AckOutcome::QueueFull,
+            Err(QueueError::Full | QueueError::NotInFlight) => (AckOutcome::QueueFull, None),
         }
     }
 

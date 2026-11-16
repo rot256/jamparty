@@ -20,7 +20,8 @@ use crate::{
     protocol::{
         comment::{Author, CommentPage, CommentSelector},
         control::{
-            AckOutcome, MAX_QUEUED_PER_KEY, RefusedReason, Revision, ShareMessage, StatusLine,
+            AckOutcome, Choices, MAX_QUEUED_PER_KEY, RefusedReason, Revision, ShareMessage,
+            StatusLine,
         },
         presence::Person,
     },
@@ -74,6 +75,7 @@ pub(crate) struct Answer {
     /// its comment); the page says so.
     #[serde(rename = "toYou")]
     pub(crate) to_you: bool,
+    pub(crate) choices: Choices,
 }
 
 /// Everything a page is told when it connects.
@@ -242,7 +244,16 @@ impl State {
             you: self.link.you.clone(),
             status: self.link.status.clone(),
         };
-        let mut messages = Vec::new();
+        // Open questions must be replayed after admission: a resolution may
+        // have happened while disconnected, and catch-up omits it.
+        let mut messages: Vec<_> = self
+            .answers
+            .iter()
+            .filter(|answer| !answer.choices.is_empty())
+            .map(|answer| ToPage::AnswerResolved { id: answer.id })
+            .collect();
+        self.answers.retain(|answer| answer.choices.is_empty());
+        self.answers_html = self.answers.iter().map(|answer| answer.html.len()).sum();
         if link != self.link {
             self.link = link;
             messages.push(ToPage::Link(self.link.clone()));
@@ -259,7 +270,9 @@ impl State {
         match outcome {
             AckOutcome::Queued { id } => self.mine.queued(id)?,
             AckOutcome::Delivered { id } => self.mine.delivered(&[id]),
-            AckOutcome::RateLimited { .. } | AckOutcome::QueueFull => return Ok(Vec::new()),
+            AckOutcome::RateLimited { .. } | AckOutcome::ChoiceRefused | AckOutcome::QueueFull => {
+                return Ok(Vec::new());
+            }
         }
         Ok(vec![self.mine_message()])
     }
@@ -296,6 +309,7 @@ impl State {
             ShareMessage::Answer {
                 id,
                 message,
+                choices,
                 anchor,
                 to,
             } => {
@@ -309,6 +323,7 @@ impl State {
                 let you = self.link.you.as_ref().map(|you| you.key);
                 let answer = Answer {
                     id,
+                    choices,
                     html: markdown::render(&String::from(message)),
                     anchor,
                     page,
@@ -323,6 +338,11 @@ impl State {
                 self.answers_html = self.answers_html.saturating_add(answer.html.len());
                 self.answers.push_back(answer.clone());
                 vec![ToPage::Answer(answer)]
+            }
+            ShareMessage::AnswerResolved { id } => {
+                self.answers.retain(|answer| answer.id != id);
+                self.answers_html = self.answers.iter().map(|answer| answer.html.len()).sum();
+                vec![ToPage::AnswerResolved { id }]
             }
             ShareMessage::Cursor { key, url, position } => {
                 vec![ToPage::Cursor { key, url, position }]
@@ -362,6 +382,7 @@ pub(crate) fn follow(snapshot: &mut Snapshot, message: &ToPage) {
                 snapshot.answers.push(answer.clone());
             }
         }
+        ToPage::AnswerResolved { id } => snapshot.answers.retain(|answer| answer.id != *id),
         ToPage::Hello(hello) => hello.clone_into(snapshot),
         ToPage::Cursor { .. }
         | ToPage::CommentReply { .. }

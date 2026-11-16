@@ -125,6 +125,7 @@ mod tests {
         let draft = Draft::try_from(DraftFields {
             page: "\0".repeat(MAX_PAGE).try_into().unwrap(),
             selector: "\0".repeat(MAX_SELECTOR).try_into().unwrap(),
+            choice: None,
             selected_text: Some("\0".repeat(MAX_SELECTED_TEXT)),
             comment: "\0".repeat(MAX_COMMENT),
         })

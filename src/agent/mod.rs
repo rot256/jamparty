@@ -14,7 +14,7 @@ use crate::{
     core::ids::CommentId,
     protocol::{
         agent::{Addressee, AgentReply, AgentRequest},
-        control::{AnswerText, Envelope},
+        control::{AnswerText, Choices, Envelope},
     },
 };
 
@@ -50,6 +50,7 @@ pub(crate) async fn recv(stream: UnixStream, out: &mut impl Write) -> Result<usi
 pub(crate) async fn send(
     stream: UnixStream,
     message: AnswerText,
+    choices: Choices,
     anchor: Option<CommentId>,
     to: Option<Addressee>,
 ) -> Result<(), Report> {
@@ -59,6 +60,7 @@ pub(crate) async fn send(
         &mut write,
         &Envelope::from(AgentRequest::Send {
             message,
+            choices,
             anchor,
             to,
         }),

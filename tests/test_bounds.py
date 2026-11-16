@@ -17,6 +17,7 @@ def answer(index: int) -> str:
     return json.dumps(
         {
             "type": "answer",
+            "choices": [],
             "id": str(uuid.UUID(int=index + 1)),
             "html": f"<p>answer {index}</p>",
             "toYou": False,

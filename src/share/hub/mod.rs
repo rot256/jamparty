@@ -190,7 +190,13 @@ impl Hub {
     /// Adds an admitted joiner to presence until the returned guard drops;
     /// `None` if the share has [`MAX_JOINERS`] connections, or
     /// [`MAX_JOINERS_PER_KEY`] with this key.
-    pub(crate) fn join(self: &Arc<Self>, author: Author) -> Option<(Presence, Inbox)> {
+    /// `choices`: the joiner can show choice questions (its hello says so);
+    /// set before anyone can see the seat, so no send misjudges it.
+    pub(crate) fn join(
+        self: &Arc<Self>,
+        author: Author,
+        choices: bool,
+    ) -> Option<(Presence, Inbox)> {
         let (cursors, cursors_in) = mpsc::channel(CURSOR_QUEUE);
         let (acks, acks_in) = mpsc::channel(ACK_QUEUE);
         let connection = {
@@ -208,6 +214,7 @@ impl Hub {
             inner.changes = inner.changes.wrapping_add(1);
             let changed = inner.changes;
             inner.joiners.push(Seat {
+                choices,
                 connection,
                 author,
                 url: None,
@@ -224,6 +231,7 @@ impl Hub {
         };
         self.broadcast_presence();
         let presence = Presence {
+            choices,
             hub: Arc::clone(self),
             connection,
         };
@@ -242,7 +250,10 @@ impl Hub {
         let mut messages: Vec<ShareMessage> = inner
             .answers
             .iter()
-            .filter(|answer| answer.audience.includes(key))
+            .filter(|answer| {
+                answer.audience.includes(key)
+                    && !matches!(answer.message, ShareMessage::AnswerResolved { .. })
+            })
             .map(|answer| answer.message.clone())
             .collect();
         if let Some(line) = &inner.status {

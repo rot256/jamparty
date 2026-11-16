@@ -43,5 +43,12 @@ jamparty agent                       # guides for agents
 jamparty recv                        # wait for comments, print them as NDJSON
 jamparty send "Fixed, thanks."       # to everyone
 jamparty send --anchor <id> "Done."  # next to a comment, to its author
+jamparty send --choice "Keep it" --choice "Make it bigger" "Which heading size?"
 jamparty send --to alice "…"         # to one person (or --to key:<fingerprint>)
 ```
+
+Questions offer 2–6 distinct single-line choices of at most 80 characters.
+The first pick wins and removes the question for everyone; the picker sees a
+brief confirmation. It arrives through the usual comment delivery with
+`selector: "jamparty-agent:<answer id>"` and `comment` and optional `choice`
+containing the chosen label. Typed replies do not resolve questions.

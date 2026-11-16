@@ -114,6 +114,7 @@ fn run(state: &mut State, op: Op) -> Vec<ToPage> {
             line: set.then(|| StatusLine::try_from("retrying".to_owned()).unwrap()),
         }),
         Op::Answer(index) => state.apply(ShareMessage::Answer {
+            choices: Default::default(),
             id: id(index.wrapping_add(100)),
             message: AnswerText::try_from(format!("answer {index}")).unwrap(),
             anchor: None,
@@ -206,6 +207,7 @@ fn answers_kept_are_bounded_in_bytes_as_well_as_number() {
     let large = AnswerText::try_from("\"".repeat(10_000)).unwrap();
     for index in 0..40 {
         for message in state.apply(ShareMessage::Answer {
+            choices: Default::default(),
             id: nth(index),
             message: large.clone(),
             anchor: None,
@@ -276,6 +278,7 @@ fn take(outbox: &mut Outbox<'_>, state: &mut State) -> Vec<ShareMessage> {
             ShareMessage::Admitted { .. }
             | ShareMessage::Refused { .. }
             | ShareMessage::Answer { .. }
+            | ShareMessage::AnswerResolved { .. }
             | ShareMessage::Delivered { .. }
             | ShareMessage::Reload { .. }
             | ShareMessage::Status { .. }
@@ -299,7 +302,7 @@ async fn an_ack_ahead_of_a_delivery_at_a_full_queue_is_taken() {
     let hub = Hub::new(Arc::clone(&clock) as _, Arc::new(SeededRng::new(7)));
     let alice = author(1);
     let broadcasts = hub.subscribe();
-    let (presence, inbox) = hub.join(alice.clone()).unwrap();
+    let (presence, inbox) = hub.join(alice.clone(), true).unwrap();
     let mut outbox = Outbox::new(&presence, alice.key, inbox, broadcasts);
     let draft = || -> Draft {
         serde_json::from_str(r#"{"page":"/","selector":"h1","comment":"hi"}"#).unwrap()
@@ -346,7 +349,7 @@ async fn a_comment_queued_as_a_batch_finishes_is_acked_after_it() {
     let hub = Hub::new(Arc::clone(&clock) as _, Arc::new(SeededRng::new(7)));
     let alice = author(1);
     let broadcasts = hub.subscribe();
-    let (presence, inbox) = hub.join(alice.clone()).unwrap();
+    let (presence, inbox) = hub.join(alice.clone(), true).unwrap();
     let presence = Arc::new(presence);
     let mut outbox = Outbox::new(&presence, alice.key, inbox, broadcasts);
     let draft = || -> Draft {

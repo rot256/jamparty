@@ -119,6 +119,7 @@ impl Session {
             | ToPage::Mine { .. }
             | ToPage::Settings(_)
             | ToPage::Reload { .. }
+            | ToPage::AnswerResolved { .. }
             | ToPage::Answer(_) => true,
         });
         let mut dropped = Dropped::None;
@@ -235,18 +236,21 @@ impl Session {
             page: on,
             selector,
             selected_text,
+            choice,
             comment,
         } = submission;
         let draft = match Draft::try_from(DraftFields {
             page: on,
             selector,
             selected_text,
+            choice,
             comment,
         }) {
             Ok(draft) => draft,
             Err(error) => {
                 let outcome = CommentOutcome::Refused {
                     error: error.to_string(),
+                    choice_refused: None,
                     retry_after: None,
                 };
                 self.reply_comment(page, n, outcome);
@@ -270,7 +274,13 @@ impl Session {
             }
             AckOutcome::RateLimited { retry_after } => CommentOutcome::Refused {
                 error: "too many comments; try again shortly".to_owned(),
+                choice_refused: None,
                 retry_after: Some(retry_after),
+            },
+            AckOutcome::ChoiceRefused => CommentOutcome::Refused {
+                error: "question is no longer available".to_owned(),
+                choice_refused: Some(true),
+                retry_after: None,
             },
             // Kept in the page and sent again later, as when unreachable.
             AckOutcome::QueueFull => CommentOutcome::Unsent {
@@ -390,6 +400,7 @@ impl Session {
             other @ (ShareMessage::Admitted { .. }
             | ShareMessage::Refused { .. }
             | ShareMessage::Answer { .. }
+            | ShareMessage::AnswerResolved { .. }
             | ShareMessage::Delivered { .. }
             | ShareMessage::Reload { .. }
             | ShareMessage::Status { .. }

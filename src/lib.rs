@@ -158,6 +158,9 @@ enum Command {
     #[command(hide = true)]
     Send {
         message: Option<String>,
+        /// Offer 2 to 6 short, single-line choices.
+        #[arg(long = "choice", value_name = "TEXT")]
+        choices: Vec<String>,
         /// Show the answer next to this comment (and, without --to, only
         /// to its author).
         #[arg(long, value_name = "COMMENT ID")]
@@ -318,6 +321,7 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
             Ok(())
         }
         Command::Send {
+            choices,
             message,
             anchor,
             to,
@@ -333,7 +337,7 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
             };
             let message = AnswerText::try_from(message)?;
             let stream = runtime::connect(&runtime::default_dir()?, which.share.as_ref()).await?;
-            agent::send(stream, message, anchor, to).await
+            agent::send(stream, message, choices.try_into()?, anchor, to).await
         }
     }
 }

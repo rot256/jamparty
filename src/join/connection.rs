@@ -131,6 +131,7 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
     };
     let mut recv = BufReader::new(recv);
     let hello = Envelope::from(JoinerMessage::Hello(Hello {
+        choices: true,
         secret: dial.token.secret.clone(),
         name: session.name(),
         jamparty: JampartyVersion::current(),
@@ -192,6 +193,7 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
             }
             ShareMessage::CommentAck { .. }
             | ShareMessage::Answer { .. }
+            | ShareMessage::AnswerResolved { .. }
             | ShareMessage::Delivered { .. }
             | ShareMessage::Reload { .. }
             | ShareMessage::Status { .. }

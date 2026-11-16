@@ -21,7 +21,7 @@ use crate::{
     },
     protocol::{
         comment::{Author, Comment},
-        control::AnswerText,
+        control::{AnswerText, Choices},
     },
 };
 
@@ -117,6 +117,8 @@ pub(crate) enum AgentRequest {
     /// `to` (by default the anchor's author, else everyone).
     Send {
         message: AnswerText,
+        #[serde(default, skip_serializing_if = "Choices::is_empty")]
+        choices: Choices,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         anchor: Option<CommentId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,6 +157,7 @@ mod tests {
             (AgentRequest::Printed, r#"{"type":"printed"}"#.to_owned()),
             (
                 AgentRequest::Send {
+                    choices: Default::default(),
                     message: "Done.".to_owned().try_into().unwrap(),
                     anchor: Some(ID.parse().unwrap()),
                     to: None,
@@ -163,6 +166,7 @@ mod tests {
             ),
             (
                 AgentRequest::Send {
+                    choices: Default::default(),
                     message: "Hi".to_owned().try_into().unwrap(),
                     anchor: None,
                     to: Some("alice".parse().unwrap()),
@@ -171,6 +175,7 @@ mod tests {
             ),
             (
                 AgentRequest::Send {
+                    choices: Default::default(),
                     message: "Hi".to_owned().try_into().unwrap(),
                     anchor: None,
                     to: Some(Addressee::Everyone),

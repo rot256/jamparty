@@ -7,7 +7,7 @@
 import { samePage } from "./capture";
 import { AGENT_TARGET_PREFIX, DISMISSED_KEY } from "./config";
 import { MAX_ANSWERS } from "./generated/api";
-import type { Answer } from "./generated/api";
+import type { Answer, CommentOutcome, Submission } from "./generated/api";
 import type { Ui } from "./ui";
 
 interface Shown {
@@ -47,7 +47,10 @@ export class Answers {
   private timeoutSeconds = 0;
   private highlightTimer: number | undefined;
 
-  constructor(private readonly ui: Ui) {
+  constructor(
+    private readonly ui: Ui,
+    private readonly pick: (submission: Omit<Submission, "n">) => Promise<CommentOutcome>,
+  ) {
     const schedule = (): void => { this.schedulePlacement(); };
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
@@ -78,6 +81,7 @@ export class Answers {
    */
   keepDismissed(answers: readonly Answer[]): void {
     const held = new Set(answers.map((answer) => answer.id));
+    for (const id of this.shown.keys()) if (!held.has(id)) this.remove(id);
     let changed = false;
     for (const id of [...this.dismissed]) {
       if (!held.has(id)) {
@@ -118,6 +122,34 @@ export class Answers {
     unavailable.textContent = "Target unavailable";
     unavailable.hidden = true;
     node.append(close, to, body, unavailable);
+    const options = document.createElement("div");
+    options.className = "agent-choices";
+    // Labels are data, never markup. The joiner already checked their caps.
+    for (const choice of answer.choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = choice;
+      const ref = crypto.randomUUID();
+      button.addEventListener("click", () => {
+        for (const option of options.querySelectorAll("button")) option.disabled = true;
+        void this.pick({
+          ref, page: location.href, selector: `${AGENT_TARGET_PREFIX}${answer.id}`,
+          selectedText: null, comment: choice, choice,
+        }).then((outcome) => {
+          if ("commented" in outcome) {
+            this.remove(answer.id);
+            this.ui.showToast(`You chose: ${choice}`);
+          } else if ("refused" in outcome && outcome.refused.choiceRefused === true) {
+            this.remove(answer.id);
+          } else {
+            this.ui.showToast("refused" in outcome ? outcome.refused.error : "Choice not sent; try again shortly");
+            for (const option of options.querySelectorAll("button")) option.disabled = false;
+          }
+        });
+      });
+      options.append(button);
+    }
+    node.append(options);
 
     const anchor = answer.anchor !== undefined && samePage(answer.page) ? answer.anchor : null;
     if (anchor !== null) {
@@ -165,6 +197,15 @@ export class Answers {
     const shown: Shown = { node, unavailable, anchor, stopTimer: () => undefined };
     this.shown.set(answer.id, shown);
     this.startTimer(shown);
+    this.schedulePlacement();
+  }
+
+  /** The share resolved this question; no session dismissal is needed. */
+  remove(id: string): void {
+    const shown = this.shown.get(id);
+    shown?.stopTimer();
+    shown?.node.remove();
+    this.shown.delete(id);
     this.schedulePlacement();
   }
 

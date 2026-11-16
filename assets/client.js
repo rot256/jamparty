@@ -139,8 +139,9 @@ function loadDismissed() {
   }
 }
 var Answers = class {
-  constructor(ui) {
+  constructor(ui, pick) {
     this.ui = ui;
+    this.pick = pick;
     const schedule = () => {
       this.schedulePlacement();
     };
@@ -154,6 +155,7 @@ var Answers = class {
     });
   }
   ui;
+  pick;
   shown = /* @__PURE__ */ new Map();
   dismissed = loadDismissed();
   placementFrame;
@@ -176,6 +178,7 @@ var Answers = class {
    */
   keepDismissed(answers) {
     const held = new Set(answers.map((answer) => answer.id));
+    for (const id of this.shown.keys()) if (!held.has(id)) this.remove(id);
     let changed = false;
     for (const id of [...this.dismissed]) {
       if (!held.has(id)) {
@@ -213,6 +216,37 @@ var Answers = class {
     unavailable.textContent = "Target unavailable";
     unavailable.hidden = true;
     node.append(close, to, body, unavailable);
+    const options = document.createElement("div");
+    options.className = "agent-choices";
+    for (const choice of answer.choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = choice;
+      const ref = crypto.randomUUID();
+      button.addEventListener("click", () => {
+        for (const option of options.querySelectorAll("button")) option.disabled = true;
+        void this.pick({
+          ref,
+          page: location.href,
+          selector: `${AGENT_TARGET_PREFIX}${answer.id}`,
+          selectedText: null,
+          comment: choice,
+          choice
+        }).then((outcome) => {
+          if ("commented" in outcome) {
+            this.remove(answer.id);
+            this.ui.showToast(`You chose: ${choice}`);
+          } else if ("refused" in outcome && outcome.refused.choiceRefused === true) {
+            this.remove(answer.id);
+          } else {
+            this.ui.showToast("refused" in outcome ? outcome.refused.error : "Choice not sent; try again shortly");
+            for (const option of options.querySelectorAll("button")) option.disabled = false;
+          }
+        });
+      });
+      options.append(button);
+    }
+    node.append(options);
     const anchor = answer.anchor !== void 0 && samePage(answer.page) ? answer.anchor : null;
     if (anchor !== null) {
       node.classList.add("has-anchor");
@@ -256,6 +290,14 @@ var Answers = class {
     const shown = { node, unavailable, anchor, stopTimer: () => void 0 };
     this.shown.set(answer.id, shown);
     this.startTimer(shown);
+    this.schedulePlacement();
+  }
+  /** The share resolved this question; no session dismissal is needed. */
+  remove(id) {
+    const shown = this.shown.get(id);
+    shown?.stopTimer();
+    shown?.node.remove();
+    this.shown.delete(id);
     this.schedulePlacement();
   }
   /** Uses the same dismissal path as the close buttons. */
@@ -1596,7 +1638,7 @@ var NamePrompt = class {
 // client/src/outbox.ts
 function parseDraft(value) {
   if (!isRecord(value)) return null;
-  const { page, selector, selectedText, comment } = value;
+  const { page, selector, selectedText, comment, choice } = value;
   if (typeof page !== "string" || typeof selector !== "string" || typeof comment !== "string") {
     return null;
   }
@@ -1604,7 +1646,8 @@ function parseDraft(value) {
     page,
     selector,
     selectedText: typeof selectedText === "string" ? selectedText : null,
-    comment
+    comment,
+    ...typeof choice === "string" ? { choice } : {}
   };
 }
 function parseState(value) {
@@ -1770,7 +1813,10 @@ var Outbox = class {
   }
   /** Records what became of `entry`. */
   take(entry, outcome) {
-    if ("commented" in outcome) {
+    if (entry.draft.choice !== void 0 && "refused" in outcome && outcome.refused.choiceRefused === true) {
+      const index = this.entries.indexOf(entry);
+      if (index !== -1) this.entries.splice(index, 1);
+    } else if ("commented" in outcome) {
       entry.id = outcome.commented.id;
       entry.state = "queued";
       this.settle(entry);
@@ -1981,6 +2027,7 @@ var PageSocket = class {
       case "mine":
       case "settings":
       case "reload":
+      case "answer_resolved":
       case "answer":
       case "cursor":
         if (this.ready) this.handlers.slice(message);
@@ -2675,6 +2722,12 @@ var styles = `
     .agent-timeout { animation-timing-function: steps(var(--answer-timeout-steps), end); }
   }
   #answer-timeout { width: 60px; min-width: 0; }
+
+  .agent-choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .agent-choices:empty { display: none; }
+  .agent-choices button { border: 1px solid #b85a3c; border-radius: 5px; padding: 5px 9px;
+    background: #fff; color: #7b3221; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
+  .agent-choices button:disabled { opacity: .6; cursor: default; }
 `;
 
 // client/src/ui.ts
@@ -2943,7 +2996,13 @@ function install() {
       else sender.setPlaced(false);
     }
   });
-  const outbox = new Outbox((submission) => socket.comment(submission));
+  const outbox = new Outbox(async (submission) => {
+    const outcome = await socket.comment(submission);
+    if (submission.choice !== void 0 && "refused" in outcome && outcome.refused.choiceRefused === true) {
+      answers.remove(submission.selector.slice(AGENT_TARGET_PREFIX.length));
+    }
+    return outcome;
+  });
   const changeSettings = async (change) => {
     const before = remembered();
     remember(change);
@@ -2951,7 +3010,7 @@ function install() {
     if (outcome !== "saved" && socket.isOpen) keep(before);
     return outcome;
   };
-  const answers = new Answers(ui);
+  const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref));
   const dialog = new CommentDialog(ui, outbox, () => pending);
   const list = new CommentList(ui, outbox);
   const panel = new Panel(ui, changeSettings);
@@ -3054,6 +3113,9 @@ function install() {
         break;
       case "reload":
         onRevision(slice.revision);
+        break;
+      case "answer_resolved":
+        answers.remove(slice.id);
         break;
       case "answer":
         answers.add(slice);

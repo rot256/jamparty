@@ -217,6 +217,7 @@ async fn handle(
                     RequestKind::Comment => {
                         let outcome = CommentOutcome::Refused {
                             error,
+                            choice_refused: None,
                             retry_after: None,
                         };
                         session.reply_comment(page, n, outcome);
@@ -239,6 +240,7 @@ async fn handle(
             if comments.len() >= MAX_IN_FLIGHT {
                 let outcome = CommentOutcome::Refused {
                     error: "too many comments on their way; try again shortly".to_owned(),
+                    choice_refused: None,
                     retry_after: None,
                 };
                 session.reply_comment(page, submission.n, outcome);

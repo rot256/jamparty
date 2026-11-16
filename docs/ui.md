@@ -199,10 +199,45 @@ text. Rows:
   (in the answer-meta style, `#7b3221`, 11 px, bold).
 - The `jamparty agent` guides describe `--to`.
 
+## Multiple-choice questions
+
+- `jamparty send --choice "Keep it" --choice "Make it bigger" 'Which heading size?'`
+  adds buttons below the answer's Markdown. Offer 2–6 distinct, nonblank,
+  single-line plain-text labels, at most 80 characters each. The share and
+  joiner both enforce the caps; labels render as text, never HTML.
+- Audience rules are the same as other answers: without an explicit `--to`,
+  an anchor addresses its author; without an anchor it addresses everyone.
+- Targeted questions to connected recipients without choices support are refused;
+  send them without `--choice`. Disconnected anchor authors have unknown support:
+  sending is allowed, and supporting joiners receive catch-up. Older joiners
+  never see these questions. Broadcast questions remain allowed.
+- One click submits an ordinary comment with selector
+  `jamparty-agent:<answer id>`; `comment` and optional `choice` both hold the
+  selected label. The share sets the author and checks the audience and label.
+  Picks use the same queue, rate limits and per-key ref deduplication as comments.
+- The first valid pick the share can queue wins. The question disappears
+  from every page, including the picker's, which shows a brief
+  `You chose: <label>` confirmation. A late pick is quietly refused and its
+  page removes the question. An unsuccessful delivery can be retried.
+- Answered questions are omitted from catch-up, including for the picker.
+  Open questions are cleared on disconnect and replayed on admission, so a
+  resolution missed during reconnect cannot leave a stale question visible.
+  Resolved records share the same 100-entry bound as other answers.
+- Right-clicking a question still opens a typed comment. Typed comments do
+  not select a choice or resolve the question.
+
 ## Protocol (summary)
 
 All of this is part of the version-1 wire format.
 
+- Joiner hello advertises `choices: true`; missing means unsupported. A share
+  sends neither choice questions nor `answer_resolved` to older joiners,
+  including during catch-up. Ordinary answers still reach them.
+- Agent socket `send` and control `answer` gain optional `choices` labels.
+  Control comment drafts and page submissions gain optional `choice`;
+  the version-1 comment NDJSON gains only that optional field.
+  Control `answer_resolved` and page `answer_resolved` carry the answer id;
+  control acknowledgements gain `choice_refused`. Page answers include `choices`.
 - Joiner → share: `presence` updates (name change, current URL, cursor on
   or off), `cursor` messages (selector, fractional offset; only while on),
   both rate-limited at the share as well.

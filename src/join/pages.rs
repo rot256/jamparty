@@ -150,6 +150,7 @@ impl Pages {
             | ToPage::Mine { .. }
             | ToPage::Settings(_)
             | ToPage::Reload { .. }
+            | ToPage::AnswerResolved { .. }
             | ToPage::Answer(_)
             | ToPage::CommentReply { .. }
             | ToPage::SettingsReply { .. }

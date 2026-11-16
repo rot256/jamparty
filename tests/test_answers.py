@@ -324,3 +324,217 @@ def test_timeout_panel_can_enable_and_disable(tmp_path: Path, page: Page) -> Non
         expect(bar).to_have_count(0)
         page.clock.fast_forward(3_600_001)
         expect(answer).to_be_visible()
+
+
+def test_multiple_choice_first_pick_wins(tmp_path: Path, browser: Browser) -> None:
+    without_answer_timeout(tmp_path / "alice")
+    without_answer_timeout(tmp_path / "bob")
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path / "alice", shared, "alice") as alice,
+        join(tmp_path / "bob", shared, "bob") as bob,
+        pages(browser, alice, bob) as (alice_page, bob_page),
+    ):
+        _ = jamparty(
+            tmp_path,
+            "send",
+            "Which heading size?",
+            "--choice",
+            "Keep it",
+            "--choice",
+            "Make it bigger",
+        )
+        alice_question = overlay(alice_page, ".agent-message")
+        bob_question = overlay(bob_page, ".agent-message")
+        expect(alice_question).to_contain_text("Which heading size?")
+        expect(bob_question).to_contain_text("Which heading size?")
+        answer_id = alice_question.get_attribute("data-message-id")
+        assert answer_id
+
+        # A typed reply remains an ordinary comment and keeps choices open.
+        alice_question.click(button="right")
+        overlay(alice_page, "textarea").fill("Could you explain?")
+        overlay(alice_page, "#send").click()
+        expect(overlay(alice_page, "#badge")).to_have_text("1 queued")
+        [line] = jamparty(tmp_path, "recv").splitlines()
+        typed = cast(dict[str, object], json.loads(line))
+        assert typed["comment"] == "Could you explain?"
+        assert "choice" not in typed
+        expect(alice_question.locator(".agent-choices button")).to_have_count(2)
+
+        bob_question.get_by_role("button", name="Make it bigger", exact=True).click()
+        expect(bob_question).to_have_count(0)
+        expect(alice_question).to_have_count(0)
+        expect(overlay(bob_page, "#toast")).to_have_text("You chose: Make it bigger")
+        [line] = jamparty(tmp_path, "recv").splitlines()
+        picked = cast(dict[str, object], json.loads(line))
+        assert picked["selector"] == f"jamparty-agent:{answer_id}"
+        assert picked["comment"] == "Make it bigger"
+        assert picked["choice"] == "Make it bigger"
+        overlay(bob_page, "#badge").click()
+        expect(overlay(bob_page, "#outbox-list li")).to_contain_text("Make it bigger")
+        author = cast(dict[str, object], picked["author"])
+        assert author["name"] == "bob"
+        link = cast(dict[str, object], hello(bob)["link"])
+        you = cast(dict[str, object], link["you"])
+        assert author["key"] == you["key"]
+
+        # A fresh joiner gets no answered question in control catch-up.
+        with (
+            join(tmp_path / "carol", shared, "carol") as carol,
+            pages(browser, carol) as (carol_page,),
+        ):
+            _ = jamparty(tmp_path, "send", "Catch-up complete.")
+            expect(overlay(carol_page, ".agent-message")).to_have_count(1)
+            expect(overlay(carol_page, ".agent-message")).to_contain_text(
+                "Catch-up complete."
+            )
+            expect(overlay(carol_page, ".agent-choices button")).to_have_count(0)
+        _ = bob_page.reload()
+        expect(overlay(bob_page, ".agent-choices button")).to_have_count(0)
+
+
+def test_choice_reload_retries_saved_ref(tmp_path: Path, page: Page) -> None:
+    from test_comments import HOLD_COMMENTS
+
+    without_answer_timeout(tmp_path)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        _ = jamparty(tmp_path, "send", "Pick one", "--choice", "Yes", "--choice", "No")
+        question = overlay(page, ".agent-message")
+        expect(question).to_be_visible()
+        _ = page.evaluate(HOLD_COMMENTS, None)
+        question.get_by_role("button", name="Yes", exact=True).click()
+        saved = cast(
+            list[dict[str, object]],
+            page.evaluate('JSON.parse(sessionStorage.getItem("jamparty-outbox-v1"))'),
+        )
+        [entry] = saved
+        assert cast(dict[str, object], entry["draft"])["choice"] == "Yes"
+        _ = page.reload()
+        expect(question).to_have_count(0)
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        retried = cast(
+            list[dict[str, object]],
+            page.evaluate('JSON.parse(sessionStorage.getItem("jamparty-outbox-v1"))'),
+        )
+        assert retried[0]["ref"] == entry["ref"]
+        [line] = jamparty(tmp_path, "recv").splitlines()
+        assert json.loads(line)["choice"] == "Yes"
+
+
+def test_late_choice_retry_is_quietly_removed(tmp_path: Path, page: Page) -> None:
+    from test_comments import HOLD_COMMENTS
+
+    without_answer_timeout(tmp_path)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        _ = jamparty(tmp_path, "send", "Pick one", "--choice", "Yes", "--choice", "No")
+        question = overlay(page, ".agent-message")
+        expect(question).to_be_visible()
+        _ = page.evaluate(HOLD_COMMENTS, {"unsent": {"error": "disconnected"}})
+        question.get_by_role("button", name="Yes", exact=True).click()
+        _ = page.evaluate("window.jampartyRelease()")
+        expect(overlay(page, "#toast")).to_contain_text("Choice not sent")
+        # Reload retries the saved pick; the joiner's late refusal removes it.
+        _ = page.add_init_script("""(() => {
+            const original = WebSocket.prototype.send;
+            WebSocket.prototype.send = function(data) {
+                const message = JSON.parse(data);
+                if (message.type !== "comment") return original.call(this, data);
+                queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+                    data: JSON.stringify({type: "comment_reply", to: message.n,
+                        outcome: {refused: {error: "question is no longer available", choiceRefused: true}}})
+                })));
+            };
+        })()""")
+        _ = page.reload()
+        expect(question).to_have_count(0)
+        expect(overlay(page, "#outbox-list li")).to_have_count(0)
+        expect(overlay(page, "#toast")).not_to_contain_text("not sent")
+
+
+def test_choice_lost_ack_reloads_without_duplicate(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.add_init_script("""(() => {
+            if (sessionStorage.getItem("lost-choice-ack")) return;
+            const Original = WebSocket;
+            window.WebSocket = class extends Original {
+                constructor(...args) {
+                    super(...args);
+                    this.addEventListener("message", event => {
+                        if (JSON.parse(event.data).type === "comment_reply") {
+                            sessionStorage.setItem("lost-choice-ack", "done");
+                            event.stopImmediatePropagation();
+                        }
+                    });
+                }
+            };
+        })()""")
+        _ = page.goto(joined.url)
+        _ = jamparty(tmp_path, "send", "Pick one", "--choice", "Yes", "--choice", "No")
+        question = overlay(page, ".agent-message")
+        expect(question).to_be_visible()
+        question.get_by_role("button", name="Yes", exact=True).click()
+        expect(question).to_have_count(0)
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        saved = cast(
+            list[dict[str, object]],
+            page.evaluate('JSON.parse(sessionStorage.getItem("jamparty-outbox-v1"))'),
+        )
+        assert saved[0]["state"] == "sending"
+        _ = page.reload()
+        page.wait_for_function("""() => {
+            const entries = JSON.parse(sessionStorage.getItem("jamparty-outbox-v1"));
+            return entries[0]?.state === "queued";
+        }""")
+        retried = cast(
+            list[dict[str, object]],
+            page.evaluate('JSON.parse(sessionStorage.getItem("jamparty-outbox-v1"))'),
+        )
+        assert retried[0]["ref"] == saved[0]["ref"]
+        [line] = jamparty(tmp_path, "recv").splitlines()
+        assert json.loads(line)["choice"] == "Yes"
+
+
+def test_full_outbox_keeps_question_and_reenables_choices(
+    tmp_path: Path, page: Page
+) -> None:
+    from support import SocketTap, hello
+    from test_comments import FILL_OUTBOX
+
+    without_answer_timeout(tmp_path)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        link = cast(dict[str, object], hello(joined)["link"])
+        key = cast(dict[str, object], link["you"])["key"]
+        _ = page.evaluate(FILL_OUTBOX, [20, key])
+        tap.hold = {"comment_reply"}
+        _ = page.reload()
+        expect(overlay(page, "#outbox-list li")).to_have_count(20)
+        _ = jamparty(tmp_path, "send", "Pick one", "--choice", "Yes", "--choice", "No")
+        question = overlay(page, ".agent-message")
+        yes = question.get_by_role("button", name="Yes", exact=True)
+        yes.click()
+        expect(overlay(page, "#toast")).to_have_text(
+            "20 comments are waiting to be sent; this one can go once they have"
+        )
+        expect(question).to_be_visible()
+        expect(yes).to_be_enabled()
+        expect(question.get_by_role("button", name="No", exact=True)).to_be_enabled()
+        expect(overlay(page, "#outbox-list li")).to_have_count(20)

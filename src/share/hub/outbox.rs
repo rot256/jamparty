@@ -128,8 +128,7 @@ impl<'a> Outbox<'a> {
             audience,
             message,
         } = outgoing;
-        audience
-            .includes(self.key)
+        (audience.includes(self.key) && self.presence.supports(&message))
             .then(|| self.presence.redact(message))
     }
 }

@@ -5,11 +5,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::{
-    ids::{CommentId, EndpointKey, Fingerprint},
-    invalid::Invalid,
-    name::JoinerName,
-    text::{check_len, check_text},
+use crate::{
+    core::{
+        ids::{CommentId, EndpointKey, Fingerprint},
+        invalid::Invalid,
+        name::JoinerName,
+        text::{check_len, check_line, check_text},
+    },
+    protocol::control::MAX_CHOICE,
 };
 
 pub(crate) const MAX_PAGE: usize = 4096;
@@ -104,6 +107,8 @@ pub(crate) struct DraftFields {
     pub(crate) selector: CommentSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) choice: Option<String>,
     pub(crate) comment: String,
 }
 
@@ -118,6 +123,9 @@ impl TryFrom<DraftFields> for Draft {
     fn try_from(fields: DraftFields) -> Result<Self, Self::Error> {
         if let Some(selected) = &fields.selected_text {
             check_len(selected, "selectedText", MAX_SELECTED_TEXT)?;
+        }
+        if let Some(choice) = &fields.choice {
+            check_line(choice, "choice", MAX_CHOICE)?;
         }
         check_text(&fields.comment, "comment", MAX_COMMENT)?;
         Ok(Self(fields))
@@ -141,6 +149,8 @@ pub(crate) struct Comment {
     pub(crate) selector: CommentSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) choice: Option<String>,
     pub(crate) comment: String,
 }
 
@@ -151,6 +161,7 @@ impl Comment {
             page,
             selector,
             selected_text,
+            choice,
             comment,
         } = draft.0;
         Self {
@@ -159,6 +170,7 @@ impl Comment {
             page,
             selector,
             selected_text,
+            choice,
             comment,
         }
     }
@@ -181,6 +193,7 @@ mod tests {
                 .try_into()
                 .unwrap(),
             selector: "main > h1".to_owned().try_into().unwrap(),
+            choice: None,
             selected_text: None,
             comment: comment.to_owned(),
         }

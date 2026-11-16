@@ -87,10 +87,11 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: RecvAccess) {
             },
         },
         AgentRequest::Send {
+            choices,
             message,
             anchor,
             to,
-        } => match hub.answer(message, anchor, to) {
+        } => match hub.answer(message, anchor, to, choices) {
             Ok(_) => AgentReply::Sent,
             Err(error) => AgentReply::Error {
                 error: error.to_string(),

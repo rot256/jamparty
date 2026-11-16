@@ -4,6 +4,7 @@ use crate::{
     core::{ids::EndpointKey, rng::SeededRng, settings::Switch, token::PartySecret},
     protocol::{
         MAX_LINE_BYTES,
+        agent::AgentRequest,
         comment::{Author, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT, MAX_SELECTOR},
         control::{
             AckOutcome, Anchor, CommentRef, Envelope, Hello, JoinerMessage, MAX_COMMENT_REF,
@@ -47,6 +48,7 @@ fn joiner_messages_round_trip() {
     }
     let hello = joiner(lines.first().unwrap()).unwrap();
     let JoinerMessage::Hello(Hello {
+        choices: false,
         secret: presented,
         name,
         jamparty,
@@ -138,6 +140,7 @@ fn a_maximal_draft_fits_in_a_line() {
     let draft = DraftFields {
         page: escaped(MAX_PAGE).try_into().unwrap(),
         selector: escaped(MAX_SELECTOR).try_into().unwrap(),
+        choice: None,
         selected_text: Some(escaped(MAX_SELECTED_TEXT)),
         comment: format!("x{}", escaped(MAX_COMMENT - 1)),
     };
@@ -192,7 +195,7 @@ fn share_messages() {
             r#"{"type":"comment_ack","ref":"9","outcome":{"result":"queue_full"}}"#.to_owned(),
         ),
         (
-            ShareMessage::Answer {
+            ShareMessage::Answer { choices: Default::default(),
                 id: ID.parse().unwrap(),
                 message: "Done.".to_owned().try_into().unwrap(),
                 anchor: Some(Anchor { comment: ID.parse().unwrap(), page: "/".to_owned().try_into().unwrap(), selector: "h1".to_owned().try_into().unwrap() }),
@@ -201,11 +204,11 @@ fn share_messages() {
             format!(r#"{{"type":"answer","id":"{ID}","message":"Done.","anchor":{{"comment":"{ID}","page":"/","selector":"h1"}}}}"#),
         ),
         (
-            ShareMessage::Answer { id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None, to: None },
+            ShareMessage::Answer { choices: Default::default(), id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None, to: None },
             format!(r#"{{"type":"answer","id":"{ID}","message":"Hi"}}"#),
         ),
         (
-            ShareMessage::Answer { id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None, to: Some(EndpointKey([0xab; 32])) },
+            ShareMessage::Answer { choices: Default::default(), id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None, to: Some(EndpointKey([0xab; 32])) },
             format!(r#"{{"type":"answer","id":"{ID}","message":"Hi","to":"{key}"}}"#),
         ),
         (
@@ -301,5 +304,31 @@ fn site_announcements() {
         r#"{"kind":"proxy","port":"1313"}"#,
     ] {
         assert!(admitted(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn choices_are_capped_on_both_sides() {
+    use crate::protocol::control::{Choices, MAX_CHOICE, MAX_CHOICES};
+    let valid = vec!["Keep it".to_owned(), "Make it bigger".to_owned()];
+    assert!(Choices::try_from(valid.clone()).is_ok());
+    for labels in [
+        vec!["Only one".to_owned()],
+        vec!["x".to_owned(); MAX_CHOICES + 1],
+        vec!["x".repeat(MAX_CHOICE + 1), "y".to_owned()],
+        vec!["x\ny".to_owned(), "y".to_owned()],
+        vec![" ".to_owned(), "y".to_owned()],
+        vec!["x".to_owned(), "x".to_owned()],
+    ] {
+        for message in [
+            serde_json::json!({"type":"answer", "id": ID, "message":"Size?", "choices":labels}),
+            serde_json::json!({"type":"send", "message":"Size?", "choices":labels}),
+        ] {
+            if message.get("type").and_then(serde_json::Value::as_str) == Some("answer") {
+                assert!(serde_json::from_value::<ShareMessage>(message).is_err());
+            } else {
+                assert!(serde_json::from_value::<AgentRequest>(message).is_err());
+            }
+        }
     }
 }

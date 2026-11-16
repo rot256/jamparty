@@ -5,7 +5,7 @@ use crate::{
     protocol::{
         agent::{Addressee, KEY_PREFIX},
         comment::Author,
-        control::{AnswerText, ShareMessage},
+        control::{AnswerText, Choices, ShareMessage},
     },
     share::hub::{Addressed, Audience, Hub, MAX_ANSWERS},
 };
@@ -20,6 +20,7 @@ impl Hub {
         message: AnswerText,
         anchor: Option<CommentId>,
         to: Option<Addressee>,
+        choices: Choices,
     ) -> Result<Option<Author>, Invalid> {
         let named = match &to {
             Some(person @ (Addressee::Named(_) | Addressee::Key(_))) => {
@@ -27,7 +28,7 @@ impl Hub {
             }
             Some(Addressee::Everyone) | None => None,
         };
-        let (message, recipient) = {
+        let recipient = {
             let mut inner = self.lock();
             let anchor = match anchor {
                 None => None,
@@ -47,9 +48,25 @@ impl Hub {
                 (Some(Addressee::Everyone), _) | (None, None) => None,
                 (None, Some((_, author))) => Some(author.clone()),
             };
+            if !choices.is_empty()
+                && let Some(author) = &recipient
+            {
+                let seats: Vec<_> = inner
+                    .joiners
+                    .iter()
+                    .filter(|seat| seat.author.key == author.key)
+                    .collect();
+                if !seats.is_empty() && seats.iter().all(|seat| !seat.choices) {
+                    return Err(Invalid::new(format!(
+                        "{} runs an older jamparty that cannot show choices; send it without --choice",
+                        author.name
+                    )));
+                }
+            }
             let message = ShareMessage::Answer {
                 id: CommentId::generate(self.rng.as_ref()),
                 message,
+                choices,
                 anchor: anchor.map(|(anchor, _)| anchor),
                 to: recipient.as_ref().map(|author| author.key),
             };
@@ -61,7 +78,8 @@ impl Hub {
                 audience,
                 message: message.clone(),
             });
-            (Addressed { audience, message }, recipient)
+            self.send(audience, message);
+            recipient
         };
         match &recipient {
             Some(author) => {
@@ -69,8 +87,6 @@ impl Hub {
             }
             None => tracing::info!("answer sent to everyone"),
         }
-        let Addressed { audience, message } = message;
-        self.send(audience, message);
         Ok(recipient)
     }
 

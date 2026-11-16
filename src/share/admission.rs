@@ -22,6 +22,7 @@ pub(crate) fn admit(first: FirstLine, secret: &PartySecret) -> Result<JoinerName
                     secret: presented,
                     name,
                     jamparty: _,
+                    choices: _,
                 }),
         })) => {
             if secret.matches(&presented) {
@@ -60,6 +61,7 @@ mod tests {
 
     fn hello(secret: &PartySecret) -> Envelope<JoinerMessage> {
         JoinerMessage::Hello(Hello {
+            choices: false,
             secret: secret.clone(),
             name: "alice".parse().unwrap(),
             jamparty: JampartyVersion::current(),
@@ -82,6 +84,7 @@ mod tests {
         let draft = Draft::try_from(DraftFields {
             page: "/".to_owned().try_into().unwrap(),
             selector: "body".to_owned().try_into().unwrap(),
+            choice: None,
             selected_text: None,
             comment: "hi".to_owned(),
         })

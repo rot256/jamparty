@@ -631,4 +631,10 @@ export const styles = `
     .agent-timeout { animation-timing-function: steps(var(--answer-timeout-steps), end); }
   }
   #answer-timeout { width: 60px; min-width: 0; }
+
+  .agent-choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .agent-choices:empty { display: none; }
+  .agent-choices button { border: 1px solid #b85a3c; border-radius: 5px; padding: 5px 9px;
+    background: #fff; color: #7b3221; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
+  .agent-choices button:disabled { opacity: .6; cursor: default; }
 `;
