@@ -404,7 +404,7 @@ def test_the_comment_list(tmp_path: Path, page: Page) -> None:
         expect(listed).to_be_visible()
         expect(overlay(page, "#bar")).to_be_hidden()
         expect(overlay(page, "#list-count")).to_have_text("2 queued")
-        expect(overlay(page, "#connection-text")).to_have_text("· connected")
+        expect(overlay(page, "#connection-text")).to_have_text("· connected · direct")
         rows = overlay(page, "#outbox-list li")
         expect(rows).to_have_count(2)
         expect(rows.nth(0).locator(".where")).to_have_text("page · just now")

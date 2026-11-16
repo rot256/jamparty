@@ -26,6 +26,10 @@ its own joiner's client.
   ref, so comments from before a joiner started over are never sent again
   by themselves (that would queue them twice); the person may send one
   again by hand.
+- The connection dot and pill tooltip show `connected · direct` or
+  `connected · relay` (or `mixed` / `unknown` when appropriate). The expanded
+  header shows the same state. Only the path label reaches the page, never
+  peer IP addresses or relay URLs.
 - Clicking the pill expands it upward into the comment list (below);
   clicking again, `▾`, or anywhere outside the list collapses it.
 - A gear button sits next to the pill and opens the control panel (below);

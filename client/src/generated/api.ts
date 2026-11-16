@@ -16,6 +16,8 @@ export const RESERVED_KEYS: readonly string[] = ["/", "Escape"];
 export const MODIFIER_KEYS: readonly string[] = ["Alt", "AltGraph", "CapsLock", "Control", "Fn", "FnLock", "Hyper", "Meta", "NumLock", "ScrollLock", "Shift", "Super", "Symbol"];
 export const PAGE_KEYS: readonly string[] = ["Enter", "Tab", " "];
 
+export type PathKind = "direct" | "relay" | "mixed" | "unknown";
+
 export type CommentId = string;
 
 export type CommentRef = string;
@@ -110,7 +112,11 @@ you: Author | null,
 /**
  * The share's status line.
  */
-status: StatusLine | null, };
+status: StatusLine | null, 
+/**
+ * Locally observed selected transport, never supplied by the share.
+ */
+path: PathKind | null, };
 
 export type Snapshot = { link: Link, 
 /**

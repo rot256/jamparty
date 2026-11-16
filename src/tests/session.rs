@@ -76,6 +76,7 @@ async fn comments_are_queued_with_the_author_from_admission() {
     let (_, hello) = PageSocket::hello(&joiner).await;
     assert_eq!(hello["mine"], json!([id]), "{hello}");
     assert_eq!(hello["link"]["connected"], true, "{hello}");
+    assert_eq!(hello["link"]["path"], "direct", "{hello}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -22,7 +22,10 @@ use tokio::{
 
 use crate::{
     Report,
-    adapters::{endpoint, lines},
+    adapters::{
+        endpoint, lines,
+        path::{self, PathKind},
+    },
     core::{
         ids::EndpointKey,
         name::JoinerName,
@@ -84,17 +87,22 @@ pub(crate) async fn handle(
                 return;
             };
             endpoint::admitted(&connection);
-            tracing::info!(name = %author.name, fingerprint = %author.fingerprint, "joiner admitted");
-            let ended = joined(
-                &connection,
-                send,
-                recv,
-                broadcasts,
-                seated,
-                &author,
-                &shared,
-            )
-            .await;
+            let initial = PathKind::from(&connection.paths());
+            tracing::info!(name = %author.name, fingerprint = %author.fingerprint, path = %initial, "joiner admitted");
+            let ended = tokio::select! {
+                () = path::changes(&connection, initial, |path| {
+                    tracing::info!(name = %author.name, fingerprint = %author.fingerprint, %path, "joiner path changed");
+                }) => Left::ConnectionClosed,
+                ended = joined(
+                    &connection,
+                    send,
+                    recv,
+                    broadcasts,
+                    seated,
+                    &author,
+                    &shared,
+                ) => ended,
+            };
             tracing::info!(name = %author.name, fingerprint = %author.fingerprint, reason = %ended, "joiner left");
             connection.close(VarInt::from_u32(DROPPED_CODE), ended.as_str().as_bytes());
         }

@@ -10,6 +10,7 @@ use std::collections::{BTreeSet, VecDeque};
 use serde::Serialize;
 
 use crate::{
+    adapters::path::PathKind,
     core::{ids::CommentId, settings::Switch},
     join::{
         api::ToPage,
@@ -50,6 +51,8 @@ pub(crate) struct Link {
     pub(crate) you: Option<Author>,
     /// The share's status line.
     pub(crate) status: Option<StatusLine>,
+    /// Locally observed selected transport, never supplied by the share.
+    pub(crate) path: Option<PathKind>,
 }
 
 /// An answer as pages show it: rendered Markdown, and where it belongs.
@@ -217,6 +220,7 @@ impl State {
         self.mine.admitted(undelivered)?;
         self.link = Link {
             connected: true,
+            path: None,
             refused: None,
             you: Some(you),
             status: None,
@@ -224,10 +228,16 @@ impl State {
         Ok(vec![ToPage::Link(self.link.clone()), self.mine_message()])
     }
 
+    pub(crate) fn path(&mut self, path: PathKind) -> Vec<ToPage> {
+        self.link.path = Some(path);
+        vec![ToPage::Link(self.link.clone())]
+    }
+
     /// The connection is gone (or never came up); `refused` when for good.
     pub(crate) fn disconnected(&mut self, refused: Option<RefusedReason>) -> Vec<ToPage> {
         let link = Link {
             connected: false,
+            path: None,
             refused,
             you: self.link.you.clone(),
             status: self.link.status.clone(),

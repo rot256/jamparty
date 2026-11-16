@@ -98,6 +98,7 @@ async fn stopping_a_joiner_does_not_report_a_lost_connection() {
     .unwrap();
     within("stopping the joiner", joiner.stop()).await;
     let log = captured.text();
+    assert!(log.contains("connected to the share (direct)"), "{log}");
     assert!(!log.contains("lost the connection"), "{log}");
     assert!(!log.contains("retrying"), "{log}");
 }
@@ -121,6 +122,12 @@ async fn stopping_a_share_does_not_report_joiners_leaving() {
     within("stopping the share", share.stop()).await;
     let log = captured.all();
     assert!(log.contains("joiner admitted name=stopping-share"), "{log}");
+    assert!(
+        log.lines()
+            .any(|line| line.contains("joiner admitted name=stopping-share")
+                && line.contains("path=direct")),
+        "{log}"
+    );
     assert!(!log.contains("joiner left name=stopping-share"), "{log}");
     for joiner in joiners {
         joiner.stop().await;

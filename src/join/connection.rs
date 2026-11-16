@@ -12,7 +12,10 @@ use tokio::{io::BufReader, sync::oneshot, time};
 
 use crate::{
     Report,
-    adapters::{endpoint, lines},
+    adapters::{
+        endpoint, lines,
+        path::{self, PathKind},
+    },
     core::{
         queue::backoff,
         text::OneLineReport,
@@ -217,10 +220,19 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
             "the share claims more pending comments than a share keeps"
         ));
     }
+    let initial = PathKind::from(&control.connection.paths());
+    session.path(initial);
     if let Some(first) = first.take() {
         let _ = first.send(Ok(welcome));
     }
-    receive(&mut recv, &control, session).await;
+    tracing::info!("connected to the share ({initial})");
+    tokio::select! {
+        () = receive(&mut recv, &control, session) => {},
+        () = path::changes(&control.connection, initial, |path| {
+            session.path(path);
+            tracing::info!("now {path}");
+        }) => {},
+    }
     control.connection.close(VarInt::from_u32(0), b"bye");
     Ended::Lost
 }

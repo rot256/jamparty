@@ -479,6 +479,7 @@ var Connection = class {
       colour = "grey";
       text = this.link.status;
     }
+    if (colour === "green" && this.link?.path) text += ` · ${this.link.path}`;
     return { colour, text };
   }
   setOpen(open) {

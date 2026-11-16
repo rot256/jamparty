@@ -37,6 +37,7 @@ def test_the_pill_holds_the_dot_and_follows_the_state(
             _ = page.goto(url)
             dot = overlay(page, "#pill > #connection")
             expect(dot).to_have_attribute("data-state", "green")
+            expect(dot).to_have_attribute("title", "connected · direct")
             expect(dot).to_have_css("background-color", "rgb(47, 158, 68)")
             expect(overlay(page, "#pill")).to_contain_text("0 queued")
             expect(overlay(page, "#bar > #gear")).to_be_visible()

@@ -6,5 +6,6 @@ pub(crate) mod endpoint;
 pub(crate) mod http;
 pub(crate) mod lines;
 pub(crate) mod output;
+pub(crate) mod path;
 pub(crate) mod runtime;
 pub(crate) mod settings;

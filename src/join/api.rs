@@ -164,6 +164,7 @@ mod bindings {
     use ts_rs::{Config, TS};
 
     use crate::{
+        adapters::path::PathKind,
         core::{
             ids::{CommentId, EndpointKey, Fingerprint},
             name::{JoinerName, MAX_NAME},
@@ -196,6 +197,7 @@ mod bindings {
         // Numbers in this API (revisions, counts, seconds) stay far below 2^53.
         let cfg = Config::new().with_large_int("number");
         let decls = [
+            PathKind::decl(&cfg),
             CommentId::decl(&cfg),
             CommentRef::decl(&cfg),
             CommentPage::decl(&cfg),

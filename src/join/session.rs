@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::watch;
 
 use crate::{
+    adapters::path::PathKind,
     core::{ids::CommentId, name::JoinerName, settings::Switch, version::Incompatible},
     join::{
         api::{Change, CommentOutcome, RequestNumber, SettingsOutcome, Submission, ToPage},
@@ -140,6 +141,10 @@ impl Session {
             Dropped::Some => self.uplink.changed(),
             Dropped::None => {}
         }
+    }
+
+    pub(crate) fn path(&self, path: PathKind) {
+        self.commit(|inner| inner.state.path(path).into());
     }
 
     pub(crate) fn uplink(&self) -> &Uplink {
