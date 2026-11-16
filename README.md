@@ -45,9 +45,3 @@ jamparty send "Fixed, thanks."       # to everyone
 jamparty send --anchor <id> "Done."  # next to a comment, to its author
 jamparty send --to alice "…"         # to one person (or --to key:<fingerprint>)
 ```
-
-## Release
-
-```sh
-git tag -a v0.1.0 -m "Release v0.1.0" && git push origin v0.1.0
-```
