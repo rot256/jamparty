@@ -81,7 +81,7 @@ jobs:
       matrix:
         include:
           - name: macOS ARM64
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             force-cross: false
           - name: Linux AMD64
