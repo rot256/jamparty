@@ -1,4 +1,4 @@
-// The first-join name prompt: "Join the potluck." over a dimmed page,
+// The first-join name prompt: "Join the Jam." over a dimmed page,
 // until the joiner has a name chosen (or one given with --name).
 
 import type { PageSettings } from "./generated/api";

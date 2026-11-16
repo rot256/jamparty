@@ -148,7 +148,7 @@ def test_the_name_prompt_and_settings_kept_for_the_share(
                 _ = page.goto(joined.url)
                 prompt = overlay(page, "#name-dialog")
                 expect(prompt).to_be_visible()
-                expect(prompt).to_contain_text("Join the potluck.")
+                expect(prompt).to_contain_text("Join the Jam.")
                 expect(prompt).to_contain_text(
                     "Remembered for this share in this browser; change it under the gear."
                 )

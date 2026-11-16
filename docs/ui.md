@@ -158,7 +158,7 @@ text. Rows:
 ## Name
 
 - On first open, if no name is chosen, the page shows a small dialog over
-  a dimmed page: "Join the potluck.", one Name field (prefilled with the
+  a dimmed page: "Join the Jam.", one Name field (prefilled with the
   current default), a Join button, and the line "Remembered for this share
   in this browser; change it under the gear." The control panel gains a
   name field to change it later.

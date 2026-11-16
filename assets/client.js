@@ -2769,7 +2769,7 @@ var MARKUP = `
   <dialog id="name-dialog" aria-labelledby="name-heading">
     <form id="name-form">
       <div id="name-title">
-        <strong id="name-heading">Join the potluck.</strong>
+        <strong id="name-heading">Join the Jam.</strong>
         <span>Your name is shown next to your comments and your cursor.</span>
       </div>
       <label for="name-input">Name</label>
