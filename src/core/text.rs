@@ -3,7 +3,9 @@
 
 use std::fmt::{self, Write};
 
-use crate::core::invalid::Invalid;
+use rootcause::option_ext::NoneError;
+
+use crate::{Report, core::invalid::Invalid};
 
 /// Text from the other side, for logs and the terminal: what the share
 /// sends a joiner (its lines, responses and pages, and errors quoting
@@ -17,6 +19,28 @@ pub(crate) struct Untrusted<T>(pub(crate) T);
 impl<T: fmt::Display> fmt::Display for Untrusted<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(Escaping(f), "{}", self.0)
+    }
+}
+
+/// A report for logs and the terminal: escaped contexts, outermost first,
+/// without the diagnostic tree, source locations or `Option`'s marker.
+pub(crate) struct OneLineReport<'a>(pub(crate) &'a Report);
+
+impl fmt::Display for OneLineReport<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut separator = "";
+        for report in self.0.iter_reports() {
+            if report.downcast_current_context::<NoneError>().is_some() {
+                continue;
+            }
+            write!(
+                f,
+                "{separator}{}",
+                Untrusted(report.format_current_context())
+            )?;
+            separator = ": ";
+        }
+        Ok(())
     }
 }
 
@@ -83,12 +107,27 @@ pub(crate) fn check_len(value: &str, field: &str, max_chars: usize) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use crate::core::text::{Untrusted, check_len, check_line, check_text};
+    use crate::core::text::{OneLineReport, Untrusted, check_len, check_line, check_text};
 
     #[test]
     fn untrusted_text_has_its_controls_escaped() {
         let shown = Untrusted("a\r\nFORGED\u{1b}[2J\u{202e}b\tc é").to_string();
         assert_eq!(shown, "a\\r\\nFORGED\\u{1b}[2J\\u{202e}b\\tc é");
+    }
+
+    #[test]
+    fn reports_show_only_the_escaped_context_chain() {
+        use rootcause::{option_ext::OptionExt, prelude::report};
+
+        let error: crate::Report = report!("permission denied\nFORGED")
+            .context("could not read file")
+            .into();
+        let shown = OneLineReport(&error).to_string();
+        assert_eq!(shown, r"could not read file: permission denied\nFORGED");
+        assert!(!shown.contains('\n'));
+        assert!(!shown.contains("src/"));
+        let missing: crate::Report = None::<()>.context("the share stopped").unwrap_err().into();
+        assert_eq!(OneLineReport(&missing).to_string(), "the share stopped");
     }
 
     #[test]

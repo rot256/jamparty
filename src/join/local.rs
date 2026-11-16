@@ -42,7 +42,7 @@ use crate::{
             FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade,
             is_navigation,
         },
-        text::Untrusted,
+        text::{OneLineReport, Untrusted},
     },
     join::{control::Control, session::Session, socket},
 };
@@ -250,7 +250,7 @@ async fn forward(
     let permit = Arc::new(permit);
     let limits = proxy.limits;
     let unreachable = |error: Report| {
-        tracing::debug!(error = %Untrusted(&error), "could not forward to the share");
+        tracing::debug!(error = %OneLineReport(&error), "could not forward to the share");
         RequestError::new(StatusCode::BAD_GATEWAY, "the share is not reachable")
     };
     let control = connection(session, connect_wait)

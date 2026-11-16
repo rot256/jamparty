@@ -170,9 +170,11 @@ async fn a_control_line_with_escapes_is_logged_escaped() {
     let line = log.lines().find(|line| is_forged(line)).unwrap();
     // On the one line, its line break and escape spelled out.
     assert!(
-        line.contains(r"\n │ FORGED LINE\u{1b}[2J"),
+        line.contains(r"error=invalid control line: unknown variant `\r\nFORGED LINE\u{1b}[2J`"),
         "{line:?} in {log:?}"
     );
+    assert!(!line.contains("src/"), "{line:?}");
+    assert!(!line.contains('│'), "{line:?}");
     assert!(!log.contains('\r'), "{log:?}");
     assert!(!log.contains('\u{1b}'), "{log:?}");
     assert!(

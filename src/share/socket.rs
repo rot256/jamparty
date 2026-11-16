@@ -16,6 +16,7 @@ use tokio::{
 
 use crate::{
     adapters::{lines, runtime},
+    core::text::OneLineReport,
     protocol::{
         agent::{AgentReply, AgentRequest},
         control::Envelope,
@@ -41,7 +42,9 @@ pub(crate) async fn serve(listener: UnixListener, hub: Arc<Hub>, recv: RecvAcces
                 Ok(()) => {
                     clients.spawn(handle(stream, Arc::clone(&hub), recv.clone()));
                 }
-                Err(error) => tracing::warn!(%error, "refused a runtime socket client"),
+                Err(error) => {
+                    tracing::warn!(error = %OneLineReport(&error), "refused a runtime socket client")
+                }
             },
             Err(error) => {
                 tracing::warn!(%error, "runtime socket accept failed");
@@ -66,7 +69,7 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: RecvAccess) {
             reply(
                 &mut write,
                 AgentReply::Error {
-                    error: format!("invalid request: {error}"),
+                    error: format!("invalid request: {}", OneLineReport(&error)),
                 },
             )
             .await;

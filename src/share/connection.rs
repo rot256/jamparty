@@ -26,7 +26,7 @@ use crate::{
     core::{
         ids::EndpointKey,
         name::JoinerName,
-        text::Untrusted,
+        text::{OneLineReport, Untrusted},
         version::{JampartyVersion, PROTOCOL},
     },
     protocol::{
@@ -102,7 +102,9 @@ pub(crate) async fn handle(
             tracing::info!(fingerprint = %key.fingerprint(), reason = reason.as_str(), "joiner refused");
             refuse(&connection, send, reason).await;
         }
-        Err(error) => tracing::debug!(error = %Untrusted(&error), "joiner left before admission"),
+        Err(error) => {
+            tracing::debug!(error = %OneLineReport(&error), "joiner left before admission")
+        }
     }
 }
 
@@ -158,7 +160,7 @@ async fn admission(
         ),
     };
     if let Err(error) = &first {
-        tracing::debug!(error = %Untrusted(&error), "no usable hello");
+        tracing::debug!(error = %OneLineReport(error), "no usable hello");
     }
     Ok(match admit(first, &shared.token.secret) {
         Ok(name) => Admission::Admitted {
@@ -291,7 +293,7 @@ async fn joined(
                 // leaving, not a bad line.
                 Err(_) if connection.close_reason().is_some() => return Left::ConnectionClosed,
                 Err(error) => {
-                    tracing::debug!(error = %Untrusted(&error), "invalid control line");
+                    tracing::debug!(error = %OneLineReport(&error), "invalid control line");
                     return Left::InvalidControlLine;
                 }
             };

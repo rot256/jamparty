@@ -23,7 +23,7 @@ use clap::{Args, Parser, Subcommand};
 use iroh::RelayUrl;
 use nix::unistd;
 use rootcause::{
-    option_ext::{NoneError, OptionExt},
+    option_ext::OptionExt,
     prelude::{ResultExt, bail},
 };
 use tokio::{
@@ -47,7 +47,7 @@ use crate::{
         port::Port,
         rng::SystemRng,
         settings::{AnswerTimeout, KeyBinding, SettingsOverride},
-        text::{self, Untrusted},
+        text::{self, OneLineReport},
         token::{PartyToken, TokenError},
     },
     join::{JoinConfig, Joiner, ProxyLimits, Refused},
@@ -75,12 +75,7 @@ pub fn init_logging() {
 /// type …, but found None") says nothing to people and is left out.
 #[must_use]
 pub fn describe(error: &Report) -> String {
-    error
-        .iter_reports()
-        .filter(|report| report.downcast_current_context::<NoneError>().is_none())
-        .map(|report| Untrusted(report.format_current_context()).to_string())
-        .collect::<Vec<_>>()
-        .join(": ")
+    OneLineReport(error).to_string()
 }
 
 /// How long a page's request waits for the joiner to reach the share again

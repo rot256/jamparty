@@ -122,6 +122,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reports_in_retry_logs_are_one_line() {
+        use crate::core::text::OneLineReport;
+        use rootcause::prelude::report;
+
+        let capture = Capture::default();
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .event_format(Compact)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let error = report!("timed out");
+            tracing::info!(error = %OneLineReport(&error), "could not reach the share; retrying");
+            let error: crate::Report = error.context("could not connect").into();
+            tracing::info!(error = %OneLineReport(&error), "could not reach the share; retrying");
+        });
+        assert_eq!(
+            String::from_utf8(capture.0.lock().unwrap().clone()).unwrap(),
+            "jamparty: could not reach the share; retrying error=timed out\njamparty: could not reach the share; retrying error=could not connect: timed out\n"
+        );
+    }
+
     /// Debug output that a hostile value fully controls.
     struct Raw(&'static str);
 

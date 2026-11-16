@@ -14,7 +14,7 @@ use tokio::{
 };
 
 use crate::{
-    core::text::Untrusted,
+    core::text::OneLineReport,
     join::session::{Admission, Session},
     protocol::presence::{PagePath, Position, Whereabouts},
 };
@@ -100,7 +100,7 @@ pub(crate) async fn run(session: Arc<Session>) {
                 }
                 last = Some(Instant::now());
                 if let Err(error) = control.tell(now.clone()).await {
-                    tracing::debug!(error = %Untrusted(&error), "could not report presence");
+                    tracing::debug!(error = %OneLineReport(&error), "could not report presence");
                     break;
                 }
                 told = Some(Told {
@@ -113,7 +113,7 @@ pub(crate) async fn run(session: Arc<Session>) {
                 && now.url.as_ref() == Some(&url)
                 && let Err(error) = control.cursor(position).await
             {
-                tracing::debug!(error = %Untrusted(&error), "could not send the cursor");
+                tracing::debug!(error = %OneLineReport(&error), "could not send the cursor");
             }
             if told
                 .as_ref()
