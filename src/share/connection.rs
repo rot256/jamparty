@@ -27,7 +27,7 @@ use crate::{
         ids::EndpointKey,
         name::JoinerName,
         text::Untrusted,
-        version::{JampotVersion, PROTOCOL},
+        version::{JampartyVersion, PROTOCOL},
     },
     protocol::{
         comment::Author,
@@ -171,13 +171,13 @@ async fn admission(
 }
 
 async fn refuse(connection: &Connection, mut send: SendStream, reason: RefusedReason) {
-    // Only a joiner of another protocol hears which jampot this is, to
+    // Only a joiner of another protocol hears which jamparty this is, to
     // install it; no other peer needs to know before admission.
-    let jampot = match reason {
-        RefusedReason::Incompatible => Some(JampotVersion::current()),
+    let jamparty = match reason {
+        RefusedReason::Incompatible => Some(JampartyVersion::current()),
         RefusedReason::WrongSecret | RefusedReason::BadHello | RefusedReason::Full => None,
     };
-    let refused = Envelope::from(ShareMessage::Refused { reason, jampot });
+    let refused = Envelope::from(ShareMessage::Refused { reason, jamparty });
     if lines::write(&mut send, &refused).await.is_ok() && send.finish().is_ok() {
         // Let the joiner read it and hang up; the close below carries the
         // reason too in case it does not.
@@ -247,7 +247,7 @@ async fn joined(
         undelivered: shared.hub.undelivered_by(author),
         presence: Support::Supported,
         site: shared.site.info(),
-        jampot: JampotVersion::current(),
+        jamparty: JampartyVersion::current(),
     }];
     if let Some(reload) = shared.site.reload() {
         greeting.push(ShareMessage::Reload {
@@ -366,17 +366,17 @@ pub(crate) struct VersionLog {
 
 impl VersionLog {
     fn incompatible(&self, greeting: &Greeting) {
-        let version = greeting.jampot().map_or_else(
-            || "another jampot".to_owned(),
-            |jampot| format!("jampot {jampot}"),
+        let version = greeting.jamparty().map_or_else(
+            || "another jamparty".to_owned(),
+            |jamparty| format!("jamparty {jamparty}"),
         );
         let protocol = greeting.version;
         if self.said.swap(true, Ordering::Relaxed) {
             tracing::debug!(%version, %protocol, "joiner refused: another protocol");
         } else {
             tracing::warn!(
-                "a joiner runs {version} (protocol {protocol}); this share runs jampot {} (protocol {PROTOCOL}) and refused it",
-                JampotVersion::current()
+                "a joiner runs {version} (protocol {protocol}); this share runs jamparty {} (protocol {PROTOCOL}) and refused it",
+                JampartyVersion::current()
             );
         }
     }

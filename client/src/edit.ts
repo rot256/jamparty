@@ -6,7 +6,7 @@
 //
 // Presses are taken on `window` in the capture phase, before any listener
 // on the document or below it, so a site's delegated handlers do not run.
-// (A site's own window capture listeners added before jampot loaded still
+// (A site's own window capture listeners added before jamparty loaded still
 // see them; nothing in the page can be ahead of those.)
 
 import type { CommentDialog } from "./dialog";
@@ -59,7 +59,7 @@ export class EditMode {
     this.outline(null);
   }
 
-  /** The page element an event is about, or null for jampot's own overlay. */
+  /** The page element an event is about, or null for jamparty's own overlay. */
   private pageTarget(event: Event): Element | null {
     if (event.composedPath().includes(this.ui.host)) return null;
     return event.target instanceof Element ? event.target : null;

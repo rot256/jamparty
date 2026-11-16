@@ -31,7 +31,7 @@ function stateText(state: ShownState): string {
     case "sending":
       return "sending";
     case "earlier":
-      // Queued under an earlier jampot join; this one cannot follow it.
+      // Queued under an earlier jamparty join; this one cannot follow it.
       return "sent earlier";
     case "queued":
     case "delivered":

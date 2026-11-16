@@ -37,7 +37,7 @@ pub(crate) struct NetConfig {
     pub(crate) discovery: Discovery,
     pub(crate) keep_alive: Duration,
     pub(crate) idle_timeout: Duration,
-    /// A self-hosted relay instead of n0's (`JAMPOT_RELAY`); public only.
+    /// A self-hosted relay instead of n0's (`JAMPARTY_RELAY`); public only.
     pub(crate) relay: Option<RelayUrl>,
 }
 
@@ -78,7 +78,7 @@ pub(crate) fn generate_key(rng: &dyn Rng) -> SecretKey {
     SecretKey::from_bytes(&bytes)
 }
 
-/// Binds an endpoint with `key`; `accept` says whether it accepts jampot
+/// Binds an endpoint with `key`; `accept` says whether it accepts jamparty
 /// connections (the share) or only dials out (the joiner).
 pub(crate) async fn bind(
     config: &NetConfig,
@@ -93,7 +93,7 @@ pub(crate) async fn bind(
     let transport = match accept {
         // Before admission a joiner may open only its control stream, and
         // the share buffers little for it; [`admitted`] raises both.
-        Accept::Jampot => transport
+        Accept::Jamparty => transport
             .max_concurrent_bidi_streams(VarInt::from_u32(1))
             .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))
             .receive_window(VarInt::from_u32(UNADMITTED_WINDOW)),
@@ -115,7 +115,7 @@ pub(crate) async fn bind(
             .bind_addr("127.0.0.1:0")?,
     };
     let alpns = match accept {
-        Accept::Jampot => vec![ALPN.to_vec()],
+        Accept::Jamparty => vec![ALPN.to_vec()],
         Accept::Nothing => Vec::new(),
     };
     Ok(builder
@@ -126,13 +126,13 @@ pub(crate) async fn bind(
         .await?)
 }
 
-/// n0's defaults ([`presets::N0`]) for an endpoint that accepts jampot
+/// n0's defaults ([`presets::N0`]) for an endpoint that accepts jamparty
 /// connections. One that only dials out resolves addresses as those do,
 /// and uses the same relays, but publishes none of its own: nobody needs
 /// to find a joiner, and its key and addresses are nobody's business.
 fn public(accept: Accept) -> Builder {
     match accept {
-        Accept::Jampot => Endpoint::builder(presets::N0),
+        Accept::Jamparty => Endpoint::builder(presets::N0),
         Accept::Nothing => Endpoint::builder(presets::Minimal)
             .address_lookup(PkarrResolver::n0_dns())
             .address_lookup(DnsAddressLookup::n0_dns())
@@ -142,7 +142,7 @@ fn public(accept: Accept) -> Builder {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Accept {
-    Jampot,
+    Jamparty,
     Nothing,
 }
 

@@ -21,7 +21,7 @@ pub(crate) fn admit(first: FirstLine, secret: &PartySecret) -> Result<JoinerName
                 JoinerMessage::Hello(Hello {
                     secret: presented,
                     name,
-                    jampot: _,
+                    jamparty: _,
                 }),
         })) => {
             if secret.matches(&presented) {
@@ -49,7 +49,7 @@ mod tests {
     use rootcause::prelude::report;
 
     use crate::{
-        core::version::JampotVersion,
+        core::version::JampartyVersion,
         core::{rng::SeededRng, token::PartySecret},
         protocol::{
             comment::{Draft, DraftFields},
@@ -62,7 +62,7 @@ mod tests {
         JoinerMessage::Hello(Hello {
             secret: secret.clone(),
             name: "alice".parse().unwrap(),
-            jampot: JampotVersion::current(),
+            jamparty: JampartyVersion::current(),
         })
         .into()
     }

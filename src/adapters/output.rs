@@ -1,4 +1,4 @@
-//! Terminal output for logs: by default `jampot: [warning: ]message
+//! Terminal output for logs: by default `jamparty: [warning: ]message
 //! key=value`, uncoloured, with control characters escaped whatever a
 //! field holds; an explicit RUST_LOG gets fmt's detailed format.
 
@@ -22,7 +22,7 @@ use crate::core::text::Untrusted;
 /// Installs the global log subscriber, writing to stderr.
 pub(crate) fn init() {
     let detailed = std::env::var_os("RUST_LOG").is_some();
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "jampot=info".into());
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "jamparty=info".into());
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(io::stderr)
@@ -58,7 +58,7 @@ where
             Level::DEBUG => "debug: ",
             Level::TRACE => "trace: ",
         };
-        writeln!(writer, "jampot: {level}{}{}", fields.message, fields.rest)
+        writeln!(writer, "jamparty: {level}{}{}", fields.message, fields.rest)
     }
 }
 
@@ -118,7 +118,7 @@ mod tests {
         });
         assert_eq!(
             String::from_utf8(capture.0.lock().unwrap().clone()).unwrap(),
-            "jampot: joiner admitted name=alice fingerprint=abab\njampot: warning: share is full\njampot: error: delivery failed attempts=3\n"
+            "jamparty: joiner admitted name=alice fingerprint=abab\njamparty: warning: share is full\njamparty: error: delivery failed attempts=3\n"
         );
     }
 
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn control_characters_are_escaped_in_every_field() {
-        const EVIL: &str = "a\r\njampot: FORGED\u{1b}[2J\u{202e}b";
+        const EVIL: &str = "a\r\njamparty: FORGED\u{1b}[2J\u{202e}b";
         let capture = Capture::default();
         let writer = capture.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -153,7 +153,7 @@ mod tests {
             "{output:?}"
         );
         assert!(
-            output.contains(r"jampot: said a\r\njampot: FORGED\u{1b}[2J\u{202e}b display="),
+            output.contains(r"jamparty: said a\r\njamparty: FORGED\u{1b}[2J\u{202e}b display="),
             "{output:?}"
         );
     }

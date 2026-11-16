@@ -148,7 +148,7 @@ pub(crate) async fn joiner(token: PartyToken, addrs: Vec<SocketAddr>, name: &str
     joiner_with_key(token, addrs, name, generate_key(&SystemRng)).await
 }
 
-/// Starts a joiner of `share` on `port` (none: as `jampot join` without
+/// Starts a joiner of `share` on `port` (none: as `jamparty join` without
 /// `--port`); fails if the share refuses it or the port cannot be had.
 pub(crate) async fn joiner_on(share: &Share, port: Option<Port>) -> Result<Joiner, Report> {
     start_joiner(
@@ -254,7 +254,7 @@ pub(crate) async fn try_joiner_with(
 /// A settings file in a directory of its own, never created.
 fn settings_path() -> PathBuf {
     env::temp_dir()
-        .join(format!("jampot-test-{}", uuid::Uuid::new_v4()))
+        .join(format!("jamparty-test-{}", uuid::Uuid::new_v4()))
         .join("settings.json")
 }
 
@@ -539,7 +539,7 @@ pub(crate) fn about(messages: Vec<Value>) -> Vec<Value> {
 }
 
 /// The joiner's page socket.
-pub(crate) const SOCKET: &str = "/_jampot/api/socket";
+pub(crate) const SOCKET: &str = "/_jamparty/api/socket";
 
 /// A WebSocket handshake for the joiner's socket, `origin` as given; for
 /// checking refusals.

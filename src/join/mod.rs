@@ -1,4 +1,4 @@
-//! The joiner (`jampot join`): connects to the share and runs the local
+//! The joiner (`jamparty join`): connects to the share and runs the local
 //! HTTP server the browser talks to.
 
 mod api;
@@ -53,7 +53,7 @@ use crate::{
         request::LocalOrigin,
         settings::SettingsOverride,
         token::PartyToken,
-        version::{Incompatible, JampotVersion, mismatch_note},
+        version::{Incompatible, JampartyVersion, mismatch_note},
     },
     join::{
         connection::{Dial, Final, Welcome},
@@ -75,7 +75,7 @@ pub(crate) struct JoinConfig {
     /// defaults, never written.
     pub(crate) settings: PathBuf,
     pub(crate) overrides: SettingsOverride,
-    /// The joiner's iroh key for this run: `jampot join` makes a fresh one
+    /// The joiner's iroh key for this run: `jamparty join` makes a fresh one
     /// each time and never stores it; reconnects keep it.
     pub(crate) key: SecretKey,
     pub(crate) net: NetConfig,
@@ -103,8 +103,8 @@ impl fmt::Display for Refused {
         let why = match self.0 {
             RefusedReason::WrongSecret => "the token is wrong or from an earlier run",
             RefusedReason::BadHello => {
-                "it could not read this joiner's hello: the share may run another jampot \
-                 version (compare `jampot --version` on both sides), or the token is wrong"
+                "it could not read this joiner's hello: the share may run another jamparty \
+                 version (compare `jamparty --version` on both sides), or the token is wrong"
             }
             RefusedReason::Full => "it has as many joiners as it takes",
             RefusedReason::Incompatible => "it speaks another protocol version",
@@ -316,8 +316,8 @@ fn with_ipv6(v4: TcpListener) -> io::Result<Vec<TcpListener>> {
 pub(crate) struct Joiner {
     endpoint: Endpoint,
     session: Arc<Session>,
-    /// The share's jampot, as it said on admission.
-    share_version: JampotVersion,
+    /// The share's jamparty, as it said on admission.
+    share_version: JampartyVersion,
     origin: Arc<LocalOrigin>,
     #[cfg(test)]
     proxy: Arc<Proxy>,
@@ -365,7 +365,7 @@ impl Joiner {
         let (first, admitted) = oneshot::channel();
         tasks.spawn(connection::run(dial, Arc::clone(&session), first));
         tasks.spawn(uplink::run(Arc::clone(&session)));
-        let Welcome { site, jampot } = match admitted.await {
+        let Welcome { site, jamparty } = match admitted.await {
             Ok(Ok(welcome)) => welcome,
             Ok(Err(ended)) => {
                 endpoint.close().await;
@@ -398,7 +398,7 @@ impl Joiner {
         Ok(Self {
             endpoint,
             session,
-            share_version: jampot,
+            share_version: jamparty,
             origin,
             #[cfg(test)]
             proxy,
@@ -409,7 +409,7 @@ impl Joiner {
         })
     }
 
-    /// A line to say when the share runs another jampot of the same
+    /// A line to say when the share runs another jamparty of the same
     /// protocol.
     #[must_use]
     pub(crate) fn version_note(&self) -> Option<String> {
@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn a_hello_the_share_cannot_read_may_mean_another_version() {
         let said = Refused(RefusedReason::BadHello).to_string();
-        assert!(said.contains("another jampot version"), "{said}");
+        assert!(said.contains("another jamparty version"), "{said}");
         let said = Refused(RefusedReason::WrongSecret).to_string();
         assert!(said.contains("the token is wrong"), "{said}");
     }

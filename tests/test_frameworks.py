@@ -1,8 +1,8 @@
-"""Real dev servers through `jampot proxy` and `jampot join`.
+"""Real dev servers through `jamparty proxy` and `jamparty join`.
 
 Each dev server listens on 127.0.0.2, where the page cannot reach it but
-through jampot (as on another machine; on Linux all of 127/8 is loopback).
-For each framework the page loads through the joiner with jampot's
+through jamparty (as on another machine; on Linux all of 127/8 is loopback).
+For each framework the page loads through the joiner with jamparty's
 overlay, editing a source file updates the page by itself, every
 WebSocket the page opens goes to the page's own host and port, and no
 console error is about origins, hosts or blocking.
@@ -10,8 +10,8 @@ console error is about origins, hosts or blocking.
 Run with `uv run pytest -m frameworks` (Linux x86-64; Node.js 22.23 or
 later and npm on PATH). npm projects are installed from their lockfiles
 into a copy of the fixture; Hugo and Zola are downloaded once, checked
-against their release's SHA-256, into $JAMPOT_TOOLS_DIR (default:
-~/.cache/jampot-tests).
+against their release's SHA-256, into $JAMPARTY_TOOLS_DIR (default:
+~/.cache/jamparty-tests).
 """
 
 import enum
@@ -38,13 +38,13 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import ConsoleMessage, Page, WebSocket, expect
-from support import ROOT, jampot, join, join_process, share
+from support import ROOT, jamparty, join, join_process, share
 
 pytestmark = pytest.mark.frameworks
 
 FIXTURES = ROOT / "tests/fixtures/frameworks"
 DEV_HOST = "127.0.0.2"
-MARKER = re.compile(r"jampot-marker-\d+")
+MARKER = re.compile(r"jamparty-marker-\d+")
 # Dev servers compile on first load; a loaded CI machine is slow.
 LOAD = 90_000
 # "By itself, within a few seconds", with room for a loaded machine.
@@ -53,7 +53,9 @@ UPDATE = 15_000
 # none in flight has settled.
 QUIET = 1.0
 STARTUP = 120.0
-TOOLS = Path(os.environ.get("JAMPOT_TOOLS_DIR", Path.home() / ".cache/jampot-tests"))
+TOOLS = Path(
+    os.environ.get("JAMPARTY_TOOLS_DIR", Path.home() / ".cache/jamparty-tests")
+)
 COMPLAINT = re.compile(r"origin|host|blocked", re.IGNORECASE)
 
 
@@ -348,8 +350,8 @@ def watch(page: Page, long_lived: tuple[str, ...] = ()) -> Watched:
     watched = Watched()
 
     def started(request: object, url: str) -> None:
-        # jampot's own (its client, status and socket) are not the site's.
-        if "/_jampot/" in url or any(part in url for part in long_lived):
+        # jamparty's own (its client, status and socket) are not the site's.
+        if "/_jamparty/" in url or any(part in url for part in long_lived):
             return
         watched.in_flight[request] = url
         watched.last = time.monotonic()
@@ -404,7 +406,7 @@ def own_host(page: Page) -> str:
 @pytest.mark.parametrize(
     "framework", FRAMEWORKS, ids=[framework.name for framework in FRAMEWORKS]
 )
-def test_live_reload_through_jampot(
+def test_live_reload_through_jamparty(
     framework: Framework,
     sites: Callable[[str], Path],
     tmp_path: Path,
@@ -428,16 +430,16 @@ def test_live_reload_through_jampot(
                 assert joined.port != port
         watched = watch(page, framework.long_lived)
         _ = page.goto(joined.url, timeout=LOAD)
-        expect(page.locator("#jampot")).to_be_attached(timeout=LOAD)
+        expect(page.locator("#jamparty")).to_be_attached(timeout=LOAD)
         marker = page.locator("#marker")
         expect(marker).to_have_text(MARKER, timeout=LOAD)
         # Let the dev server's client connect before the change.
-        expect(page.locator("#jampot #connection")).to_have_attribute(
+        expect(page.locator("#jamparty #connection")).to_have_attribute(
             "data-state", "green"
         )
         settle(page, watched)
 
-        changed = f"jampot-marker-{time.monotonic_ns()}"
+        changed = f"jamparty-marker-{time.monotonic_ns()}"
         edit(changed)
         expect(marker).to_have_text(changed, timeout=UPDATE)
 
@@ -453,7 +455,7 @@ def test_live_reload_through_jampot(
         assert not complaints, complaints
 
 
-def test_a_django_form_post_through_jampot(
+def test_a_django_form_post_through_jamparty(
     sites: Callable[[str], Path], tmp_path: Path, page: Page
 ) -> None:
     """Django's CSRF check compares Origin with the host it serves: the
@@ -475,7 +477,7 @@ def test_a_django_form_post_through_jampot(
         assert joined.port == port
         watched = watch(page)
         _ = page.goto(joined.url, timeout=LOAD)
-        expect(page.locator("#jampot")).to_be_attached()
+        expect(page.locator("#jamparty")).to_be_attached()
         expect(page.locator("#marker")).to_have_text("form")
         page.locator("#post").click()
         # Django answered the POST: its CSRF check passed.
@@ -508,19 +510,19 @@ def test_a_dev_server_port_taken_here(
             share(tmp_path, "proxy", upstream) as shared,
             join_process(tmp_path, shared, shared.token) as process,
         ):
-            note = process.wait_for("jampot: port ")
+            note = process.wait_for("jamparty: port ")
             assert note.startswith(f"{port} is in use here; serving on "), note
-            url = process.wait_for("jampot: open ")
+            url = process.wait_for("jamparty: open ")
             assert urlsplit(url).port != port
             _ = page.goto(url, timeout=LOAD)
-            expect(page.locator("#jampot")).to_be_attached()
+            expect(page.locator("#jamparty")).to_be_attached()
             expect(page.locator("#marker")).to_have_text(MARKER)
 
 
 def test_a_comment_draft_survives_a_dev_server_reload(
     sites: Callable[[str], Path], tmp_path: Path, page: Page
 ) -> None:
-    """Hugo reloads the page itself, whatever jampot's dialog holds: the
+    """Hugo reloads the page itself, whatever jamparty's dialog holds: the
     half-written comment comes back, and goes out once."""
     site = sites("hugo")
     port = free_port()
@@ -537,23 +539,23 @@ def test_a_comment_draft_survives_a_dev_server_reload(
     ):
         watched = watch(page)
         _ = page.goto(joined.url, timeout=LOAD)
-        expect(page.locator("#jampot #connection")).to_have_attribute(
+        expect(page.locator("#jamparty #connection")).to_have_attribute(
             "data-state", "green"
         )
         settle(page, watched)
         page.locator("#marker").click(button="right")
-        textarea = page.locator("#jampot textarea")
+        textarea = page.locator("#jamparty textarea")
         expect(textarea).to_be_focused()
         textarea.press_sequentially("Half written")
-        changed = f"jampot-marker-{time.monotonic_ns()}"
+        changed = f"jamparty-marker-{time.monotonic_ns()}"
         edit(changed)
         expect(page.locator("#marker")).to_have_text(changed, timeout=UPDATE)
         expect(textarea).to_have_value("Half written")
-        expect(page.locator("#jampot #dialog-label")).to_have_text("Comment:")
+        expect(page.locator("#jamparty #dialog-label")).to_have_text("Comment:")
         textarea.press_sequentially(", now whole.")
         textarea.press("Enter")
-        expect(page.locator("#jampot #badge")).to_have_text("1 queued")
-        lines = jampot(tmp_path, "recv").splitlines()
+        expect(page.locator("#jamparty #badge")).to_have_text("1 queued")
+        lines = jamparty(tmp_path, "recv").splitlines()
         assert len(lines) == 1, lines
         assert '"comment":"Half written, now whole."' in lines[0]
         assert '"selector":"#marker"' in lines[0]

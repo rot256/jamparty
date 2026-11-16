@@ -15,7 +15,7 @@ use crate::{
         ids::EndpointKey,
         rng::SystemRng,
         token::{PartySecret, PartyToken},
-        version::JampotVersion,
+        version::JampartyVersion,
     },
     join::Refused,
     protocol::{
@@ -72,10 +72,10 @@ async fn first_line(first: &[u8]) -> (Option<ShareMessage>, Vec<u8>, ConnectionE
 fn assert_refused(reply: Option<ShareMessage>, closed: &ConnectionError, reason: RefusedReason) {
     assert_eq!(
         reply,
-        // Which jampot this is goes only to a joiner of another protocol.
+        // Which jamparty this is goes only to a joiner of another protocol.
         Some(ShareMessage::Refused {
             reason,
-            jampot: None
+            jamparty: None
         })
     );
     let ConnectionError::ApplicationClosed(close) = closed else {
@@ -86,7 +86,7 @@ fn assert_refused(reply: Option<ShareMessage>, closed: &ConnectionError, reason:
 }
 
 fn hello(secret: &str) -> Vec<u8> {
-    format!("{{\"version\":1,\"message\":{{\"type\":\"hello\",\"secret\":\"{secret}\",\"name\":\"mallory\",\"jampot\":\"0.1.0\"}}}}\n")
+    format!("{{\"version\":1,\"message\":{{\"type\":\"hello\",\"secret\":\"{secret}\",\"name\":\"mallory\",\"jamparty\":\"0.1.0\"}}}}\n")
         .into_bytes()
 }
 
@@ -141,7 +141,7 @@ async fn right_secret_is_admitted_then_served() {
         undelivered,
         presence,
         site,
-        jampot,
+        jamparty,
     } = admitted.message
     else {
         panic!("expected admission, got {admitted:?}");
@@ -150,7 +150,7 @@ async fn right_secret_is_admitted_then_served() {
     assert!(undelivered.is_empty());
     assert_eq!(presence, Support::Supported);
     assert_eq!(site, SiteInfo::Files);
-    assert_eq!(jampot, JampotVersion::current());
+    assert_eq!(jamparty, JampartyVersion::current());
     let answered = String::from_utf8(try_request(&connection).await).unwrap();
     assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
     assert!(answered.contains("Fixture"));

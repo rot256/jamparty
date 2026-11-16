@@ -26,7 +26,7 @@ use crate::{
     },
 };
 
-/// How long `jampot recv` has to confirm it printed a batch; after that
+/// How long `jamparty recv` has to confirm it printed a batch; after that
 /// the batch goes back to the queue.
 const PRINTED_TIMEOUT: Duration = Duration::from_secs(30);
 /// The pause after a failed accept.
@@ -78,7 +78,7 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: RecvAccess) {
             RecvAccess::Open(requests) => return serve_recv(read, write, &requests).await,
             RecvAccess::Command(program) => AgentReply::Error {
                 error: format!(
-                    "this share delivers comments to the command {}, not to jampot recv",
+                    "this share delivers comments to the command {}, not to jamparty recv",
                     program.to_string_lossy()
                 ),
             },

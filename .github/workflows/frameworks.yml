@@ -1,8 +1,8 @@
 name: Frameworks
 
 # Real dev servers (Hugo, Vite, Next.js, Astro, SvelteKit,
-# webpack-dev-server, Eleventy, Zola, MkDocs, Django) through jampot
-# proxy and jampot join, in Chromium and Firefox (tests/test_frameworks.py).
+# webpack-dev-server, Eleventy, Zola, MkDocs, Django) through jamparty
+# proxy and jamparty join, in Chromium and Firefox (tests/test_frameworks.py).
 # Slow, so not on every push: nightly, on pull requests that touch what it
 # guards, by hand, and before a release (release.yml calls it).
 on:
@@ -87,5 +87,5 @@ jobs:
       # Hugo and Zola, checked against pinned SHA-256 digests.
       - name: Run framework tests
         env:
-          JAMPOT_TOOLS_DIR: ${{ runner.temp }}/tools
+          JAMPARTY_TOOLS_DIR: ${{ runner.temp }}/tools
         run: uv run --locked pytest -m frameworks

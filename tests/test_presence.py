@@ -21,7 +21,7 @@ from support import (
     cursors,
     eventually,
     hello,
-    jampot,
+    jamparty,
     join,
     overlay,
     pages,
@@ -35,7 +35,7 @@ def cursor_at(page: Page) -> tuple[float, float] | None:
     transform = cast(
         str | None,
         page.evaluate(
-            """() => document.querySelector("#jampot")
+            """() => document.querySelector("#jamparty")
                 .shadowRoot.querySelector(".cursor")?.style.transform ?? null"""
         ),
     )
@@ -106,7 +106,7 @@ def test_a_burst_of_page_changes_ends_on_the_last(
         # Straight at the joiner: 65 reports as fast as they go.
         _ = bob_page.evaluate(
             """async () => {
-                const url = new URL("/_jampot/api/socket", location.href);
+                const url = new URL("/_jamparty/api/socket", location.href);
                 url.protocol = "ws:";
                 const socket = new WebSocket(url);
                 await new Promise((resolve) => { socket.onmessage = resolve; });
@@ -232,12 +232,12 @@ def test_cursors_follow_pointers_on_the_same_page(
         textarea.fill("Under bob's cursor.")
         textarea.press("Enter")
         expect(overlay(alice_page, "#badge")).to_have_text("1 queued")
-        [line] = jampot(tmp_path, "recv").splitlines()
+        [line] = jamparty(tmp_path, "recv").splitlines()
         assert cast(dict[str, object], json.loads(line))["selector"] == "#board"
 
         # Held still, nothing is sent.
         bob_page.wait_for_timeout(300)
-        _ = bob_page.evaluate("window.jampotSent = []")
+        _ = bob_page.evaluate("window.jampartySent = []")
         bob_page.wait_for_timeout(3000)
         assert sent(bob_page, "cursor") == []
         # Without updates it fades (on the receiver's own timer).
@@ -246,7 +246,7 @@ def test_cursors_follow_pointers_on_the_same_page(
 
         # A burst of movement: at most about 15 per second, ending on the
         # last position.
-        _ = bob_page.evaluate("window.jampotSent = []")
+        _ = bob_page.evaluate("window.jampartySent = []")
         started = time.monotonic()
         for step in range(60):
             bob_page.mouse.move(200 + step * 5, 260)
@@ -291,7 +291,7 @@ def test_cursors_follow_pointers_on_the_same_page(
         bob_page.keyboard.press("x")
         expect(cursors(carol_page)).to_have_count(0)
         bob_page.wait_for_timeout(300)
-        _ = bob_page.evaluate("window.jampotSent = []")
+        _ = bob_page.evaluate("window.jampartySent = []")
         for step in range(30):
             bob_page.mouse.move(250 + step * 5, 280)
         bob_page.wait_for_timeout(1000)
@@ -305,7 +305,7 @@ def avatars(page: Page) -> dict[str, str]:
         dict[str, str],
         page.evaluate(
             """() => Object.fromEntries(
-                [...document.querySelector("#jampot").shadowRoot
+                [...document.querySelector("#jamparty").shadowRoot
                     .querySelectorAll(".avatar")]
                 .map((avatar) => [avatar.title, getComputedStyle(avatar).backgroundColor]))"""
         ),
@@ -445,7 +445,7 @@ def test_cursors_are_placed_on_the_element(tmp_path: Path, browser: Browser) -> 
             _ = alice_page.evaluate(
                 """() => {
                         window.track = [];
-                        const cursor = document.querySelector("#jampot")
+                        const cursor = document.querySelector("#jamparty")
                             .shadowRoot.querySelector(".cursor");
                         const sample = () => {
                             const x = parseFloat(

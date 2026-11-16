@@ -35,7 +35,7 @@ pub(crate) const MAX_ANSWER_TIMEOUT: u16 = 3600;
 pub(crate) const DEFAULT_ANSWER_TIMEOUT: u16 = 30;
 /// Default key for dismissing all answers.
 pub(crate) const DEFAULT_CLEAR_ANSWERS_KEY: &str = "d";
-/// Keys jampot uses itself: `/` opens a page comment, Escape cancels.
+/// Keys jamparty uses itself: `/` opens a page comment, Escape cancels.
 pub(crate) const RESERVED_KEYS: [&str; 2] = ["/", "Escape"];
 /// Keys pressed only with others: the overlay's rebinding waits past them.
 pub(crate) const MODIFIER_KEYS: [&str; 13] = [
@@ -58,7 +58,7 @@ pub(crate) const PAGE_KEYS: [&str; 3] = ["Enter", "Tab", " "];
 
 /// A key as the browser names it (`KeyboardEvent.key`): `c`, `F2`,
 /// `ArrowUp`; at most 20 characters, no control characters, and none the
-/// overlay's rebinding refuses: not a key jampot uses itself, a modifier,
+/// overlay's rebinding refuses: not a key jamparty uses itself, a modifier,
 /// or Enter, Tab or Space. Checked here too, since any page script can
 /// send a change.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,7 +79,7 @@ impl TryFrom<String> for KeyBinding {
         check_line(&raw, "a key", MAX_KEY)?;
         let named = |keys: &[&str]| keys.iter().any(|key| key.eq_ignore_ascii_case(&raw));
         if named(&RESERVED_KEYS) {
-            return Err(Invalid::new(format!("{raw} is used by jampot")));
+            return Err(Invalid::new(format!("{raw} is used by jamparty")));
         }
         if named(&MODIFIER_KEYS) || named(&PAGE_KEYS) {
             return Err(Invalid::new(format!("{raw} cannot be bound")));
@@ -200,7 +200,7 @@ impl Default for Keys {
     }
 }
 
-/// What the settings file holds. Fields a newer jampot adds are ignored.
+/// What the settings file holds. Fields a newer jamparty adds are ignored.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
@@ -352,7 +352,7 @@ mod tests {
             assert_eq!(Settings::default().with(change).corner, corner);
         }
         assert!(serde_json::from_str::<SettingsChange>(r#"{"corner":"middle"}"#).is_err());
-        // A newer jampot's fields are ignored.
+        // A newer jamparty's fields are ignored.
         let newer: Settings = serde_json::from_str(r#"{"name":"alice","theme":"dark"}"#).unwrap();
         assert_eq!(newer.name.unwrap().as_str(), "alice");
     }

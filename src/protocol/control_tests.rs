@@ -29,7 +29,7 @@ fn joiner_messages_round_trip() {
     let secret = secret();
     let lines = [
         format!(
-            r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"alice@laptop","jampot":"0.1.0"}}}}"#
+            r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"alice@laptop","jamparty":"0.1.0"}}}}"#
         ),
         r#"{"version":1,"message":{"type":"comment","ref":"7","draft":{"page":"/","selector":"main > h1","selectedText":"Hi","comment":"Bigger"}}}"#.to_owned(),
         r#"{"version":1,"message":{"type":"comment","ref":"a-B-9","draft":{"page":"/","selector":"","comment":"x"}}}"#.to_owned(),
@@ -49,17 +49,17 @@ fn joiner_messages_round_trip() {
     let JoinerMessage::Hello(Hello {
         secret: presented,
         name,
-        jampot,
+        jamparty,
     }) = hello.message
     else {
         panic!("not a hello");
     };
     assert!(presented.matches(&secret.parse().unwrap()));
     assert_eq!(name.as_str(), "alice@laptop");
-    assert_eq!(jampot.to_string(), "0.1.0");
-    // A later jampot of this protocol may add to its hello.
+    assert_eq!(jamparty.to_string(), "0.1.0");
+    // A later jamparty of this protocol may add to its hello.
     let later = joiner(&format!(
-        r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"a","jampot":"9.0.0","wants":["more"]}}}}"#
+        r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"a","jamparty":"9.0.0","wants":["more"]}}}}"#
     ));
     assert!(
         matches!(
@@ -79,16 +79,16 @@ fn invalid_joiner_messages_are_rejected() {
     let hello = |body: &str| format!(r#"{{"version":1,"message":{{"type":"hello",{body}}}}}"#);
     let bad = [
         // Envelope.
-        format!(r#"{{"version":2,"message":{{"type":"hello","secret":"{secret}","name":"a","jampot":"0.1.0"}}}}"#),
-        format!(r#"{{"message":{{"type":"hello","secret":"{secret}","name":"a","jampot":"0.1.0"}}}}"#),
-        format!(r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"a","jampot":"0.1.0"}},"x":1}}"#),
+        format!(r#"{{"version":2,"message":{{"type":"hello","secret":"{secret}","name":"a","jamparty":"0.1.0"}}}}"#),
+        format!(r#"{{"message":{{"type":"hello","secret":"{secret}","name":"a","jamparty":"0.1.0"}}}}"#),
+        format!(r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"a","jamparty":"0.1.0"}},"x":1}}"#),
         r#"{"version":1,"message":{"type":"nope"}}"#.to_owned(),
         // Hello.
-        hello(&format!(r#""secret":"{}","name":"a","jampot":"0.1.0""#, secret.to_uppercase())),
-        hello(r#""secret":"short","name":"a","jampot":"0.1.0""#),
-        hello(&format!(r#""secret":"{secret}","name":"a b","jampot":"0.1.0""#)),
-        hello(&format!(r#""secret":"{secret}","name":"","jampot":"0.1.0""#)),
-        hello(&format!(r#""secret":"{secret}","jampot":"0.1.0""#)),
+        hello(&format!(r#""secret":"{}","name":"a","jamparty":"0.1.0""#, secret.to_uppercase())),
+        hello(r#""secret":"short","name":"a","jamparty":"0.1.0""#),
+        hello(&format!(r#""secret":"{secret}","name":"a b","jamparty":"0.1.0""#)),
+        hello(&format!(r#""secret":"{secret}","name":"","jamparty":"0.1.0""#)),
+        hello(&format!(r#""secret":"{secret}","jamparty":"0.1.0""#)),
         hello(&format!(r#""secret":"{secret}","name":"a""#)),
         // Comments: authorship is the share's, caps hold.
         r#"{"version":1,"message":{"type":"comment","ref":"1","draft":{"page":"/","selector":"","comment":"x","author":{"name":"bob","fingerprint":"0000000000"}}}}"#.to_owned(),
@@ -160,24 +160,24 @@ fn share_messages() {
     let reference = |raw: &str| CommentRef::try_from(raw.to_owned()).unwrap();
     let cases = [
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported, site: SiteInfo::Proxy { port: 1313.try_into().unwrap() }, jampot: "0.1.0".to_owned().try_into().unwrap() },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"presence":"supported","site":{{"kind":"proxy","port":1313}},"jampot":"0.1.0"}}"#),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported, site: SiteInfo::Proxy { port: 1313.try_into().unwrap() }, jamparty: "0.1.0".to_owned().try_into().unwrap() },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"presence":"supported","site":{{"kind":"proxy","port":1313}},"jamparty":"0.1.0"}}"#),
         ),
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: SiteInfo::Files, jampot: "0.1.0".to_owned().try_into().unwrap() },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jampot":"0.1.0"}}"#),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: SiteInfo::Files, jamparty: "0.1.0".to_owned().try_into().unwrap() },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"0.1.0"}}"#),
         ),
         (
-            ShareMessage::Refused { reason: RefusedReason::WrongSecret, jampot: None },
+            ShareMessage::Refused { reason: RefusedReason::WrongSecret, jamparty: None },
             r#"{"type":"refused","reason":"wrong_secret"}"#.to_owned(),
         ),
         (
-            ShareMessage::Refused { reason: RefusedReason::Full, jampot: None },
+            ShareMessage::Refused { reason: RefusedReason::Full, jamparty: None },
             r#"{"type":"refused","reason":"full"}"#.to_owned(),
         ),
         (
-            ShareMessage::Refused { reason: RefusedReason::Incompatible, jampot: Some("0.2.0".to_owned().try_into().unwrap()) },
-            r#"{"type":"refused","reason":"incompatible","jampot":"0.2.0"}"#.to_owned(),
+            ShareMessage::Refused { reason: RefusedReason::Incompatible, jamparty: Some("0.2.0".to_owned().try_into().unwrap()) },
+            r#"{"type":"refused","reason":"incompatible","jamparty":"0.2.0"}"#.to_owned(),
         ),
         (
             ShareMessage::CommentAck { reference: reference("7"), outcome: AckOutcome::Queued { id: ID.parse().unwrap() } },
@@ -272,7 +272,7 @@ fn text_limits() {
 fn site_announcements() {
     let admitted = |site: &str| {
         let line = format!(
-            r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{site},"jampot":"0.1.0"}}}}"#,
+            r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{site},"jamparty":"0.1.0"}}}}"#,
             "ab".repeat(32)
         );
         decode_line::<Envelope<ShareMessage>>(line.as_bytes()).map(|envelope| {

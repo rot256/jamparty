@@ -122,7 +122,7 @@ export class CursorSender {
     this.send(null);
   }
 
-  /** The element under the point (not jampot's own overlay) and the offset in its box. */
+  /** The element under the point (not jamparty's own overlay) and the offset in its box. */
   private position(x: number, y: number): Position | null {
     const element = document
       .elementsFromPoint(x, y)

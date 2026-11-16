@@ -1,4 +1,4 @@
-//! `jampot recv` and `jampot send` over the runtime socket: comments reach
+//! `jamparty recv` and `jamparty send` over the runtime socket: comments reach
 //! the agent and count as delivered once printed; answers reach every
 //! joiner.
 
@@ -178,9 +178,13 @@ async fn answers_reach_every_joiner_and_later_ones() {
     let id = share.queued().first().unwrap().id;
 
     let path = share.socket_path();
-    send(path, "**Done**: see [the title](jampot:%23title)", Some(id))
-        .await
-        .unwrap();
+    send(
+        path,
+        "**Done**: see [the title](jamparty:%23title)",
+        Some(id),
+    )
+    .await
+    .unwrap();
     let answer = bob_page.next_of("answer").await;
     assert!(
         answer["html"]

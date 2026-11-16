@@ -141,7 +141,7 @@ export class Answers {
 
     for (const link of body.querySelectorAll("a")) {
       const href = link.getAttribute("href") ?? "";
-      if (!href.toLowerCase().startsWith("jampot:")) {
+      if (!href.toLowerCase().startsWith("jamparty:")) {
         link.target = "_blank";
         link.rel = "noopener noreferrer";
       }
@@ -363,11 +363,11 @@ export class Answers {
 
   private followElementLink(link: HTMLAnchorElement, event: Event): void {
     const href = link.getAttribute("href") ?? "";
-    if (!href.toLowerCase().startsWith("jampot:")) return;
+    if (!href.toLowerCase().startsWith("jamparty:")) return;
     event.preventDefault();
     let selector: string;
     try {
-      selector = decodeURIComponent(href.slice("jampot:".length));
+      selector = decodeURIComponent(href.slice("jamparty:".length));
     } catch {
       this.ui.showToast("Element link is invalid");
       return;

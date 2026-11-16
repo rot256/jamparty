@@ -5,7 +5,7 @@
 //! presence and cursors. Parsed strictly (unknown fields are refused): it
 //! is untrusted input, and a field the share does not know (an `author`
 //! in a draft, say) must not pass for one it does. The hello alone
-//! ignores unknown fields, so a later jampot of this protocol may add
+//! ignores unknown fields, so a later jamparty of this protocol may add
 //! some and still be admitted, and told what else it needs to know.
 //!
 //! Share to joiner: admission or refusal, comment acknowledgements,
@@ -26,7 +26,7 @@ use crate::{
         settings::Switch,
         text::{check_line, check_text},
         token::PartySecret,
-        version::{JampotVersion, ProtocolVersion, Version1},
+        version::{JampartyVersion, ProtocolVersion, Version1},
     },
     protocol::{
         comment::{Author, CommentPage, CommentSelector, Draft},
@@ -88,12 +88,12 @@ pub(crate) enum JoinerMessage {
 }
 
 /// The joiner's first message: the party secret, its display name and
-/// its jampot. Unknown fields are ignored (see the module).
+/// its jamparty. Unknown fields are ignored (see the module).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Hello {
     pub(crate) secret: PartySecret,
     pub(crate) name: JoinerName,
-    pub(crate) jampot: JampotVersion,
+    pub(crate) jamparty: JampartyVersion,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,15 +109,15 @@ pub(crate) enum ShareMessage {
         presence: Support,
         /// What the share serves.
         site: SiteInfo,
-        /// The share's jampot.
-        jampot: JampotVersion,
+        /// The share's jamparty.
+        jamparty: JampartyVersion,
     },
     /// The hello was refused; the share closes the connection after this.
     Refused {
         reason: RefusedReason,
-        /// The share's jampot, told only to a joiner of another protocol.
+        /// The share's jamparty, told only to a joiner of another protocol.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        jampot: Option<JampotVersion>,
+        jamparty: Option<JampartyVersion>,
     },
     /// What became of the joiner's comment `ref`.
     CommentAck {
@@ -125,7 +125,7 @@ pub(crate) enum ShareMessage {
         reference: CommentRef,
         outcome: AckOutcome,
     },
-    /// An answer from the agent (`jampot send`), Markdown; `id` is the
+    /// An answer from the agent (`jamparty send`), Markdown; `id` is the
     /// share's, the same for every joiner. With `to`, it is for that key
     /// alone and sent only to its connections.
     Answer {
@@ -192,12 +192,12 @@ impl fmt::Display for Revision {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum SiteInfo {
-    /// A dev server (`jampot proxy`) on `port`, its URL's effective port.
+    /// A dev server (`jamparty proxy`) on `port`, its URL's effective port.
     /// Joiners serve the site on that port when it is free on their
     /// machine, so the dev server's own scripts that dial that port (live
     /// reload) reach it through them.
     Proxy { port: Port },
-    /// A directory (`jampot serve`).
+    /// A directory (`jamparty serve`).
     Files,
     /// A kind from a newer share.
     #[serde(other)]
@@ -278,7 +278,7 @@ impl TryFrom<&[u8]> for RefusedReason {
 
 /// The first line on a control stream, from either side, read leniently
 /// before it is parsed as this protocol: its protocol version, and the
-/// sender's jampot version if it says (a newer jampot's first line may
+/// sender's jamparty version if it says (a newer jamparty's first line may
 /// carry other things this one cannot parse).
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct Greeting {
@@ -290,17 +290,17 @@ pub(crate) struct Greeting {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 struct GreetingMessage {
     #[serde(default)]
-    jampot: Option<String>,
+    jamparty: Option<String>,
 }
 
 impl Greeting {
-    /// The sender's jampot, if it said a valid one.
+    /// The sender's jamparty, if it said a valid one.
     #[must_use]
-    pub(crate) fn jampot(&self) -> Option<JampotVersion> {
+    pub(crate) fn jamparty(&self) -> Option<JampartyVersion> {
         self.message
-            .jampot
+            .jamparty
             .clone()
-            .and_then(|jampot| JampotVersion::try_from(jampot).ok())
+            .and_then(|jamparty| JampartyVersion::try_from(jamparty).ok())
     }
 }
 

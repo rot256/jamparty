@@ -1,5 +1,5 @@
 // Generated from the Rust types by `cargo test` (src/join/api.rs); do not edit.
-// Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings
+// Regenerate: JAMPARTY_UPDATE_BINDINGS=1 cargo test bindings
 
 export const MAX_NAME = 40;
 export const MAX_ANSWER_TIMEOUT = 3600;
@@ -89,7 +89,7 @@ anchor?: CommentSelector,
  */
 page?: CommentPage, 
 /**
- * Addressed to this joiner alone (`jampot send --to`, or an answer to
+ * Addressed to this joiner alone (`jamparty send --to`, or an answer to
  * its comment); the page says so.
  */
 toYou: boolean, };

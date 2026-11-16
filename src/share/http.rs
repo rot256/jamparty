@@ -18,7 +18,7 @@ use crate::{
     share::{files::Files, live::ReloadState, proxy::Proxy},
 };
 
-const RESERVED_PREFIX: &str = "/_jampot/";
+const RESERVED_PREFIX: &str = "/_jamparty/";
 
 /// What the share serves.
 #[derive(Clone)]
@@ -70,7 +70,7 @@ async fn handle(request: Request<Incoming>, site: Site) -> Response<AppBody> {
     let result = if path.starts_with(RESERVED_PREFIX) {
         Err(RequestError::new(
             StatusCode::NOT_FOUND,
-            "reserved jampot resource not found",
+            "reserved jamparty resource not found",
         ))
     } else {
         match site {

@@ -21,7 +21,7 @@ use crate::{
 };
 
 const MAX_HTML_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const EDIT_SCRIPT: &[u8] = b"\n<script type=\"module\" src=\"/_jampot/client.js\"></script>\n";
+const EDIT_SCRIPT: &[u8] = b"\n<script type=\"module\" src=\"/_jamparty/client.js\"></script>\n";
 
 /// How the client is loaded: plain, or with the live-reload revision the
 /// page was served at.
@@ -141,7 +141,7 @@ fn client_script(mode: ClientMode) -> Cow<'static, [u8]> {
         ClientMode::Edit => Cow::Borrowed(EDIT_SCRIPT),
         ClientMode::Live(revision) => Cow::Owned(
             format!(
-                "\n<script type=\"module\" src=\"/_jampot/client.js?live={revision}\"></script>\n"
+                "\n<script type=\"module\" src=\"/_jamparty/client.js?live={revision}\"></script>\n"
             )
             .into_bytes(),
         ),

@@ -1,17 +1,17 @@
-# jampot UI (joiner page)
+# jamparty UI (joiner page)
 
 The overlay the joiner's page shows on top of the shared site, as settled in
-the design review of 2026-11-12. Mockups: the "jampot UI" Claude Design
+the design review of 2026-11-12. Mockups: the "jamparty UI" Claude Design
 canvas (artboards 1–9; private to the owner), exported here as standalone
 HTML with a rendered PNG each: `docs/ui/1-idle` … `docs/ui/9-cursor-options`
 (`.html`, `.png`). This file is the source of truth; where it and the
 mockups differ, this file wins. The sample page in them stands in for any
-shared site; only the overlay is jampot's.
+shared site; only the overlay is jamparty's.
 
 Everything here lives in the client (`assets/client.js`), the joiner's
 local endpoints and the share; nothing in the site itself. The share
 injects the client's script tag into each HTML page; the joiner serves
-the client itself (`/_jampot/client.js`, no-store), so a page always runs
+the client itself (`/_jamparty/client.js`, no-store), so a page always runs
 its own joiner's client.
 
 ## Pill (bottom right)
@@ -21,7 +21,7 @@ its own joiner's client.
 - Dot colours: green `#2f9e44` connected, amber `#e8a33d` reconnecting,
   grey `#9a958e` share unreachable or a status line set. Comments not sent
   go out again whenever the joiner is connected to the share, status line
-  or not: those made under this joiner's key. Each `jampot join` has a
+  or not: those made under this joiner's key. Each `jamparty join` has a
   fresh key, never stored, and the share tells comments apart by key and
   ref, so comments from before a joiner started over are never sent again
   by themselves (that would queue them twice); the person may send one
@@ -64,7 +64,7 @@ its own joiner's client.
 - In edit mode the element under the pointer is outlined in that blue, and
   a left click comments on it (the `Comment:` dialog, as a right-click
   does) instead of reaching the page: links do not navigate, buttons do not
-  fire, nothing gets focus or a text selection. jampot's own overlay keeps
+  fire, nothing gets focus or a text selection. jamparty's own overlay keeps
   working normally.
 - It stays on after a comment. Escape leaves it (when a comment dialog is
   open, Escape closes the dialog first), as does clicking the button again.
@@ -103,7 +103,7 @@ text. Rows:
   listening state (`press a key…`, dashed outline); the next key press
   becomes the binding. Escape cancels; a modifier (Shift, Control, Alt,
   Meta, Caps Lock) waits for the key pressed with it. A key already bound
-  to another action, one jampot uses (`/`, Escape), or one the page needs
+  to another action, one jamparty uses (`/`, Escape), or one the page needs
   (Enter, Tab, Space) is refused with a short message instead of
   overwriting. The joiner refuses the same keys, whatever a page sends.
 - Answer timeout dismisses each answer after 1–3600 seconds of unpaused
@@ -116,7 +116,7 @@ text. Rows:
 - Settings JSON uses `answerTimeout` (seconds, default 30; 0 turns it
   off) and `keys.clearAnswers` (default `"d"`), alongside
   `keys.commentMode` and `keys.showCursor`.
-  `jampot join --answer-timeout N --clear-answers-key KEY` overrides the
+  `jamparty join --answer-timeout N --clear-answers-key KEY` overrides the
   settings file for a join; `--comment-mode-key` and `--show-cursor-key`
   override the other bindings. All bindings must be distinct, ignoring case.
   Page changes remain in the per-share cookie and never write the
@@ -173,27 +173,27 @@ text. Rows:
   joiner that started over), it sends them as a change for this join; a
   remembered name keeps the prompt away. A new share is a new origin and
   starts from the defaults.
-- The defaults come from `~/.config/jampot/settings.json` (mode 0600, the
-  same fields), which the person writes and jampot only reads.
-  `jampot join --name` sets the name for one run, until one is chosen in
+- The defaults come from `~/.config/jamparty/settings.json` (mode 0600, the
+  same fields), which the person writes and jamparty only reads.
+  `jamparty join --name` sets the name for one run, until one is chosen in
   the page.
 - A name change mid-session is sent to the share and updates presence for
   everyone.
 
 ## Addressed replies
 
-- `jampot send --to <name> "…"`: delivered only to that person's
+- `jamparty send --to <name> "…"`: delivered only to that person's
   connections; nobody else receives it. Matching by name, or by key
   fingerprint when names collide (refuse an ambiguous name with the
   candidates listed).
-- `jampot send --anchor <comment id> "…"` without `--to` addresses the
+- `jamparty send --anchor <comment id> "…"` without `--to` addresses the
   comment's author by default; `--to all` (or no anchor and no `--to`)
   sends it to everyone.
 - A page shows at most as many answers as its joiner keeps (100), the
   oldest going first, and remembers dismissals only of those.
 - The recipient's answer bubble shows a small `to you` line above the text
   (in the answer-meta style, `#7b3221`, 11 px, bold).
-- The `jampot agent` guides describe `--to`.
+- The `jamparty agent` guides describe `--to`.
 
 ## Protocol (summary)
 
@@ -217,13 +217,13 @@ All of this is part of the version-1 wire format.
   or another join; key bindings the overlay refuses are refused.
 - Browser: **every feature in this file is covered by Playwright**, in
   Chromium and Firefox, against the real binaries (one share, several
-  `jampot join` processes, each with its own home directory and its own
+  `jamparty join` processes, each with its own home directory and its own
   browser context). A feature is done once its Playwright test passes.
   Single-joiner cases:
   - pill with the dot inside; colour follows the state (stop the share:
     grey; cut the joiner's socket: amber; back: green);
   - expand and collapse; the list shows queued, delivered (after
-    `jampot recv`), and not sent with a working `send again`;
+    `jamparty recv`), and not sent with a working `send again`;
   - gear panel: both switches by click and by key; keys ignored while a
     text field has focus; rebinding (new key works, old one doesn't,
     Escape cancels, a taken key is refused); comment mode off leaves
@@ -250,7 +250,7 @@ All of this is part of the version-1 wire format.
     for alice;
   - comments: alice's and bob's comments each appear only in their own
     list; delivered state reaches only the author;
-  - addressed replies: `jampot send --to alice` shows `to you` for alice
+  - addressed replies: `jamparty send --to alice` shows `to you` for alice
     and nothing for bob; `--anchor` on bob's comment reaches only bob; a
     broadcast reaches everyone;
   - reconnect: one joiner drops and returns; the others' presence and

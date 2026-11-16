@@ -16,7 +16,7 @@ use crate::{
 };
 
 fn hello(secret: &str) -> Vec<u8> {
-    format!("{{\"version\":1,\"message\":{{\"type\":\"hello\",\"secret\":\"{secret}\",\"name\":\"mallory\",\"jampot\":\"0.1.0\"}}}}\n")
+    format!("{{\"version\":1,\"message\":{{\"type\":\"hello\",\"secret\":\"{secret}\",\"name\":\"mallory\",\"jamparty\":\"0.1.0\"}}}}\n")
         .into_bytes()
 }
 
@@ -67,7 +67,7 @@ async fn the_hello_is_read_whole_into_a_fixed_buffer() {
         reply,
         ShareMessage::Refused {
             reason: RefusedReason::BadHello,
-            jampot: None,
+            jamparty: None,
         }
     );
 
@@ -80,7 +80,7 @@ async fn the_hello_is_read_whole_into_a_fixed_buffer() {
         reply,
         ShareMessage::Refused {
             reason: RefusedReason::BadHello,
-            jampot: None,
+            jamparty: None,
         }
     );
 

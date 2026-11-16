@@ -195,50 +195,50 @@ fn table() {
         // The rest of the joiner's paths: its own, and not found.
         (
             "the removed status",
-            fetch(Method::Get, "/_jampot/api/status"),
+            fetch(Method::Get, "/_jamparty/api/status"),
             Ok(Route::Unknown),
         ),
         (
             "trailing slash",
-            fetch(Method::Get, "/_jampot/api/status/"),
+            fetch(Method::Get, "/_jamparty/api/status/"),
             Ok(Route::Unknown),
         ),
         (
             "an old endpoint",
-            fetch(Method::Get, "/_jampot/api/events"),
+            fetch(Method::Get, "/_jamparty/api/events"),
             Ok(Route::Unknown),
         ),
         (
             "an old write",
-            fetch(Method::Post, "/_jampot/api/comments"),
+            fetch(Method::Post, "/_jamparty/api/comments"),
             Ok(Route::Unknown),
         ),
         (
             "an upgrade elsewhere",
             RequestFacts {
-                path: "/_jampot/api/other",
+                path: "/_jamparty/api/other",
                 ..upgrade(Some("same-origin"))
             },
             Ok(Route::Unknown),
         ),
         (
             "the prefix itself",
-            fetch(Method::Get, "/_jampot/api/"),
+            fetch(Method::Get, "/_jamparty/api/"),
             Ok(Route::Unknown),
         ),
         (
             "not under it",
-            fetch(Method::Get, "/_jampot/api"),
+            fetch(Method::Get, "/_jamparty/api"),
             Ok(Route::Proxy),
         ),
         (
             "encoded",
-            fetch(Method::Get, "/%5Fjampot/api/status"),
+            fetch(Method::Get, "/%5Fjamparty/api/status"),
             Ok(Route::Proxy),
         ),
         (
             "double slash",
-            fetch(Method::Get, "//_jampot/api/status"),
+            fetch(Method::Get, "//_jamparty/api/status"),
             Ok(Route::Proxy),
         ),
         // Cross-site rules still come first.
@@ -246,7 +246,7 @@ fn table() {
             "cross-site unknown",
             RequestFacts {
                 sec_fetch_site: Some("cross-site"),
-                ..fetch(Method::Get, "/_jampot/api/events")
+                ..fetch(Method::Get, "/_jamparty/api/events")
             },
             Err(Refusal::CrossSite),
         ),

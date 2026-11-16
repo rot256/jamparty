@@ -67,7 +67,7 @@ pub(crate) struct Answer {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub(crate) page: Option<CommentPage>,
-    /// Addressed to this joiner alone (`jampot send --to`, or an answer to
+    /// Addressed to this joiner alone (`jamparty send --to`, or an answer to
     /// its comment); the page says so.
     #[serde(rename = "toYou")]
     pub(crate) to_you: bool,

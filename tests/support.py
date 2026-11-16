@@ -1,4 +1,4 @@
-"""What the browser tests share: running `jampot` processes, joining a
+"""What the browser tests share: running `jamparty` processes, joining a
 share, talking to the joiner's local server, the fixture sites and dev
 servers, the overlay and pages."""
 
@@ -27,7 +27,7 @@ from playwright.sync_api import Browser, Locator, Page, WebSocketRoute, expect
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
-BINARY = TARGET_DIR / "debug/jampot"
+BINARY = TARGET_DIR / "debug/jamparty"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 TIMEOUT = 20.0
 SITE = ROOT / "tests/fixtures/site"
@@ -36,7 +36,7 @@ FIXTURE_HTML = (SITE / "index.html").read_bytes()
 
 
 class Process:
-    """A jampot process whose output lines are collected as they arrive."""
+    """A jamparty process whose output lines are collected as they arrive."""
 
     def __init__(
         self, arguments: list[str], env: dict[str, str], stdin: str | None = None
@@ -131,8 +131,8 @@ def environment(home: Path) -> dict[str, str]:
     }
 
 
-def jampot(home: Path, *arguments: str) -> str:
-    """Runs a short jampot command and returns its output."""
+def jamparty(home: Path, *arguments: str) -> str:
+    """Runs a short jamparty command and returns its output."""
     result = subprocess.run(
         [str(BINARY), *arguments],
         env=environment(home),
@@ -148,8 +148,8 @@ def jampot(home: Path, *arguments: str) -> str:
 def share(home: Path, *source: str) -> Iterator[Shared]:
     process = Process([*source, "--local"], environment(home))
     try:
-        token = process.wait_for("jampot: token: ")
-        address = process.wait_for("jampot: direct address: ")
+        token = process.wait_for("jamparty: token: ")
+        address = process.wait_for("jamparty: direct address: ")
         yield Shared(token, address, process)
     finally:
         process.stop()
@@ -163,7 +163,7 @@ def join_process(
     name: str | None = "alice",
     port: int | None = None,
 ) -> Iterator[Process]:
-    # The token goes on stdin, as `jampot join -` reads it: out of argv.
+    # The token goes on stdin, as `jamparty join -` reads it: out of argv.
     arguments = ["join", "-", "--no-open"]
     if name is not None:
         arguments += ["--name", name]
@@ -185,7 +185,7 @@ def join(
     home: Path, shared: Shared, name: str | None = "alice", port: int | None = None
 ) -> Iterator[Joined]:
     with join_process(home, shared, shared.token, name, port) as process:
-        url = process.wait_for("jampot: open ")
+        url = process.wait_for("jamparty: open ")
         parts = urlsplit(url)
         assert parts.hostname is not None and parts.port is not None
         joined = Joined(url, parts.netloc, parts.port)
@@ -232,7 +232,7 @@ class PageSocket:
         key = base64.b64encode(os.urandom(16)).decode()
         origin = f"http://{joined.host}" if origin is None else origin
         handshake = (
-            f"GET /_jampot/api/socket HTTP/1.1\r\nHost: {joined.host}\r\n"
+            f"GET /_jamparty/api/socket HTTP/1.1\r\nHost: {joined.host}\r\n"
             + "Upgrade: websocket\r\nConnection: Upgrade\r\n"
             + f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
             + f"Origin: {origin}\r\n\r\n"
@@ -370,19 +370,19 @@ def upstream_server(
 
 def comment_on_intro(page: Page, text: str) -> None:
     page.locator("#intro").click(button="right")
-    textarea = page.locator("#jampot textarea")
+    textarea = page.locator("#jamparty textarea")
     expect(textarea).to_be_focused()
     textarea.fill(text)
     textarea.press("Enter")
     # Closed once the joiner answered.
-    expect(page.locator("#jampot #jampot-dialog")).not_to_be_visible()
+    expect(page.locator("#jamparty #jamparty-dialog")).not_to_be_visible()
 
 
 def recv_all(home: Path) -> list[dict[str, object]]:
-    """Every comment the share holds, as `jampot recv` prints them."""
+    """Every comment the share holds, as `jamparty recv` prints them."""
     return [
         cast(dict[str, object], json.loads(line))
-        for line in jampot(home, "recv").splitlines()
+        for line in jamparty(home, "recv").splitlines()
     ]
 
 
@@ -414,7 +414,7 @@ class SocketTap:
         self.held: list[tuple[WebSocketRoute, str]] = []
         self.sockets: list[WebSocketRoute] = []
         self.edit: Callable[[dict[str, object]], dict[str, object]] | None = None
-        page.route_web_socket("**/_jampot/api/socket", self._route)
+        page.route_web_socket("**/_jamparty/api/socket", self._route)
 
     def _route(self, route: WebSocketRoute) -> None:
         self.sockets.append(route)
@@ -440,7 +440,7 @@ class SocketTap:
 
 
 def overlay(page: Page, selector: str) -> Locator:
-    return page.locator(f"#jampot {selector}")
+    return page.locator(f"#jamparty {selector}")
 
 
 def switch(page: Page, name: str) -> Locator:
@@ -448,8 +448,8 @@ def switch(page: Page, name: str) -> Locator:
 
 
 def settings_path(home: Path) -> Path:
-    """The settings file of `home`: read by jampot, never written."""
-    return home / "config/jampot/settings.json"
+    """The settings file of `home`: read by jamparty, never written."""
+    return home / "config/jamparty/settings.json"
 
 
 def eventually(what: str, check: Callable[[], bool]) -> None:
@@ -485,10 +485,10 @@ def waiting(page: Page, what: str, check: Callable[[], bool]) -> None:
 
 
 RECORD_SENT = """() => {
-    window.jampotSent = [];
+    window.jampartySent = [];
     const original = WebSocket.prototype.send;
     WebSocket.prototype.send = function (data) {
-        window.jampotSent.push(JSON.parse(data));
+        window.jampartySent.push(JSON.parse(data));
         return original.call(this, data);
     };
 }"""
@@ -497,5 +497,5 @@ RECORD_SENT = """() => {
 def sent(page: Page, kind: str) -> list[dict[str, object]]:
     """The messages of type `kind` `page` sent its joiner since
     `RECORD_SENT`."""
-    messages = cast(list[dict[str, object]], page.evaluate("window.jampotSent"))
+    messages = cast(list[dict[str, object]], page.evaluate("window.jampartySent"))
     return [message for message in messages if message["type"] == kind]

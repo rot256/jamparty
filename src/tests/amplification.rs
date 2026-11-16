@@ -16,7 +16,7 @@ use crate::{
 fn admitted() -> String {
     let key = "ab".repeat(32);
     format!(
-        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jampot":"{}"}}}}"#,
+        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
         env!("CARGO_PKG_VERSION")
     )
 }

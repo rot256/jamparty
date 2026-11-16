@@ -83,7 +83,7 @@ async fn host_and_cross_site_rules() {
     assert_eq!(csp, ["frame-ancestors 'self'"]);
 
     // Another site cannot read pages or the client.
-    for path in ["/", "/_jampot/client.js"] {
+    for path in ["/", "/_jamparty/client.js"] {
         let reply = send("GET", path, &cross_fetch).await;
         assert_eq!(reply.status, 403, "{path}");
         assert!(reply.headers.contains_key(header::CONTENT_SECURITY_POLICY));
@@ -93,9 +93,13 @@ async fn host_and_cross_site_rules() {
     assert_eq!(send("GET", "/socket", &upgrade).await.status, 403);
     // Reserved paths take only their method.
     assert_eq!(
-        send("POST", "/_jampot/client.js", &[("origin", origin.as_str())])
-            .await
-            .status,
+        send(
+            "POST",
+            "/_jamparty/client.js",
+            &[("origin", origin.as_str())]
+        )
+        .await
+        .status,
         405
     );
     assert_eq!(send("GET", SOCKET, &[]).await.status, 405);
@@ -169,26 +173,26 @@ async fn the_joiners_paths_never_reach_the_site() {
     // The site's own 404s come from the site.
     let site = get(&joiner, "/elsewhere").await;
     assert_eq!((site.status.as_u16(), site.body.as_str()), (404, "missing"));
-    // Under /_jampot/api/ the joiner answers, whatever the path.
+    // Under /_jamparty/api/ the joiner answers, whatever the path.
     for path in [
-        "/_jampot/api/events",
-        "/_jampot/api/comments",
-        "/_jampot/api/status",
-        "/_jampot/api/status/",
-        "/_jampot/api/",
-        "/_jampot/api/socket/x",
+        "/_jamparty/api/events",
+        "/_jamparty/api/comments",
+        "/_jamparty/api/status",
+        "/_jamparty/api/status/",
+        "/_jamparty/api/",
+        "/_jamparty/api/socket/x",
     ] {
         let reply = get(&joiner, path).await;
         assert_eq!(reply.status, 404, "{path}");
         assert!(
-            reply.body.contains("no such jampot path"),
+            reply.body.contains("no such jamparty path"),
             "{path}: {}",
             reply.body
         );
     }
     // Writes too (with the origin the rules want).
     let origin = joiner.origin().origin().to_owned();
-    let post = local(&joiner, "POST", "/_jampot/api/comments")
+    let post = local(&joiner, "POST", "/_jamparty/api/comments")
         .header(header::ORIGIN, origin)
         .body(Full::new(Bytes::from_static(b"{}")))
         .unwrap();

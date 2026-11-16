@@ -12,7 +12,7 @@ from playwright.sync_api import (
 )
 from support import (
     SITE,
-    jampot,
+    jamparty,
     join,
     join_process,
     overlay,
@@ -29,7 +29,7 @@ def test_the_pill_holds_the_dot_and_follows_the_state(
         share(tmp_path, "serve", str(SITE)) as shared,
         join_process(tmp_path, shared, shared.token) as process,
     ):
-        url = process.wait_for("jampot: open ")
+        url = process.wait_for("jamparty: open ")
         context = browser.new_context()
         try:
             page = context.new_page()
@@ -85,7 +85,7 @@ def test_edit_mode(tmp_path: Path, page: Page) -> None:
         )
         button = overlay(page, "#edit")
         outline = overlay(page, "#edit-highlight")
-        dialog = overlay(page, "#jampot-dialog")
+        dialog = overlay(page, "#jamparty-dialog")
         expect(button).to_have_attribute("aria-pressed", "false")
 
         # On: the button turns blue; hovering outlines the element.
@@ -160,7 +160,7 @@ def test_edit_mode_is_independent_of_comment_mode(tmp_path: Path, page: Page) ->
         )
         button = overlay(page, "#edit")
         panel = overlay(page, "#panel")
-        dialog = overlay(page, "#jampot-dialog")
+        dialog = overlay(page, "#jamparty-dialog")
 
         # In edit mode a press on the page still closes the open panel.
         overlay(page, "#gear").click()
@@ -186,7 +186,7 @@ def test_edit_mode_is_independent_of_comment_mode(tmp_path: Path, page: Page) ->
         textarea.press("Enter")
         expect(dialog).not_to_be_visible()
         expect(overlay(page, "#badge")).to_have_text("1 queued")
-        received = jampot(tmp_path, "recv")
+        received = jamparty(tmp_path, "recv")
         assert "An edit with comment mode off." in received
         expect(overlay(page, "#badge")).to_have_text("0 queued")
         expect(button).to_have_attribute("aria-pressed", "true")
@@ -248,7 +248,7 @@ def test_the_overlay_moves_to_any_corner(tmp_path: Path, page: Page) -> None:
                     overlay(page, "#gear").click()
                 corner(name).click()
                 expect(corner(name)).to_have_attribute("aria-pressed", "true")
-                expect(page.locator("#jampot")).to_have_attribute("data-corner", name)
+                expect(page.locator("#jamparty")).to_have_attribute("data-corner", name)
                 assert place("#bar") == (left, top)
                 assert place("#panel") == (left, top)
                 # The panel opens towards the middle: below a top bar, above
@@ -274,7 +274,7 @@ def test_the_overlay_moves_to_any_corner(tmp_path: Path, page: Page) -> None:
             textarea.press("Enter")
             expect(overlay(page, "#toast")).to_be_visible()
             assert place("#toast") == (False, True)
-            _ = jampot(tmp_path, "send", "Thanks, looking at it.")
+            _ = jamparty(tmp_path, "send", "Thanks, looking at it.")
             answer = overlay(page, "#agent-general .agent-message")
             expect(answer).to_contain_text("Thanks, looking at it.")
             assert place("#agent-general .agent-message") == (False, True)
@@ -287,7 +287,7 @@ def test_the_overlay_moves_to_any_corner(tmp_path: Path, page: Page) -> None:
             expect(overlay(page, "#connection")).to_have_attribute(
                 "data-state", "green"
             )
-            expect(page.locator("#jampot")).to_have_attribute(
+            expect(page.locator("#jamparty")).to_have_attribute(
                 "data-corner", "top-right"
             )
             assert place("#bar") == (False, True)

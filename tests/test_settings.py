@@ -69,7 +69,7 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         page.keyboard.press("Escape")
         page.locator("h1").click()
         page.keyboard.press("/")
-        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        expect(overlay(page, "#jamparty-dialog")).not_to_be_visible()
         assert page.evaluate("window.seen") == [
             "contextmenu:false",
             "keydown:false",
@@ -105,7 +105,7 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         chip.click()
         page.keyboard.press("Escape")
         expect(chip).to_have_text("K")
-        # Keys taken by the other switch or by jampot are refused.
+        # Keys taken by the other switch or by jamparty are refused.
         chip.click()
         page.keyboard.press("x")
         expect(overlay(page, "#panel-message")).to_have_text(
@@ -114,9 +114,9 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         expect(chip).to_have_text("K")
         chip.click()
         page.keyboard.press("/")
-        expect(overlay(page, "#panel-message")).to_have_text("/ is used by jampot")
+        expect(overlay(page, "#panel-message")).to_have_text("/ is used by jamparty")
         expect(chip).to_have_text("K")
-        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        expect(overlay(page, "#jamparty-dialog")).not_to_be_visible()
         # The page's own keys are refused; a modifier waits for its key.
         for key in ["Enter", "Tab"]:
             chip.click()
@@ -129,7 +129,7 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         page.keyboard.press("Escape")
         expect(chip).to_have_text("K")
 
-        # Comment mode back on: / is jampot's again.
+        # Comment mode back on: / is jamparty's again.
         page.keyboard.press("k")
         expect(comment_mode).to_have_attribute("aria-checked", "true")
         page.keyboard.press("/")
@@ -232,12 +232,14 @@ def test_the_settings_file_gives_the_defaults(tmp_path: Path, page: Page) -> Non
         join(tmp_path, shared, name=None) as joined,
     ):
         _ = page.goto(joined.url)
-        expect(page.locator("#jampot")).to_have_attribute("data-corner", "top-left")
+        expect(page.locator("#jamparty")).to_have_attribute("data-corner", "top-left")
         expect(overlay(page, "#name-dialog")).to_be_hidden()
         overlay(page, "#gear").click()
         expect(overlay(page, "#name-field")).to_have_value("erin")
         overlay(page, '.corner[data-corner="bottom-right"]').click()
-        expect(page.locator("#jampot")).to_have_attribute("data-corner", "bottom-right")
+        expect(page.locator("#jamparty")).to_have_attribute(
+            "data-corner", "bottom-right"
+        )
     assert path.read_text() == '{"name": "erin", "corner": "top-left"}'
 
 

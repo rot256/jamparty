@@ -18,7 +18,7 @@ from support import (
     comment_on_intro,
     environment,
     hello,
-    jampot,
+    jamparty,
     join,
     overlay,
     pages,
@@ -44,7 +44,7 @@ def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> No
     ):
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        _ = jampot(tmp_path, "send", "An answer.")
+        _ = jamparty(tmp_path, "send", "An answer.")
         answer = overlay(page, ".agent-message")
         expect(answer).to_contain_text("An answer.")
         answer.click(button="right")
@@ -60,7 +60,7 @@ def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> No
         expect(overlay(page, "#badge")).to_have_text("1 queued")
         [record] = recv_all(tmp_path)
         assert record["comment"] == "About the answer"
-        assert str(record["selector"]).startswith("jampot-agent:")
+        assert str(record["selector"]).startswith("jamparty-agent:")
 
         # An answer dismissed meanwhile is gone: the reply goes to the page,
         # and says so, however often the page reloads.
@@ -69,7 +69,7 @@ def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> No
         message_id = answer.get_attribute("data-message-id")
         assert message_id is not None
         _ = page.evaluate(
-            "(id) => sessionStorage.setItem('jampot-dismissed-v1', JSON.stringify([id]))",
+            "(id) => sessionStorage.setItem('jamparty-dismissed-v1', JSON.stringify([id]))",
             message_id,
         )
         for _ in range(2):
@@ -114,13 +114,15 @@ def test_addressing_by_key(tmp_path: Path, browser: Browser) -> None:
             assert ambiguous.returncode == 1
             assert "several people here are called alice" in ambiguous.stderr
             assert f"alice (key:{fingerprint})" in ambiguous.stderr
-            _ = jampot(tmp_path, "send", "Only alice.", "--to", f"key:{fingerprint}")
-            _ = jampot(tmp_path, "send", "Everyone.")
+            _ = jamparty(tmp_path, "send", "Only alice.", "--to", f"key:{fingerprint}")
+            _ = jamparty(tmp_path, "send", "Everyone.")
             for page in (alice2_page, mallory_page):
-                messages = page.locator("#jampot .agent-message")
+                messages = page.locator("#jamparty .agent-message")
                 expect(messages.filter(has_text="Everyone.")).to_have_count(1)
                 expect(messages.filter(has_text="Only alice.")).to_have_count(0)
-            only = alice_page.locator("#jampot .agent-message", has_text="Only alice.")
+            only = alice_page.locator(
+                "#jamparty .agent-message", has_text="Only alice."
+            )
             expect(only.locator(".agent-to")).to_be_visible()
 
 
@@ -132,16 +134,16 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
         pages(browser, alice, bob) as (alice_page, bob_page),
     ):
         comment_on_intro(bob_page, "Is this right?")
-        expect(bob_page.locator("#jampot #badge")).to_have_text("1 queued")
-        [line] = jampot(tmp_path, "recv").splitlines()
+        expect(bob_page.locator("#jamparty #badge")).to_have_text("1 queued")
+        [line] = jamparty(tmp_path, "recv").splitlines()
         record = cast(dict[str, object], json.loads(line))
 
-        _ = jampot(tmp_path, "send", "Hello alice", "--to", "alice")
-        _ = jampot(tmp_path, "send", "Yes, it is.", "--anchor", str(record["id"]))
-        _ = jampot(tmp_path, "send", "Everyone: done.")
+        _ = jamparty(tmp_path, "send", "Hello alice", "--to", "alice")
+        _ = jamparty(tmp_path, "send", "Yes, it is.", "--anchor", str(record["id"]))
+        _ = jamparty(tmp_path, "send", "Everyone: done.")
 
         def answers(page: Page) -> list[tuple[str, bool]]:
-            messages = page.locator("#jampot .agent-message")
+            messages = page.locator("#jamparty .agent-message")
             # Answers arrive in order: the last one means all are here.
             expect(messages.filter(has_text="Everyone: done.")).to_have_count(1)
             return sorted(
@@ -157,7 +159,7 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
             ("Hello alice", True),
         ]
         assert answers(bob_page) == [("Everyone: done.", False), ("Yes, it is.", True)]
-        to_you = alice_page.locator("#jampot .agent-to").first
+        to_you = alice_page.locator("#jamparty .agent-to").first
         expect(to_you).to_have_text("to you")
         expect(to_you).to_have_css("color", "rgb(123, 50, 33)")
         expect(to_you).to_have_css("font-size", "11px")
@@ -192,7 +194,9 @@ def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         page.clock.install()
-        _ = jampot(tmp_path, "send", "Timed answer with [focus](https://example.org).")
+        _ = jamparty(
+            tmp_path, "send", "Timed answer with [focus](https://example.org)."
+        )
         answer = overlay(page, ".agent-message")
         expect(answer).to_be_visible()
         overlay(page, "#gear").click()
@@ -245,8 +249,8 @@ def test_clear_answers_key_and_rebinding(tmp_path: Path, page: Page) -> None:
     ):
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        _ = jampot(tmp_path, "send", "First answer.")
-        _ = jampot(tmp_path, "send", "Second answer.")
+        _ = jamparty(tmp_path, "send", "First answer.")
+        _ = jamparty(tmp_path, "send", "Second answer.")
         answers = overlay(page, ".agent-message")
         expect(answers).to_have_count(2)
         expect(overlay(page, ".agent-timeout")).to_have_count(0)
@@ -259,7 +263,7 @@ def test_clear_answers_key_and_rebinding(tmp_path: Path, page: Page) -> None:
         page.locator("#typing").blur()
         page.keyboard.press("d")
         expect(answers).to_have_count(0)
-        _ = jampot(tmp_path, "send", "Third answer.")
+        _ = jamparty(tmp_path, "send", "Third answer.")
         expect(answers).to_have_count(1)
         overlay(page, "#gear").click()
         chip = overlay(page, "#clear-answers-key")
@@ -296,7 +300,7 @@ def test_timeout_panel_can_enable_and_disable(tmp_path: Path, page: Page) -> Non
         with socket.expect_event(
             "framereceived", lambda frame: "Kept answer." in str(frame)
         ):
-            _ = jampot(tmp_path, "send", "Kept answer.")
+            _ = jamparty(tmp_path, "send", "Kept answer.")
         # Let the answer's placement frame run.
         page.clock.run_for(32)
         answer = overlay(page, ".agent-message")

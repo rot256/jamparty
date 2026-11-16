@@ -35,7 +35,7 @@ pub(crate) struct FakeShare {
 pub(crate) async fn fake_share(lines: Vec<String>) -> FakeShare {
     let key = generate_key(&SystemRng);
     let share = EndpointKey::from(key.public());
-    let endpoint = bind(&net(), key, Accept::Jampot).await.unwrap();
+    let endpoint = bind(&net(), key, Accept::Jamparty).await.unwrap();
     let addrs = direct_addrs(&endpoint);
     let accepting = endpoint.clone();
     let hellos = Arc::new(AtomicUsize::new(0));

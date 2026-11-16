@@ -2,7 +2,7 @@
 //! hands them to the target. Batches are at most about 100 KB of NDJSON;
 //! large backlogs go out as several batches, without a delay between successes.
 //!
-//! - `recv`: each batch waits for a `jampot recv` on the runtime socket;
+//! - `recv`: each batch waits for a `jamparty recv` on the runtime socket;
 //!   it is delivered once that client says it printed it, and returned to
 //!   the queue (no backoff) if the client goes away first.
 //! - `command`: the batch goes to the command's stdin.
@@ -24,7 +24,7 @@ pub(crate) const MAX_BATCH_BYTES: usize = 115_000;
 /// Where comments go.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
-    /// Held for `jampot recv`.
+    /// Held for `jamparty recv`.
     Recv,
     /// Piped to a command.
     Command(CommandTarget),
@@ -38,14 +38,14 @@ pub(crate) struct CommandTarget {
     pub(crate) timeout: Duration,
 }
 
-/// A waiting `jampot recv`: the batch goes out on `batch`; `printed`
+/// A waiting `jamparty recv`: the batch goes out on `batch`; `printed`
 /// resolves once the client printed it (dropped if it went away).
 pub(crate) struct RecvRequest {
     pub(crate) batch: oneshot::Sender<Vec<Comment>>,
     pub(crate) printed: oneshot::Receiver<()>,
 }
 
-/// What a `jampot recv` finds on the runtime socket.
+/// What a `jamparty recv` finds on the runtime socket.
 #[derive(Clone)]
 pub(crate) enum RecvAccess {
     /// The target is `recv`: where clients queue up.
@@ -54,7 +54,7 @@ pub(crate) enum RecvAccess {
     Command(OsString),
 }
 
-/// Starts delivery; returns what `jampot recv` clients get.
+/// Starts delivery; returns what `jamparty recv` clients get.
 pub(crate) fn start(target: Target, hub: Arc<Hub>, tasks: &mut JoinSet<()>) -> RecvAccess {
     match target {
         Target::Recv => {
@@ -77,7 +77,7 @@ async fn to_recv(hub: Arc<Hub>, mut requests: mpsc::Receiver<RecvRequest>) {
             () = batch.closed() => continue,
         };
         if batch.send(comments).is_err() {
-            // The `jampot recv` went away.
+            // The `jamparty recv` went away.
             hub.finish(Attempt::Returned);
             continue;
         }

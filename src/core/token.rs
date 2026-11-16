@@ -23,11 +23,11 @@ const SECRET_LEN: usize = 26;
 /// [`PartySecret::matches`]; deliberately not `PartialEq`, and `Debug`
 /// does not print it.
 ///
-/// Its bytes are zeroed when it is dropped, and so is every copy jampot
+/// Its bytes are zeroed when it is dropped, and so is every copy jamparty
 /// makes on the way to and from text (formatting, parsing, serde): those
 /// go through fixed buffers wiped on drop, never through a `String` or
 /// `Vec` that could reallocate and leave a copy behind. Copies outside
-/// jampot's hands (argv, stdout's buffer, the transport's buffers) are not
+/// jamparty's hands (argv, stdout's buffer, the transport's buffers) are not
 /// covered.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub(crate) struct PartySecret([u8; SECRET_BYTES]);
@@ -143,7 +143,7 @@ impl fmt::Debug for PartySecret {
 
 /// The share's key and the party secret, written as the base58 (Bitcoin
 /// alphabet: no `0`, `O`, `I` or `l`) of their 48 bytes, the 32-byte key
-/// then the 16-byte secret, as `jampot serve` prints it and `jampot join`
+/// then the 16-byte secret, as `jamparty serve` prints it and `jamparty join`
 /// takes it. That is at most 66 characters, usually 64 to 66 (the all-zero
 /// token is 48 `1`s). Base58 gives each byte string exactly one spelling.
 #[derive(Clone, Debug)]
@@ -158,7 +158,7 @@ pub(crate) struct TokenError;
 impl fmt::Display for TokenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
-            "a party token is one base58 string of about 66 characters, as jampot serve prints it",
+            "a party token is one base58 string of about 66 characters, as jamparty serve prints it",
         )
     }
 }

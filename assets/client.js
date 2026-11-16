@@ -102,17 +102,17 @@ var LIVE_REVISION = (() => {
   const revision = Number(live);
   return Number.isSafeInteger(revision) ? revision : null;
 })();
-var HOST_ID = "jampot";
-var DISMISSED_KEY = "jampot-dismissed-v1";
-var OUTBOX_KEY = "jampot-outbox-v1";
-var JOINER_KEY = "jampot-joiner-key-v1";
-var DRAFT_KEY = "jampot-draft-v1";
-var SETTINGS_COOKIE = "jampot-settings-v1";
+var HOST_ID = "jamparty";
+var DISMISSED_KEY = "jamparty-dismissed-v1";
+var OUTBOX_KEY = "jamparty-outbox-v1";
+var JOINER_KEY = "jamparty-joiner-key-v1";
+var DRAFT_KEY = "jamparty-draft-v1";
+var SETTINGS_COOKIE = "jamparty-settings-v1";
 var MAX_OUTBOX = 20;
 var WATCHDOG_MS = 35e3;
 var RECONNECT_MIN_MS = 250;
 var RECONNECT_MAX_MS = 5e3;
-var AGENT_TARGET_PREFIX = "jampot-agent:";
+var AGENT_TARGET_PREFIX = "jamparty-agent:";
 var CURSOR_RATE = 15;
 var CURSOR_FADE_MS = 4e3;
 var PALETTE = [
@@ -232,7 +232,7 @@ var Answers = class {
     }
     for (const link of body.querySelectorAll("a")) {
       const href = link.getAttribute("href") ?? "";
-      if (!href.toLowerCase().startsWith("jampot:")) {
+      if (!href.toLowerCase().startsWith("jamparty:")) {
         link.target = "_blank";
         link.rel = "noopener noreferrer";
       }
@@ -443,11 +443,11 @@ var Answers = class {
   }
   followElementLink(link, event) {
     const href = link.getAttribute("href") ?? "";
-    if (!href.toLowerCase().startsWith("jampot:")) return;
+    if (!href.toLowerCase().startsWith("jamparty:")) return;
     event.preventDefault();
     let selector;
     try {
-      selector = decodeURIComponent(href.slice("jampot:".length));
+      selector = decodeURIComponent(href.slice("jamparty:".length));
     } catch {
       this.ui.showToast("Element link is invalid");
       return;
@@ -471,7 +471,7 @@ var Connection = class {
     let text = "connected";
     if (!this.socketOpen) {
       colour = "amber";
-      text = "reconnecting to jampot join…";
+      text = "reconnecting to jamparty join…";
     } else if (this.link?.connected !== true) {
       colour = "grey";
       text = "share unreachable";
@@ -687,7 +687,7 @@ var Panel = class {
     );
     if (RESERVED_KEYS.includes(key)) {
       this.stopListening();
-      this.message(`${keyLabel(key)} is used by jampot`);
+      this.message(`${keyLabel(key)} is used by jamparty`);
       return;
     }
     if (PAGE_KEYS.includes(key)) {
@@ -846,7 +846,7 @@ var CursorSender = class {
     this.present = false;
     this.send(null);
   }
-  /** The element under the point (not jampot's own overlay) and the offset in its box. */
+  /** The element under the point (not jamparty's own overlay) and the offset in its box. */
   position(x, y) {
     const element = document.elementsFromPoint(x, y).find((candidate) => candidate !== this.ui.host && !this.ui.host.contains(candidate));
     if (element === void 0) return null;
@@ -1360,7 +1360,7 @@ var EditMode = class {
     this.ui.edit.setAttribute("aria-pressed", "false");
     this.outline(null);
   }
-  /** The page element an event is about, or null for jampot's own overlay. */
+  /** The page element an event is about, or null for jamparty's own overlay. */
   pageTarget(event) {
     if (event.composedPath().includes(this.ui.host)) return null;
     return event.target instanceof Element ? event.target : null;
@@ -1890,7 +1890,7 @@ function parseMessage(data) {
 }
 
 // client/src/socket.ts
-var UNREACHABLE = "jampot join is not reachable";
+var UNREACHABLE = "jamparty join is not reachable";
 var COMMENT_LOST = { unsent: { error: UNREACHABLE } };
 var SETTINGS_LOST = { refused: { error: `not saved: ${UNREACHABLE}` } };
 var Waiting = class {
@@ -2704,7 +2704,7 @@ var MARKUP = `
     </header>
     <ol id="outbox-list"></ol>
   </section>
-  <section id="panel" aria-label="jampot settings" hidden>
+  <section id="panel" aria-label="jamparty settings" hidden>
     <div class="control" id="comment-mode-row">
       <span class="label" id="comment-mode-label">Comment mode</span>
       <button class="chip" id="comment-mode-key" type="button" aria-label="Key for comment mode">C</button>
@@ -2748,7 +2748,7 @@ var MARKUP = `
     <div id="agent-general"></div>
     <div id="agent-anchored"></div>
   </div>
-  <dialog id="jampot-dialog" aria-labelledby="dialog-label">
+  <dialog id="jamparty-dialog" aria-labelledby="dialog-label">
     <form>
       <label id="dialog-label" for="comment">Comment:</label>
       <div id="selection-preview" hidden>
@@ -2848,7 +2848,7 @@ var Ui = class _Ui {
   constructor(host, shadow) {
     const find = (selector, type) => {
       const element = shadow.querySelector(selector);
-      if (!(element instanceof type)) throw new Error(`jampot: missing ${selector}`);
+      if (!(element instanceof type)) throw new Error(`jamparty: missing ${selector}`);
       return element;
     };
     this.host = host;
@@ -2888,9 +2888,9 @@ var Ui = class _Ui {
     this.toast = find("#toast", HTMLDivElement);
     this.agentGeneral = find("#agent-general", HTMLDivElement);
     this.agentAnchored = find("#agent-anchored", HTMLDivElement);
-    this.dialog = find("#jampot-dialog", HTMLDialogElement);
+    this.dialog = find("#jamparty-dialog", HTMLDialogElement);
     this.dialogLabel = find("#dialog-label", HTMLLabelElement);
-    this.form = find("#jampot-dialog form", HTMLFormElement);
+    this.form = find("#jamparty-dialog form", HTMLFormElement);
     this.selectionPreview = find("#selection-preview", HTMLDivElement);
     this.selectionText = find("#selection-text", HTMLQuoteElement);
     this.textarea = find("textarea", HTMLTextAreaElement);

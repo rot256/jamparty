@@ -1,5 +1,5 @@
-//! The joiner's settings file, `~/.config/jampot/settings.json` (or under
-//! `$XDG_CONFIG_HOME`): the defaults each join starts from. jampot only
+//! The joiner's settings file, `~/.config/jamparty/settings.json` (or under
+//! `$XDG_CONFIG_HOME`): the defaults each join starts from. jamparty only
 //! reads it; the person writes it. Changes made in a page hold for that
 //! join only, and the page keeps them for its share (docs/ui.md). A file
 //! open to other users is refused.
@@ -22,7 +22,7 @@ const FILE: &str = "settings.json";
 /// Settings files are small; a larger one is not ours.
 const MAX_BYTES: u64 = 64 * 1024;
 
-/// jampot's configuration directory (`~/.config/jampot`, or under
+/// jamparty's configuration directory (`~/.config/jamparty`, or under
 /// `$XDG_CONFIG_HOME`), from the environment.
 fn config_dir() -> Result<PathBuf, Report> {
     let config = match env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
@@ -32,7 +32,7 @@ fn config_dir() -> Result<PathBuf, Report> {
             PathBuf::from(home).join(".config")
         }
     };
-    Ok(config.join("jampot"))
+    Ok(config.join("jamparty"))
 }
 
 /// Where the settings live, from the environment.
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn read_with_defaults_and_refused_when_open_to_others() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("jampot/settings.json");
+        let path = dir.path().join("jamparty/settings.json");
         assert_eq!(load(&path).unwrap(), Settings::default());
 
         fs::create_dir_all(path.parent().unwrap()).unwrap();

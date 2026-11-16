@@ -227,7 +227,7 @@ export class Panel {
     );
     if (RESERVED_KEYS.includes(key)) {
       this.stopListening();
-      this.message(`${keyLabel(key)} is used by jampot`);
+      this.message(`${keyLabel(key)} is used by jamparty`);
       return;
     }
     if (PAGE_KEYS.includes(key)) {

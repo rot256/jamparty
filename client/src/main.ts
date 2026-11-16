@@ -145,7 +145,7 @@ function install(): void {
       // Taken: the settings message before the reply showed it. Lost
       // with the socket: the next hello tries again.
       if (outcome === "saved" || !socket.isOpen) return;
-      // Refused (a jampot that checks more): forgotten, and the joiner's
+      // Refused (a jamparty that checks more): forgotten, and the joiner's
       // settings shown as they are.
       forget();
       panel.show(settings);

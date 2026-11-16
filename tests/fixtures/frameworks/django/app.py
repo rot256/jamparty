@@ -6,7 +6,7 @@ from django.conf import settings
 
 settings.configure(
     DEBUG=True,
-    SECRET_KEY="jampot-test-only",
+    SECRET_KEY="jamparty-test-only",
     ROOT_URLCONF=__name__,
     ALLOWED_HOSTS=["127.0.0.2"],
     MIDDLEWARE=["django.middleware.csrf.CsrfViewMiddleware"],

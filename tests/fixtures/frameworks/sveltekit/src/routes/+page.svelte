@@ -1,1 +1,1 @@
-<h1 id="marker">jampot-marker-0</h1>
+<h1 id="marker">jamparty-marker-0</h1>

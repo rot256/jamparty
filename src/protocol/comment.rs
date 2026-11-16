@@ -68,7 +68,7 @@ impl AsRef<str> for CommentPage {
     }
 }
 
-/// What a comment points at: a CSS selector, `jampot-agent:<id>` for an
+/// What a comment points at: a CSS selector, `jamparty-agent:<id>` for an
 /// answer, or empty for the whole page; at most 2048 characters.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -131,7 +131,7 @@ impl From<Draft> for DraftFields {
 }
 
 /// A queued comment, as delivered to the target (one JSON object each).
-/// Built by the share; read back only by `jampot recv` from its own share.
+/// Built by the share; read back only by `jamparty recv` from its own share.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Comment {

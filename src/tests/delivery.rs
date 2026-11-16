@@ -114,7 +114,7 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
     assert!(
         error
             .to_string()
-            .contains("delivers comments to the command sh, not to jampot recv"),
+            .contains("delivers comments to the command sh, not to jamparty recv"),
         "{error}"
     );
 }
@@ -122,7 +122,7 @@ async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_missing_command_holds_comments() {
     let dir = fixture_dir();
-    let missing = vec![OsString::from("/nonexistent/jampot-agent")];
+    let missing = vec![OsString::from("/nonexistent/jamparty-agent")];
     let clock = Arc::new(ManualClock::new(t0()));
     let share = share_to(&dir, missing, Duration::from_secs(60), clock).await;
     let alice = join(&share, "alice").await;

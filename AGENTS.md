@@ -1,6 +1,6 @@
 # Repository instructions
 
-`jampot` is the multi-user, peer-to-peer successor of komtar; docs/ui.md
+`jamparty` is the multi-user, peer-to-peer successor of komtar; docs/ui.md
 specifies the joiner's overlay. Keep the runtime as one self-contained
 binary: the browser client (JavaScript and CSS) is written in
 TypeScript under `client/src` and bundled by `npm run build` into
@@ -27,7 +27,7 @@ cargo build --release
 After changing what the proxy sends or injects, the joiner, the request
 rules, the protocol or the browser client (the paths
 `.github/workflows/frameworks.yml` watches), also run the framework tests:
-real dev servers through jampot, in both browsers (Linux; Node.js 22.23 or
+real dev servers through jamparty, in both browsers (Linux; Node.js 22.23 or
 later on PATH; they download Hugo and Zola):
 
 ```sh

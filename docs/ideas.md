@@ -1,28 +1,28 @@
 # Ideas
 
 **Ideas only: none of this is planned or decided.** Brainstorming kept for
-later; nothing here binds jampot or docs/ui.md. Each entry
+later; nothing here binds jamparty or docs/ui.md. Each entry
 says what it is, why it might be worth it, and what is unclear.
 
 ## Identity through SSH and GitHub keys
 
 *Idea, 2026-11-13.*
 
-Let the sharer say "only john may join" and have jampot prove who john is,
+Let the sharer say "only john may join" and have jamparty prove who john is,
 using the SSH keys john already has on GitHub, without accounts or OAuth.
 
 Flow:
 
 1. The joiner connects to the share as usual (iroh) and asks to
    authenticate as `john`.
-2. The share runs an SSH server on an iroh stream; the joiner's jampot
+2. The share runs an SSH server on an iroh stream; the joiner's jamparty
    connects to it with the user's normal SSH client and agent, as
-   `john@<share>` (for example through `ssh -o ProxyCommand="jampot ssh-proxy
-   <token>" john@share`, or jampot speaking SSH itself).
+   `john@<share>` (for example through `ssh -o ProxyCommand="jamparty ssh-proxy
+   <token>" john@share`, or jamparty speaking SSH itself).
 3. The share fetches `https://github.com/john.keys` (john's SSH
    authentication keys, public) and accepts john only if he authenticates
    with one of them.
-4. Over that SSH connection john's jampot sends its iroh public key, then
+4. Over that SSH connection john's jamparty sends its iroh public key, then
    closes it. The share now associates that iroh key with `john` for the
    rest of the session (and could remember it).
 
@@ -31,9 +31,9 @@ Why it is attractive:
 - Uses keys people already have, including keys on hardware tokens or
   held by an SSH agent: the private key never has to be exported or reused
   as an iroh key, only used to sign the SSH handshake.
-- Nothing to publish beyond what GitHub already shows; no jampot-specific
+- Nothing to publish beyond what GitHub already shows; no jamparty-specific
   GitHub setup.
-- The sharer can name people by GitHub login ("john, alice") and jampot
+- The sharer can name people by GitHub login ("john, alice") and jamparty
   shows verified names instead of self-chosen ones.
 
 Open points:
@@ -41,8 +41,8 @@ Open points:
 - A simpler variant without an SSH server (preferred if this is built): an
   SSH signature (OpenSSH "SSHSIG", what `ssh-keygen -Y sign` makes).
   - The share sends a challenge: its iroh key, the joiner's iroh key, a
-    random nonce and a timestamp. john's jampot signs it in the SSHSIG
-    namespace `jampot` (a signature in that namespace is useless as a git
+    random nonce and a timestamp. john's jamparty signs it in the SSHSIG
+    namespace `jamparty` (a signature in that namespace is useless as a git
     commit or file signature, and vice versa) and returns it; the share
     verifies it against john's keys and binds the joiner's iroh key to john.
   - Same trust as the SSH login, far less code, and the binding of the
@@ -61,7 +61,7 @@ Open points:
 - GitHub is trusted at authentication time; a key removed from GitHub
   later stays associated until the share restarts (or re-checks).
 - Cache `github.com/<login>.keys` on the publisher's disk (for example
-  `~/.cache/jampot/github-keys/<login>`, with the fetch time): fewer
+  `~/.cache/jamparty/github-keys/<login>`, with the fetch time): fewer
   requests to GitHub, no rate-limit trouble, and authentication keeps
   working while GitHub is unreachable. Refresh after a TTL (a day?), and
   re-fetch once when someone presents a key the cache doesn't have (they
@@ -80,10 +80,10 @@ UI sketch (first attempt; the owner is not convinced by it, kept only as a
 starting point). The browser cannot reach the SSH agent, so the joiner
 process signs and the page only shows the result:
 
-- Sharer: `jampot serve --allow john,alice` admits only those GitHub
+- Sharer: `jamparty serve --allow john,alice` admits only those GitHub
   accounts (the token still gets you to the share); its output shows
   `john ✓ (GitHub)` or `bob (guest)`.
-- Joiner, terminal: `jampot join <token> --github john` signs through the
+- Joiner, terminal: `jamparty join <token> --github john` signs through the
   agent (touch for a hardware key), prints `verified as john (GitHub)`, and
   remembers the login in `settings.json` for the next join; with no
   matching key in the agent it explains `ssh-add` or adding the key on
@@ -94,7 +94,7 @@ process signs and the page only shows the result:
   key…"); a ✓ badge on verified avatars in "N here", on cursor tags and on
   comments, so a guest calling himself john is told apart.
 - Agent: a comment's `author` gains `github: {login, id}` when verified;
-  `jampot send --to john` can target the verified person.
+  `jamparty send --to john` can target the verified person.
 
 ## Cursors across screen sizes
 
@@ -121,4 +121,4 @@ process signs and the page only shows the result:
 - An MCP endpoint on the running share, so agents get `send` and friends
   as tools.
 - A web gateway peer that joins on behalf of browsers, so people without
-  jampot installed can take part.
+  jamparty installed can take part.

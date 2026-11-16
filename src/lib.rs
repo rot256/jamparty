@@ -62,7 +62,7 @@ use crate::{
 /// Errors are rootcause reports; `main` prints them with [`describe`].
 pub use rootcause::Report;
 
-/// Installs the log output: `jampot: ...` lines on stderr, or fmt's
+/// Installs the log output: `jamparty: ...` lines on stderr, or fmt's
 /// detailed format when RUST_LOG is set.
 pub fn init_logging() {
     adapters::output::init();
@@ -86,7 +86,7 @@ pub fn describe(error: &Report) -> String {
 /// How long a page's request waits for the joiner to reach the share again
 /// (after a drop) before it is answered "not reachable".
 const CONNECT_WAIT: Duration = Duration::from_secs(15);
-/// How long `jampot join` waits for the share to answer its hello.
+/// How long `jamparty join` waits for the share to answer its hello.
 const ADMISSION_WAIT: Duration = Duration::from_secs(10);
 
 /// How long a public share waits to reach a relay before printing its token.
@@ -94,7 +94,7 @@ const ONLINE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "jampot",
+    name = "jamparty",
     version,
     about = "Share a site under development and collect comments on it"
 )]
@@ -128,7 +128,7 @@ enum Command {
 
     /// Join a share and open it in the browser.
     Join {
-        /// The party token printed by `jampot serve` or `jampot proxy`, or
+        /// The party token printed by `jamparty serve` or `jamparty proxy`, or
         /// `-` to read it from stdin (out of `ps` and shell history).
         token: TokenArg,
         #[command(flatten)]
@@ -179,12 +179,12 @@ enum Command {
 #[derive(Debug, Args)]
 struct ShareNet {
     /// No relays or address lookup: bind 127.0.0.1 and print the address
-    /// for `jampot join --share-addr`.
+    /// for `jamparty join --share-addr`.
     #[arg(long, hide = true)]
     local: bool,
 }
 
-/// Deliver comments to a command, or hold them for `jampot recv`.
+/// Deliver comments to a command, or hold them for `jamparty recv`.
 #[derive(Debug, Args)]
 struct Delivery {
     /// How long a command may take per batch before it is killed: seconds,
@@ -222,7 +222,7 @@ fn timeout(text: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs(secs))
 }
 
-/// Where `jampot join` gets its token.
+/// Where `jamparty join` gets its token.
 #[derive(Clone, Debug)]
 enum TokenArg {
     Given(PartyToken),
@@ -259,7 +259,7 @@ impl TokenArg {
     }
 }
 
-/// How much of stdin `jampot join -` reads for the token.
+/// How much of stdin `jamparty join -` reads for the token.
 const TOKEN_LINE_LIMIT: usize = 1024;
 
 /// Which running share `recv` and `send` talk to.
@@ -361,14 +361,14 @@ fn target(delivery: Delivery, source: &Source, in_t3: bool) -> (Target, Option<S
     }
     let note = in_t3.then(|| {
         format!(
-            "inside T3, deliver to this thread with: jampot {} -- t3 thread send \"$T3CODE_THREAD_ID\" -",
+            "inside T3, deliver to this thread with: jamparty {} -- t3 thread send \"$T3CODE_THREAD_ID\" -",
             source_args(source)
         )
     });
     (Target::Recv, note)
 }
 
-/// `source` as `jampot` arguments to paste: the mode, then the directory
+/// `source` as `jamparty` arguments to paste: the mode, then the directory
 /// or URL quoted for the shell, or a placeholder when it cannot be shown
 /// exactly (not UTF-8) or safely (control characters).
 fn source_args(source: &Source) -> String {
@@ -397,9 +397,11 @@ fn shell_quote(value: &str) -> String {
 
 fn net_config(discovery: Discovery) -> Result<NetConfig, Report> {
     let mut net = NetConfig::new(discovery);
-    if let Some(relay) = env::var_os("JAMPOT_RELAY").filter(|relay| !relay.is_empty()) {
-        let relay = relay.to_str().context("JAMPOT_RELAY is not valid UTF-8")?;
-        net.relay = Some(relay.parse::<RelayUrl>().context("JAMPOT_RELAY")?);
+    if let Some(relay) = env::var_os("JAMPARTY_RELAY").filter(|relay| !relay.is_empty()) {
+        let relay = relay
+            .to_str()
+            .context("JAMPARTY_RELAY is not valid UTF-8")?;
+        net.relay = Some(relay.parse::<RelayUrl>().context("JAMPARTY_RELAY")?);
     }
     Ok(net)
 }
@@ -419,7 +421,7 @@ async fn share(
     let in_t3 = env::var_os("T3CODE_THREAD_ID").is_some();
     let (target, note) = target(delivery, &source, in_t3);
     let goes_to = match &target {
-        Target::Recv => "jampot recv".to_owned(),
+        Target::Recv => "jamparty recv".to_owned(),
         Target::Command(command) => format!(
             "the command {}",
             command
@@ -446,20 +448,20 @@ async fn share(
     }
     // Startup records stay on stdout for agents reading the token and id;
     // ongoing diagnostics (including tracing) go to stderr.
-    println!("jampot: sharing {site}{detail}");
-    println!("jampot: token: {}", share.token());
+    println!("jamparty: sharing {site}{detail}");
+    println!("jamparty: token: {}", share.token());
     println!(
-        "jampot: warning: anyone with the token can see the site and send comments to the agent until this share stops"
+        "jamparty: warning: anyone with the token can see the site and send comments to the agent until this share stops"
     );
-    println!("jampot: share id: {}", share.id());
-    println!("jampot: comments go to {goes_to}");
+    println!("jamparty: share id: {}", share.id());
+    println!("jamparty: comments go to {goes_to}");
     if let Some(note) = note {
-        println!("jampot: note: {note}");
+        println!("jamparty: note: {note}");
     }
-    println!("jampot: agents: run jampot agent for the guides");
+    println!("jamparty: agents: run jamparty agent for the guides");
     if discovery == Discovery::Direct {
         for addr in share.direct_addrs() {
-            println!("jampot: direct address: {addr}");
+            println!("jamparty: direct address: {addr}");
         }
     }
     shutdown_signal().await?;
@@ -539,19 +541,19 @@ async fn join(
         admission_wait: ADMISSION_WAIT,
         proxy: ProxyLimits::JOIN,
     };
-    eprintln!("jampot: connecting to the share…");
+    eprintln!("jamparty: connecting to the share…");
     let joiner = tokio::select! {
         joiner = Joiner::start(config) => joiner?,
         signal = shutdown_signal() => return Ok(signal?),
     };
     if let Some(note) = joiner.version_note() {
-        eprintln!("jampot: {note}");
+        eprintln!("jamparty: {note}");
     }
     if let Some(fallback) = joiner.fallback() {
-        eprintln!("jampot: {fallback}");
+        eprintln!("jamparty: {fallback}");
     }
     let url = joiner.url();
-    eprintln!("jampot: open {url}");
+    eprintln!("jamparty: open {url}");
     match open {
         Open::Browser => open_browser(&url),
         Open::No => {}
@@ -632,7 +634,7 @@ mod join_settings_tests {
     #[test]
     fn join_setting_options_parse_and_validate() {
         let cli = Cli::try_parse_from([
-            "jampot",
+            "jamparty",
             "join",
             "-",
             "--answer-timeout",
@@ -660,11 +662,11 @@ mod join_settings_tests {
         );
         for value in ["-1", "3601", "1.5", "no"] {
             assert!(
-                Cli::try_parse_from(["jampot", "join", "-", "--answer-timeout", value]).is_err()
+                Cli::try_parse_from(["jamparty", "join", "-", "--answer-timeout", value]).is_err()
             );
         }
         assert!(
-            Cli::try_parse_from(["jampot", "join", "-", "--clear-answers-key", "Enter"]).is_err()
+            Cli::try_parse_from(["jamparty", "join", "-", "--clear-answers-key", "Enter"]).is_err()
         );
     }
 
@@ -676,7 +678,8 @@ mod join_settings_tests {
                 .unwrap(),
             Settings::default()
         );
-        let cli = Cli::try_parse_from(["jampot", "join", "-", "--clear-answers-key", "C"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["jamparty", "join", "-", "--clear-answers-key", "C"]).unwrap();
         let Some(Command::Join { settings, .. }) = cli.command else {
             panic!("expected join")
         };

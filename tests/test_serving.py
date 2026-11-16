@@ -21,7 +21,7 @@ from support import (
     PageSocket,
     eventually,
     hello,
-    jampot,
+    jamparty,
     join,
     join_process,
     request,
@@ -80,8 +80,8 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         status, body = request(joined, "/")
         assert status == 200
         assert b"Fixture page" in body
-        assert b"/_jampot/client.js?live=0" in body
-        status, body = request(joined, "/_jampot/client.js")
+        assert b"/_jamparty/client.js?live=0" in body
+        status, body = request(joined, "/_jamparty/client.js")
         assert status == 200 and body == (ROOT / "assets/client.js").read_bytes()
         assert request(joined, "/missing")[0] == 404
 
@@ -115,18 +115,18 @@ def test_serve_and_join_over_http(tmp_path: Path) -> None:
         assert hello(joined)["mine"] == [outcome["commented"]["id"]]
         # The rest of the API is reserved: nothing there reaches the site.
         for path in [
-            "/_jampot/api/status",
-            "/_jampot/api/events",
-            "/_jampot/api/missing",
+            "/_jamparty/api/status",
+            "/_jamparty/api/events",
+            "/_jamparty/api/missing",
         ]:
             status, body = request(joined, path)
             assert status == 404, path
-            assert b"no such jampot path" in body, body
+            assert b"no such jamparty path" in body, body
 
 
 # Dev servers on 127.0.0.2 stand for dev servers on another machine: the
 # joiner's 127.0.0.1 and [::1] are free on their port, and pages reach
-# them only through jampot.
+# them only through jamparty.
 DEV_HOST = "127.0.0.2"
 
 
@@ -139,7 +139,7 @@ def test_the_joiner_serves_on_the_dev_servers_port(tmp_path: Path, page: Page) -
         assert joined.port == urlsplit(upstream).port
         _ = page.goto(joined.url)
         expect(page.locator("h1")).to_have_text("Fixture page")
-        expect(page.locator("#jampot")).to_be_attached()
+        expect(page.locator("#jamparty")).to_be_attached()
 
 
 def test_a_taken_port_falls_back_with_a_note(tmp_path: Path, page: Page) -> None:
@@ -154,16 +154,16 @@ def test_a_taken_port_falls_back_with_a_note(tmp_path: Path, page: Page) -> None
                 share(tmp_path, "proxy", upstream) as shared,
                 join_process(tmp_path, shared, shared.token) as process,
             ):
-                note = process.wait_for("jampot: port ")
+                note = process.wait_for("jamparty: port ")
                 assert note.startswith(f"{port} is in use here; serving on "), note
                 assert "Live reload" in note
-                url = process.wait_for("jampot: open ")
+                url = process.wait_for("jamparty: open ")
                 served = urlsplit(url).port
                 assert served is not None and served != port
                 assert note.startswith(f"{port} is in use here; serving on {served}.")
                 _ = page.goto(url)
                 expect(page.locator("h1")).to_have_text("Fixture page")
-                expect(page.locator("#jampot")).to_be_attached()
+                expect(page.locator("#jamparty")).to_be_attached()
 
 
 def test_the_dev_server_sees_its_own_origin(tmp_path: Path, page: Page) -> None:
@@ -204,10 +204,10 @@ def test_streamed_html_gets_the_overlay(tmp_path: Path, page: Page) -> None:
         status, body = request(joined, "/")
         assert status == 200
         assert body.startswith(b"<!doctype html><html><body><h1>Streamed page</h1>")
-        assert b'/_jampot/client.js"' in body
+        assert b'/_jamparty/client.js"' in body
         _ = page.goto(joined.url)
         expect(page.locator("h1")).to_have_text("Streamed page")
-        expect(page.locator("#jampot #connection")).to_have_attribute(
+        expect(page.locator("#jamparty #connection")).to_have_attribute(
             "data-state", "green"
         )
 
@@ -220,7 +220,7 @@ def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:
     ):
         status, body = request(joined, "/")
         assert status == 200
-        assert b"/_jampot/client.js" in body
+        assert b"/_jamparty/client.js" in body
         _ = page.goto(joined.url)
         echoed = page.evaluate(
             """() => new Promise((resolve, reject) => {
@@ -233,19 +233,23 @@ def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:
         assert echoed == "hello over iroh"
 
 
-def test_bare_jampot_and_the_agent_guides(tmp_path: Path) -> None:
-    overview = jampot(tmp_path)
-    for line in ["jampot serve <dir>", "jampot proxy <url>", "jampot join <token>"]:
+def test_bare_jamparty_and_the_agent_guides(tmp_path: Path) -> None:
+    overview = jamparty(tmp_path)
+    for line in [
+        "jamparty serve <dir>",
+        "jamparty proxy <url>",
+        "jamparty join <token>",
+    ]:
         assert line in overview
-    assert "jampot agent" in overview
-    guides = jampot(tmp_path, "agent")
+    assert "jamparty agent" in overview
+    guides = jamparty(tmp_path, "agent")
     for kind in ["t3", "claude", "codex", "other"]:
-        assert f"jampot agent {kind}" in guides
-    assert "jampot recv" in jampot(tmp_path, "agent", "claude")
-    t3 = jampot(tmp_path, "agent", "t3")
+        assert f"jamparty agent {kind}" in guides
+    assert "jamparty recv" in jamparty(tmp_path, "agent", "claude")
+    t3 = jamparty(tmp_path, "agent", "t3")
     assert 't3 thread send "$T3CODE_THREAD_ID" -' in t3
     assert "comment ids to skip duplicates" in t3
-    help_text = jampot(tmp_path, "--help")
+    help_text = jamparty(tmp_path, "--help")
     assert "serve" in help_text and "recv" not in help_text
 
 
@@ -266,7 +270,7 @@ def test_the_joiner_answers_the_client_itself(tmp_path: Path) -> None:
         )
         try:
             connection.request(
-                "GET", "/_jampot/client.js?live=3", headers={"Host": joined.host}
+                "GET", "/_jamparty/client.js?live=3", headers={"Host": joined.host}
             )
             response = connection.getresponse()
             body = response.read()

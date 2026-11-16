@@ -62,14 +62,14 @@ def test_answers_and_dismissals_are_bounded(tmp_path: Path, page: Page) -> None:
         # Dismissals of answers the joiner no longer has are forgotten.
         stale = [str(uuid.UUID(int=index)) for index in range(1, 1000)]
         _ = page.evaluate(
-            "(ids) => sessionStorage.setItem('jampot-dismissed-v1', JSON.stringify(ids))",
+            "(ids) => sessionStorage.setItem('jamparty-dismissed-v1', JSON.stringify(ids))",
             stale,
         )
         _ = page.reload()
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
 
         def forgotten() -> bool:
-            stored = page.evaluate("sessionStorage.getItem('jampot-dismissed-v1')")
+            stored = page.evaluate("sessionStorage.getItem('jamparty-dismissed-v1')")
             return stored == "[]"
 
         waiting(page, "the dismissals to be forgotten", forgotten)

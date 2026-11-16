@@ -1,3 +1,3 @@
 export default function Page() {
-  return <h1 id="marker">jampot-marker-0</h1>;
+  return <h1 id="marker">jamparty-marker-0</h1>;
 }

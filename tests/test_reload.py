@@ -21,7 +21,7 @@ from support import (
     cursor_on,
     cursors,
     hello,
-    jampot,
+    jamparty,
     join,
     overlay,
     pages,
@@ -40,7 +40,7 @@ def test_live_reload_after_a_file_change(tmp_path: Path, page: Page) -> None:
     ):
         _ = page.goto(joined.url)
         expect(page.locator("h1")).to_have_text("Fixture page")
-        expect(page.locator("#jampot #connection")).to_have_attribute(
+        expect(page.locator("#jamparty #connection")).to_have_attribute(
             "data-state", "green"
         )
         index = site / "index.html"
@@ -65,7 +65,7 @@ def test_only_a_newer_revision_reloads(tmp_path: Path, page: Page) -> None:
         _ = index.write_text(index.read_text().replace("Fixture page", "Changed page"))
         expect(page.locator("h1")).to_have_text("Changed page")
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        _ = page.evaluate("() => { window.jampotStayed = true; }")
+        _ = page.evaluate("() => { window.jampartyStayed = true; }")
 
         def older(message: dict[str, object]) -> dict[str, object]:
             if message["type"] == "hello":
@@ -84,7 +84,7 @@ def test_only_a_newer_revision_reloads(tmp_path: Path, page: Page) -> None:
         reopen()
         tap.edit = None
         reopen()
-        assert page.evaluate("() => window.jampotStayed === true")
+        assert page.evaluate("() => window.jampartyStayed === true")
 
         _ = index.write_text(index.read_text().replace("Changed page", "Newer page"))
         expect(page.locator("h1")).to_have_text("Newer page")
@@ -146,7 +146,7 @@ def test_a_joiner_that_drops_comes_back(tmp_path: Path, browser: Browser) -> Non
                 overlay(bob_page, "#pill").click()
                 row.locator("button").click()
                 expect(row).to_have_attribute("data-state", "queued")
-                [line] = jampot(tmp_path, "recv").splitlines()
+                [line] = jamparty(tmp_path, "recv").splitlines()
                 record = cast(dict[str, object], json.loads(line))
                 assert record["comment"] == "Written while away."
                 for page in (alice_page, carol_page):
@@ -285,7 +285,7 @@ def test_a_second_tab_of_the_same_joiner(tmp_path: Path, browser: Browser) -> No
             overlay(first, "#gear").click()
             expect(overlay(first, "#name-field")).to_have_value("robin")
             # Delivered: both tabs hear it.
-            _ = jampot(tmp_path, "recv")
+            _ = jamparty(tmp_path, "recv")
             for page in (first, second):
                 expect(overlay(page, "#badge")).to_have_text("0 queued")
         finally:

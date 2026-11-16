@@ -1,7 +1,7 @@
 //! The runtime directory and the per-share Unix sockets in it, which
-//! `jampot recv` and `jampot send` use to reach a running share.
+//! `jamparty recv` and `jamparty send` use to reach a running share.
 //!
-//! The directory is `$XDG_RUNTIME_DIR/jampot/` or `~/.cache/jampot/run/`,
+//! The directory is `$XDG_RUNTIME_DIR/jamparty/` or `~/.cache/jamparty/run/`,
 //! mode 0700 and owned by the user; each share's socket is `<id>.sock`
 //! (the id is the share's `<sid>`), mode 0600, removed when the share stops.
 
@@ -28,10 +28,10 @@ use crate::{Report, core::ids::Sid};
 /// The runtime directory, from the environment.
 pub(crate) fn default_dir() -> Result<PathBuf, Report> {
     if let Some(dir) = env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()) {
-        return Ok(PathBuf::from(dir).join("jampot"));
+        return Ok(PathBuf::from(dir).join("jamparty"));
     }
     let home = env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".cache/jampot/run"))
+    Ok(PathBuf::from(home).join(".cache/jamparty/run"))
 }
 
 /// Creates `dir` (mode 0700) if needed and checks it.
@@ -175,7 +175,7 @@ pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, 
     }
 }
 
-const NO_SHARE: &str = "no share is running (start one with jampot serve or jampot proxy)";
+const NO_SHARE: &str = "no share is running (start one with jamparty serve or jamparty proxy)";
 
 #[cfg(test)]
 mod tests {

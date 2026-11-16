@@ -12,7 +12,7 @@ export type DraftKind = "element" | "page" | "answer";
 /** What the dialog was opened on, as it was opened. */
 export interface DraftTarget {
   kind: DraftKind;
-  /** On the page, `jampot-agent:<id>` for an answer, `""` for the page. */
+  /** On the page, `jamparty-agent:<id>` for an answer, `""` for the page. */
   selector: string;
 }
 

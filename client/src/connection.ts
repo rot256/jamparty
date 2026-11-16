@@ -30,7 +30,7 @@ export class Connection {
     let text = "connected";
     if (!this.socketOpen) {
       colour = "amber";
-      text = "reconnecting to jampot join…";
+      text = "reconnecting to jamparty join…";
     } else if (this.link?.connected !== true) {
       colour = "grey";
       text = "share unreachable";

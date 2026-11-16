@@ -17,7 +17,7 @@ from support import (
     SocketTap,
     comment_on_intro,
     hello,
-    jampot,
+    jamparty,
     join,
     overlay,
     pages,
@@ -35,15 +35,15 @@ def test_right_click_comment_is_queued(tmp_path: Path, page: Page) -> None:
         assert urlsplit(joined.url).hostname is not None
         assert cast(str, urlsplit(joined.url).hostname).endswith(".localhost")
         _ = page.goto(joined.url)
-        badge = page.locator("#jampot #badge")
+        badge = page.locator("#jamparty #badge")
         expect(badge).to_have_text("0 queued")
         page.locator("#intro").click(button="right")
-        textarea = page.locator("#jampot textarea")
+        textarea = page.locator("#jamparty textarea")
         expect(textarea).to_be_focused()
         textarea.fill("Tighten this paragraph.")
         textarea.press("Enter")
         expect(badge).to_have_text("1 queued")
-        expect(page.locator("#jampot #toast")).to_contain_text("Comment queued")
+        expect(page.locator("#jamparty #toast")).to_contain_text("Comment queued")
 
 
 def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> None:
@@ -58,18 +58,18 @@ def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> 
             _ = alice_page.goto(alice.url)
             _ = bob_page.goto(bob.url)
             comment_on_intro(alice_page, "Shorter, please.")
-            entry = alice_page.locator("#jampot #outbox-list li")
+            entry = alice_page.locator("#jamparty #outbox-list li")
             expect(entry).to_have_attribute("data-state", "queued")
 
-            output = jampot(tmp_path, "recv")
+            output = jamparty(tmp_path, "recv")
             [line] = output.splitlines()
             record = cast(dict[str, object], json.loads(line))
             assert record["comment"] == "Shorter, please."
             assert record["selector"] == "#intro"
             expect(entry).to_have_attribute("data-state", "delivered")
-            expect(alice_page.locator("#jampot #badge")).to_have_text("0 queued")
+            expect(alice_page.locator("#jamparty #badge")).to_have_text("0 queued")
 
-            _ = jampot(
+            _ = jamparty(
                 tmp_path,
                 "send",
                 "Done: **shorter** now.",
@@ -79,7 +79,7 @@ def test_delivery_and_answers_in_two_pages(tmp_path: Path, browser: Browser) -> 
                 "all",
             )
             for page in [alice_page, bob_page]:
-                answer = page.locator("#jampot .agent-message")
+                answer = page.locator("#jamparty .agent-message")
                 expect(answer).to_contain_text("Done: shorter now.")
                 expect(answer.locator("strong")).to_have_text("shorter")
         finally:
@@ -93,14 +93,16 @@ def test_connection_indicator_and_unsent_comments(tmp_path: Path, page: Page) ->
         join(tmp_path, shared) as joined,
     ):
         _ = page.goto(joined.url)
-        indicator = page.locator("#jampot #connection")
+        indicator = page.locator("#jamparty #connection")
         expect(indicator).to_have_attribute("data-state", "green")
         shared.process.stop()
         expect(indicator).to_have_attribute("data-state", "grey")
-        expect(page.locator("#jampot #connection-text")).to_contain_text("unreachable")
+        expect(page.locator("#jamparty #connection-text")).to_contain_text(
+            "unreachable"
+        )
 
         comment_on_intro(page, "Kept for later.")
-        entry = page.locator("#jampot #outbox-list li")
+        entry = page.locator("#jamparty #outbox-list li")
         expect(entry).to_have_attribute("data-state", "unsent")
         expect(entry.locator("button")).to_have_text("send again")
 
@@ -114,7 +116,7 @@ FILL_OUTBOX = """([count, key]) => {
         key,
         at: Date.now(),
     }));
-    sessionStorage.setItem("jampot-outbox-v1", JSON.stringify(entries));
+    sessionStorage.setItem("jamparty-outbox-v1", JSON.stringify(entries));
 }"""
 
 
@@ -141,7 +143,7 @@ def test_a_full_outbox_refuses_a_new_comment(tmp_path: Path, page: Page) -> None
         textarea.press_sequentially("One too many")
         textarea.press("Enter")
         expect(overlay(page, "#status")).to_contain_text("waiting to be sent")
-        expect(overlay(page, "#jampot-dialog")).to_be_visible()
+        expect(overlay(page, "#jamparty-dialog")).to_be_visible()
         expect(textarea).to_have_value("One too many")
         expect(rows).to_have_count(20)
         expect(rows.filter(has_text="old 0")).to_have_count(1)
@@ -157,7 +159,7 @@ def test_a_comment_draft_survives_reloads(tmp_path: Path, page: Page) -> None:
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         page.locator("#intro").click(button="right")
-        textarea = page.locator("#jampot textarea")
+        textarea = page.locator("#jamparty textarea")
         expect(textarea).to_be_focused()
         textarea.press_sequentially("Half written")
 
@@ -169,7 +171,7 @@ def test_a_comment_draft_survives_reloads(tmp_path: Path, page: Page) -> None:
         expect(overlay(page, "#status")).to_have_text("")
         textarea.press_sequentially(", now whole.")
 
-        # jampot's own live reload waits for the dialog to close.
+        # jamparty's own live reload waits for the dialog to close.
         index = site / "index.html"
         _ = index.write_text(index.read_text().replace("Fixture page", "Changed page"))
         expect(overlay(page, "#reload-notice")).to_be_visible()
@@ -180,7 +182,7 @@ def test_a_comment_draft_survives_reloads(tmp_path: Path, page: Page) -> None:
         expect(page.locator("h1")).to_have_text("Changed page")
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         expect(overlay(page, "#badge")).to_have_text("1 queued")
-        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        expect(overlay(page, "#jamparty-dialog")).not_to_be_visible()
         [record] = recv_all(tmp_path)
         assert record["comment"] == "Half written, now whole."
         assert record["selector"] == "#intro"
@@ -198,12 +200,12 @@ def test_a_draft_whose_element_is_gone_becomes_a_page_comment(
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         page.locator("#intro").click(button="right")
-        textarea = page.locator("#jampot textarea")
+        textarea = page.locator("#jamparty textarea")
         textarea.press_sequentially("About that paragraph")
         index = site / "index.html"
         _ = index.write_text(index.read_text().replace('id="intro" ', ""))
         # The page has heard of the change: a reload gets the new one, and
-        # no reload of jampot's own is left waiting for the dialog.
+        # no reload of jamparty's own is left waiting for the dialog.
         expect(overlay(page, "#reload-notice")).to_be_visible()
         gone = "The element is gone; this will be a page comment."
         for _ in range(2):
@@ -220,18 +222,18 @@ def test_a_draft_whose_element_is_gone_becomes_a_page_comment(
         # Cancelled or sent, a draft is not brought back.
         _ = page.reload()
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        expect(overlay(page, "#jamparty-dialog")).not_to_be_visible()
 
 
 # Holds the comments the page sends its joiner until
-# `window.jampotRelease()`; then sends them, or answers them with `outcome`
-# (as the joiner's reply would) if given. `window.jampotRestore()` stops.
+# `window.jampartyRelease()`; then sends them, or answers them with `outcome`
+# (as the joiner's reply would) if given. `window.jampartyRestore()` stops.
 HOLD_COMMENTS = """(outcome) => {
     const original = WebSocket.prototype.send;
     let release;
     const released = new Promise((resolve) => { release = resolve; });
-    window.jampotRelease = () => release();
-    window.jampotRestore = () => { WebSocket.prototype.send = original; };
+    window.jampartyRelease = () => release();
+    window.jampartyRestore = () => { WebSocket.prototype.send = original; };
     WebSocket.prototype.send = function (data) {
         const message = JSON.parse(data);
         if (message.type !== "comment") return original.call(this, data);
@@ -259,7 +261,7 @@ def test_a_sending_dialog_stays_until_answered(tmp_path: Path, page: Page) -> No
         textarea = overlay(page, "textarea")
         textarea.press_sequentially("First")
         textarea.press("Enter")
-        dialog = overlay(page, "#jampot-dialog")
+        dialog = overlay(page, "#jamparty-dialog")
         status = overlay(page, "#status")
         expect(status).to_have_text("Queueing…")
         textarea.press("Escape")
@@ -270,7 +272,7 @@ def test_a_sending_dialog_stays_until_answered(tmp_path: Path, page: Page) -> No
         expect(textarea).to_have_value("First")
         expect(status).to_have_text("Queueing…")
 
-        _ = page.evaluate("() => window.jampotRelease()")
+        _ = page.evaluate("() => window.jampartyRelease()")
         expect(dialog).not_to_be_visible()
         expect(overlay(page, "#badge")).to_have_text("1 queued")
         # The next comment is a draft again, and survives a reload.
@@ -298,9 +300,9 @@ def test_a_refused_comment_is_a_draft_again(tmp_path: Path, page: Page) -> None:
         textarea.press("Enter")
         expect(overlay(page, "#status")).to_have_text("Queueing…")
         textarea.press("Escape")
-        _ = page.evaluate("() => window.jampotRelease()")
+        _ = page.evaluate("() => window.jampartyRelease()")
         expect(overlay(page, "#status")).to_have_text("too many comments")
-        expect(overlay(page, "#jampot-dialog")).to_be_visible()
+        expect(overlay(page, "#jamparty-dialog")).to_be_visible()
         expect(overlay(page, "#outbox-list li")).to_have_count(0)
         _ = page.reload()
         expect(textarea).to_have_value("Refused")
@@ -330,7 +332,7 @@ def test_a_reload_during_sending_does_not_send_twice(
         tap.hold.clear()
         _ = page.reload()
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
-        expect(overlay(page, "#jampot-dialog")).not_to_be_visible()
+        expect(overlay(page, "#jamparty-dialog")).not_to_be_visible()
         rows = overlay(page, "#outbox-list li")
         expect(rows).to_have_count(1)
         expect(rows).to_have_attribute("data-state", "queued")
@@ -411,7 +413,7 @@ def test_the_comment_list(tmp_path: Path, page: Page) -> None:
         expect(rows.nth(1).locator(".state")).to_have_text("queued")
 
         # Delivered once the agent has them, in green.
-        assert len(jampot(tmp_path, "recv").splitlines()) == 2
+        assert len(jamparty(tmp_path, "recv").splitlines()) == 2
         expect(rows.nth(1).locator(".state")).to_have_text("delivered")
         expect(rows.nth(1).locator(".state")).to_have_css("color", "rgb(140, 233, 154)")
         expect(overlay(page, "#list-count")).to_have_text("0 queued")
@@ -426,14 +428,14 @@ def test_the_comment_list(tmp_path: Path, page: Page) -> None:
 
         # Not sent (the joiner did not take it), then sent again.
         _ = page.evaluate(HOLD_COMMENTS, {"unsent": {"error": "not reachable"}})
-        _ = page.evaluate("() => window.jampotRelease()")
+        _ = page.evaluate("() => window.jampartyRelease()")
         comment_on_intro(page, "Third, kept for later.")
         overlay(page, "#pill").click()
         unsent = rows.nth(0)
         expect(unsent).to_have_attribute("data-state", "unsent")
         expect(unsent.locator(".state")).to_have_text("not sent")
         expect(unsent.locator(".state")).to_have_css("color", "rgb(255, 168, 168)")
-        _ = page.evaluate("() => window.jampotRestore()")
+        _ = page.evaluate("() => window.jampartyRestore()")
         unsent.locator("button.again").click()
         expect(unsent).to_have_attribute("data-state", "queued")
         expect(overlay(page, "#list-count")).to_have_text("1 queued")
@@ -451,7 +453,7 @@ def test_comments_stay_with_their_author(tmp_path: Path, browser: Browser) -> No
             _ = page.evaluate(
                 """() => {
                     window.seen = [];
-                    const url = new URL("/_jampot/api/socket", location.href);
+                    const url = new URL("/_jamparty/api/socket", location.href);
                     url.protocol = "ws:";
                     const socket = new WebSocket(url);
                     socket.onmessage = (event) => window.seen.push(event.data);
@@ -459,10 +461,10 @@ def test_comments_stay_with_their_author(tmp_path: Path, browser: Browser) -> No
             )
         comment_on_intro(alice_page, "Alice's comment.")
         expect(overlay(alice_page, "#badge")).to_have_text("1 queued")
-        [line] = jampot(tmp_path, "recv").splitlines()
+        [line] = jamparty(tmp_path, "recv").splitlines()
         record = cast(dict[str, object], json.loads(line))
         assert record["comment"] == "Alice's comment."
-        _ = jampot(tmp_path, "send", "Marker.", "--to", "all")
+        _ = jamparty(tmp_path, "send", "Marker.", "--to", "all")
 
         def seen(page: Page) -> list[str]:
             return cast(list[str], page.evaluate("window.seen"))
@@ -527,7 +529,7 @@ def test_list_times_and_dialog_titles(tmp_path: Path, page: Page) -> None:
         overlay(page, "#collapse").click()
 
         # A comment on an answer.
-        _ = jampot(tmp_path, "send", "An answer.")
+        _ = jamparty(tmp_path, "send", "An answer.")
         answer = overlay(page, ".agent-message")
         expect(answer).to_contain_text("An answer.")
         answer.click(button="right")
@@ -548,7 +550,7 @@ def test_a_delivery_before_the_queued_answer(tmp_path: Path, page: Page) -> None
         overlay(page, "textarea").press("Enter")
         waiting(page, "the queued answer", lambda: len(tap.held) > 0)
         # The agent takes it before the page hears it was queued.
-        _ = jampot(tmp_path, "recv")
+        _ = jamparty(tmp_path, "recv")
         page.wait_for_timeout(300)
         tap.release()
         overlay(page, "#pill").click()

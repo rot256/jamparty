@@ -18,14 +18,14 @@ export const LIVE_REVISION = ((): number | null => {
   return Number.isSafeInteger(revision) ? revision : null;
 })();
 
-export const HOST_ID = "jampot";
-export const DISMISSED_KEY = "jampot-dismissed-v1";
-export const OUTBOX_KEY = "jampot-outbox-v1";
+export const HOST_ID = "jamparty";
+export const DISMISSED_KEY = "jamparty-dismissed-v1";
+export const OUTBOX_KEY = "jamparty-outbox-v1";
 /** The key of the joiner this tab last heard from. */
-export const JOINER_KEY = "jampot-joiner-key-v1";
-export const DRAFT_KEY = "jampot-draft-v1";
+export const JOINER_KEY = "jamparty-joiner-key-v1";
+export const DRAFT_KEY = "jamparty-draft-v1";
 /** The cookie that keeps the settings changed in this share's pages. */
-export const SETTINGS_COOKIE = "jampot-settings-v1";
+export const SETTINGS_COOKIE = "jamparty-settings-v1";
 export const MAX_OUTBOX = 20;
 /** The joiner pings every 15 s; a socket silent for longer than this is dead. */
 export const WATCHDOG_MS = 35000;
@@ -33,7 +33,7 @@ export const WATCHDOG_MS = 35000;
 export const RECONNECT_MIN_MS = 250;
 export const RECONNECT_MAX_MS = 5000;
 /** Selectors of agent answers, for comments on an answer. */
-export const AGENT_TARGET_PREFIX = "jampot-agent:";
+export const AGENT_TARGET_PREFIX = "jamparty-agent:";
 /** Cursor messages per second at most (docs/ui.md: about 15). */
 export const CURSOR_RATE = 15;
 /** A cursor without an update for this long fades out. */

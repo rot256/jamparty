@@ -1,4 +1,4 @@
-//! The iroh protocol's format version, jampot's own version, and what to
+//! The iroh protocol's format version, jamparty's own version, and what to
 //! say when a share and a joiner run different ones.
 
 use std::{cmp::Ordering, fmt};
@@ -43,27 +43,27 @@ impl fmt::Display for ProtocolVersion {
     }
 }
 
-/// The protocol version this jampot speaks.
+/// The protocol version this jamparty speaks.
 pub(crate) const PROTOCOL: ProtocolVersion = ProtocolVersion(1);
 
-const MAX_JAMPOT_VERSION: usize = 64;
+const MAX_JAMPARTY_VERSION: usize = 64;
 
-/// A jampot release's version, as Cargo has it (`0.1.0`, `0.2.0-rc.1`): 1
+/// A jamparty release's version, as Cargo has it (`0.1.0`, `0.2.0-rc.1`): 1
 /// to 64 characters of `[0-9A-Za-z.+-]`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
-pub(crate) struct JampotVersion(String);
+pub(crate) struct JampartyVersion(String);
 
-impl JampotVersion {
-    /// This jampot's version.
+impl JampartyVersion {
+    /// This jamparty's version.
     #[must_use]
     pub(crate) fn current() -> Self {
         Self(env!("CARGO_PKG_VERSION").to_owned())
     }
 }
 
-impl JampotVersion {
+impl JampartyVersion {
     /// How this version compares with `other` as semver; none when either
     /// is not semver.
     fn compare(&self, other: &Self) -> Option<Ordering> {
@@ -87,7 +87,7 @@ impl JampotVersion {
 /// What a joiner can do about another version at the share.
 enum Advice<'a> {
     /// This joiner is behind: install the share's version.
-    Install(&'a JampotVersion),
+    Install(&'a JampartyVersion),
     /// This joiner is ahead: the share is to update.
     AskShare,
 }
@@ -96,8 +96,8 @@ enum Advice<'a> {
 /// go on. Says which versions run where, and what to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Incompatible {
-    /// The share's jampot, if it said.
-    pub(crate) share: Option<JampotVersion>,
+    /// The share's jamparty, if it said.
+    pub(crate) share: Option<JampartyVersion>,
     /// The share's protocol version.
     pub(crate) protocol: ProtocolVersion,
 }
@@ -105,18 +105,18 @@ pub(crate) struct Incompatible {
 impl fmt::Display for Incompatible {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { share, protocol } = self;
-        let ours = JampotVersion::current();
+        let ours = JampartyVersion::current();
         match share {
-            Some(share) => write!(f, "the share runs jampot {share} (protocol {protocol})")?,
-            None => write!(f, "the share runs another jampot (protocol {protocol})")?,
+            Some(share) => write!(f, "the share runs jamparty {share} (protocol {protocol})")?,
+            None => write!(f, "the share runs another jamparty (protocol {protocol})")?,
         }
-        write!(f, "; this is jampot {ours} (protocol {PROTOCOL}).")?;
+        write!(f, "; this is jamparty {ours} (protocol {PROTOCOL}).")?;
         match share.as_ref().and_then(|share| share.advice(&ours)) {
             Some(Advice::Install(version)) => write!(
                 f,
-                " Install the share's version: cargo install --locked jampot@{version}"
+                " Install the share's version: cargo install --locked jamparty@{version}"
             ),
-            Some(Advice::AskShare) => f.write_str(" Ask the person sharing to update jampot."),
+            Some(Advice::AskShare) => f.write_str(" Ask the person sharing to update jamparty."),
             None => Ok(()),
         }
     }
@@ -124,30 +124,30 @@ impl fmt::Display for Incompatible {
 
 impl std::error::Error for Incompatible {}
 
-/// One line for a joiner whose share runs another jampot of the same
+/// One line for a joiner whose share runs another jamparty of the same
 /// protocol: it works, but the versions differ. None when they do not.
 #[must_use]
-pub(crate) fn mismatch_note(share: &JampotVersion) -> Option<String> {
-    let ours = JampotVersion::current();
+pub(crate) fn mismatch_note(share: &JampartyVersion) -> Option<String> {
+    let ours = JampartyVersion::current();
     if *share == ours {
         return None;
     }
     let hint = match share.advice(&ours) {
         Some(Advice::Install(version)) => {
-            format!("; consider updating: cargo install --locked jampot@{version}")
+            format!("; consider updating: cargo install --locked jamparty@{version}")
         }
         Some(Advice::AskShare) | None => String::new(),
     };
     Some(format!(
-        "the share runs jampot {share}; this is {ours}{hint}"
+        "the share runs jamparty {share}; this is {ours}{hint}"
     ))
 }
 
-impl TryFrom<String> for JampotVersion {
+impl TryFrom<String> for JampartyVersion {
     type Error = Invalid;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
-        let valid = (1..=MAX_JAMPOT_VERSION).contains(&raw.len())
+        let valid = (1..=MAX_JAMPARTY_VERSION).contains(&raw.len())
             && raw
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-'));
@@ -155,19 +155,19 @@ impl TryFrom<String> for JampotVersion {
             Ok(Self(raw))
         } else {
             Err(Invalid::new(format!(
-                "a jampot version is 1 to {MAX_JAMPOT_VERSION} characters of 0-9, A-Z, a-z, ., + and -"
+                "a jamparty version is 1 to {MAX_JAMPARTY_VERSION} characters of 0-9, A-Z, a-z, ., + and -"
             )))
         }
     }
 }
 
-impl From<JampotVersion> for String {
-    fn from(version: JampotVersion) -> Self {
+impl From<JampartyVersion> for String {
+    fn from(version: JampartyVersion) -> Self {
         version.0
     }
 }
 
-impl fmt::Display for JampotVersion {
+impl fmt::Display for JampartyVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
@@ -176,11 +176,11 @@ impl fmt::Display for JampotVersion {
 #[cfg(test)]
 mod tests {
     use crate::core::version::{
-        Incompatible, JampotVersion, ProtocolVersion, Version1, mismatch_note,
+        Incompatible, JampartyVersion, ProtocolVersion, Version1, mismatch_note,
     };
 
-    fn version(text: &str) -> JampotVersion {
-        JampotVersion::try_from(text.to_owned()).unwrap()
+    fn version(text: &str) -> JampartyVersion {
+        JampartyVersion::try_from(text.to_owned()).unwrap()
     }
 
     /// A version far behind and far ahead of this one.
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn an_incompatible_share_says_what_to_do() {
-        let ours = JampotVersion::current();
+        let ours = JampartyVersion::current();
         // The joiner is behind: install the share's version.
         let behind = Incompatible {
             share: Some(version(AHEAD)),
@@ -198,8 +198,8 @@ mod tests {
         assert_eq!(
             behind.to_string(),
             format!(
-                "the share runs jampot {AHEAD} (protocol 2); this is jampot {ours} (protocol 1). \
-                 Install the share's version: cargo install --locked jampot@{AHEAD}"
+                "the share runs jamparty {AHEAD} (protocol 2); this is jamparty {ours} (protocol 1). \
+                 Install the share's version: cargo install --locked jamparty@{AHEAD}"
             )
         );
         // Ahead: the share is to update.
@@ -210,8 +210,8 @@ mod tests {
         assert_eq!(
             ahead.to_string(),
             format!(
-                "the share runs jampot {BEHIND} (protocol 0); this is jampot {ours} (protocol 1). \
-                 Ask the person sharing to update jampot."
+                "the share runs jamparty {BEHIND} (protocol 0); this is jamparty {ours} (protocol 1). \
+                 Ask the person sharing to update jamparty."
             )
         );
         // Unknown, or not semver: no advice either way.
@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(
             unknown.to_string(),
             format!(
-                "the share runs another jampot (protocol 2); this is jampot {ours} (protocol 1)."
+                "the share runs another jamparty (protocol 2); this is jamparty {ours} (protocol 1)."
             )
         );
         let odd = Incompatible {
@@ -234,31 +234,34 @@ mod tests {
 
     #[test]
     fn another_version_of_the_same_protocol_is_a_note() {
-        let ours = JampotVersion::current();
+        let ours = JampartyVersion::current();
         assert_eq!(mismatch_note(&ours), None);
         assert_eq!(
             mismatch_note(&version(AHEAD)).unwrap(),
             format!(
-                "the share runs jampot {AHEAD}; this is {ours}; consider updating: \
-                 cargo install --locked jampot@{AHEAD}"
+                "the share runs jamparty {AHEAD}; this is {ours}; consider updating: \
+                 cargo install --locked jamparty@{AHEAD}"
             )
         );
         assert_eq!(
             mismatch_note(&version(BEHIND)).unwrap(),
-            format!("the share runs jampot {BEHIND}; this is {ours}")
+            format!("the share runs jamparty {BEHIND}; this is {ours}")
         );
         assert_eq!(
             mismatch_note(&version("nightly")).unwrap(),
-            format!("the share runs jampot nightly; this is {ours}")
+            format!("the share runs jamparty nightly; this is {ours}")
         );
     }
 
     #[test]
-    fn jampot_versions() {
-        assert!(JampotVersion::try_from(JampotVersion::current().to_string()).is_ok());
-        assert!(JampotVersion::try_from("0.2.0-rc.1+build".to_owned()).is_ok());
+    fn jamparty_versions() {
+        assert!(JampartyVersion::try_from(JampartyVersion::current().to_string()).is_ok());
+        assert!(JampartyVersion::try_from("0.2.0-rc.1+build".to_owned()).is_ok());
         for bad in ["", "1 0", "1/0", "v\n", &"1".repeat(65)] {
-            assert!(JampotVersion::try_from(bad.to_owned()).is_err(), "{bad:?}");
+            assert!(
+                JampartyVersion::try_from(bad.to_owned()).is_err(),
+                "{bad:?}"
+            );
         }
     }
 

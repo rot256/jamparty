@@ -1,4 +1,4 @@
-//! The share (`jampot serve` / `jampot proxy`): an iroh endpoint that
+//! The share (`jamparty serve` / `jamparty proxy`): an iroh endpoint that
 //! admits joiners presenting the party secret, serves their request
 //! streams and takes their comments.
 
@@ -147,7 +147,7 @@ impl Share {
             }
         };
         let (listener, socket) = runtime::listen(&runtime_dir, &token.share.sid())?;
-        let endpoint = bind(&net, key, Accept::Jampot).await?;
+        let endpoint = bind(&net, key, Accept::Jamparty).await?;
         let shared = Arc::new(Shared {
             token,
             site,
@@ -183,7 +183,7 @@ impl Share {
         &self.shared.token
     }
 
-    /// The id `jampot recv --share` and `jampot send --share` take.
+    /// The id `jamparty recv --share` and `jamparty send --share` take.
     #[must_use]
     pub(crate) fn id(&self) -> Sid {
         self.shared.token.share.sid()

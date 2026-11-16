@@ -53,7 +53,7 @@ impl HoldingShare {
             share: EndpointKey::from(key.public()),
             secret: PartySecret::generate(&SystemRng),
         };
-        let share = bind(&net(), key, Accept::Jampot).await.unwrap();
+        let share = bind(&net(), key, Accept::Jamparty).await.unwrap();
         let addrs = direct_addrs(&share);
         let accepting = share.clone();
         let taken = Arc::new(AtomicUsize::new(0));
@@ -65,7 +65,7 @@ impl HoldingShare {
             let mut byte = [0];
             while recv.read_exact(&mut byte).await.is_ok() && byte != *b"\n" {}
             let admitted = format!(
-                r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jampot":"{}"}}}}"#,
+                r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
                 "ab".repeat(32),
                 env!("CARGO_PKG_VERSION")
             );

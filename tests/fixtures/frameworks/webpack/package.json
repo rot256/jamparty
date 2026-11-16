@@ -1,5 +1,5 @@
 {
-  "name": "jampot-fixture-webpack",
+  "name": "jamparty-fixture-webpack",
   "private": true,
   "devDependencies": {
     "webpack": "5.112.2",

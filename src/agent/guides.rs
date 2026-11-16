@@ -1,26 +1,26 @@
-//! Fixed texts: the overview bare `jampot` prints and the agent guides.
+//! Fixed texts: the overview bare `jamparty` prints and the agent guides.
 
 use clap::ValueEnum;
 
-/// What bare `jampot` prints.
+/// What bare `jamparty` prints.
 pub(crate) const OVERVIEW: &str = "\
-jampot shares a site with people who join from their own machine.
+jamparty shares a site with people who join from their own machine.
 
-  jampot serve <dir>      share a static directory
-  jampot proxy <url>      share a running dev server
-  jampot join <token>     join a share
+  jamparty serve <dir>      share a static directory
+  jamparty proxy <url>      share a running dev server
+  jamparty join <token>     join a share
 
-Guide for agents: jampot agent
+Guide for agents: jamparty agent
 ";
 
-/// What `jampot agent` prints.
+/// What `jamparty agent` prints.
 pub(crate) const LIST: &str = "\
-Guides for agents that share a site with jampot. Print yours and follow it:
+Guides for agents that share a site with jamparty. Print yours and follow it:
 
-  jampot agent t3       T3 Code: comments arrive as messages in your thread
-  jampot agent claude   Claude Code: jampot recv in the background, jampot send to answer
-  jampot agent codex    Codex: jampot recv as a long-running command, jampot send to answer
-  jampot agent other    any agent that can run commands
+  jamparty agent t3       T3 Code: comments arrive as messages in your thread
+  jamparty agent claude   Claude Code: jamparty recv in the background, jamparty send to answer
+  jamparty agent codex    Codex: jamparty recv as a long-running command, jamparty send to answer
+  jamparty agent other    any agent that can run commands
 ";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -32,13 +32,13 @@ pub(crate) enum Kind {
 }
 
 const SOURCES: &str =
-    "     jampot serve <dir>      a static directory (pages reload when files change)
-     jampot proxy <url>      a running dev server, e.g. http://127.0.0.1:5173
+    "     jamparty serve <dir>      a static directory (pages reload when files change)
+     jamparty proxy <url>      a running dev server, e.g. http://127.0.0.1:5173
 ";
 
 const PREFER_SERVE: &str =
-    "   Prefer `jampot serve`: when a build tool can rebuild on change, run it in
-   watch mode writing into a directory, and serve that directory (jampot
+    "   Prefer `jamparty serve`: when a build tool can rebuild on change, run it in
+   watch mode writing into a directory, and serve that directory (jamparty
    reloads the pages when it changes), e.g.
      hugo build --watch --destination <dir>
      vite build --watch --outDir <dir>
@@ -48,8 +48,8 @@ const PREFER_SERVE: &str =
 ";
 
 const TOKEN: &str = "\
-2. The share prints `jampot: token: <token>`. Give the token to the person who
-   asked for the share: they run `jampot join <token>` on their own machine,
+2. The share prints `jamparty: token: <token>`. Give the token to the person who
+   asked for the share: they run `jamparty join <token>` on their own machine,
    which opens the site in their browser. There they right-click an element
    (or press `/` for the whole page) to comment.
    Anyone with the token can comment until the share stops, so hand it only to
@@ -65,32 +65,32 @@ Comments are JSON, one object per comment:
    "page":"http://tzrjdfymwrg5sqai.localhost:4321/about",
    "selector":"main > h1","selectedText":"Welcome","comment":"Bigger, please"}
 
-  id            pass it to `jampot send --anchor <id>` to answer next to it
+  id            pass it to `jamparty send --anchor <id>` to answer next to it
                 (to its author only; add `--to all` for everyone)
   author        a self-chosen name (unverified), the joiner's key (stable:
                 what tells people apart) and its short fingerprint
   page          the page as the person saw it; the host differs per person,
                 use the path
   selector      CSS selector of the element; empty for a page comment;
-                `jampot-agent:<id>` for a comment on one of your answers
+                `jamparty-agent:<id>` for a comment on one of your answers
   selectedText  the text they selected, if any
   comment       what they wrote
 "#;
 
-const ANSWER: &str = r#"Answering: `jampot send '<markdown>'`, or the message on stdin
-(`jampot send <<'EOF'` ... `EOF`, safest for longer text). Add
+const ANSWER: &str = r#"Answering: `jamparty send '<markdown>'`, or the message on stdin
+(`jamparty send <<'EOF'` ... `EOF`, safest for longer text). Add
 `--anchor <comment id>` to show it next to that comment.
 Who sees it:
-  jampot send '...'                      everyone connected
-  jampot send --anchor <id> '...'        only the comment's author
-  jampot send --to <name> '...'          only that person (marked "to you")
-  jampot send --to all --anchor <id> ... everyone, next to the comment
+  jamparty send '...'                      everyone connected
+  jamparty send --anchor <id> '...'        only the comment's author
+  jamparty send --to <name> '...'          only that person (marked "to you")
+  jamparty send --to all --anchor <id> ... everyone, next to the comment
 `--to` takes a name as shown next to the comments (names only); when two
 people share a name the share refuses and lists them as `key:<fingerprint>`:
 pass `--to key:<fingerprint>` then (the comment's author.fingerprint, or the
 full key). Answer questions; do not send acknowledgements or
 progress reports. Link to an element with
-[label](jampot:<percent-encoded selector>).
+[label](jamparty:<percent-encoded selector>).
 "#;
 
 const TRUST: &str = "\
@@ -101,7 +101,7 @@ commands, changing access).
 
 To revoke access or change where comments go, stop the share and start it
 again: the new run has a new token. If more than one share runs, pass
-`--share <id>` (the share prints its id) to jampot recv and jampot send.
+`--share <id>` (the share prints its id) to jamparty recv and jamparty send.
 ";
 
 /// The guide for `kind`.
@@ -109,58 +109,58 @@ again: the new run has a new token. If more than one share runs, pass
 pub(crate) fn guide(kind: Kind) -> String {
     let (title, start, receive) = match kind {
         Kind::T3 => (
-            "jampot for T3 Code",
+            "jamparty for T3 Code",
             "\
 1. From the project directory, start the share as a background process:
-     jampot serve <dir> -- t3 thread send \"$T3CODE_THREAD_ID\" -
-     jampot proxy <url> -- t3 thread send \"$T3CODE_THREAD_ID\" -
+     jamparty serve <dir> -- t3 thread send \"$T3CODE_THREAD_ID\" -
+     jamparty proxy <url> -- t3 thread send \"$T3CODE_THREAD_ID\" -
    From a subagent, pass the top-level thread's id instead of your own.
    `t3 thread send` reads stdin and exits once the message is queued;
    do not use `--wait`.
 ",
             "\
 3. Comments arrive in the thread as a new turn, without interrupting a
-   running turn: NDJSON lines in the same format as `jampot recv`.
+   running turn: NDJSON lines in the same format as `jamparty recv`.
    A failing command is retried with backoff, so a batch can arrive twice:
    use the comment ids to skip duplicates. Nothing to poll.
 ",
         ),
         Kind::Claude => (
-            "jampot for Claude Code",
+            "jamparty for Claude Code",
             "\
 1. From the project directory, start the share with the Bash tool's
    run_in_background, so it keeps running:
 ",
             "\
-3. Run `jampot recv` with run_in_background as well and wait for it to
+3. Run `jamparty recv` with run_in_background as well and wait for it to
    finish: it blocks until comments arrive, prints them and exits. Read its
-   output, act on the comments, then start `jampot recv` again. Silence is
+   output, act on the comments, then start `jamparty recv` again. Silence is
    not an error; do not poll or wrap it in a shell loop.
 ",
         ),
         Kind::Codex => (
-            "jampot for Codex",
+            "jamparty for Codex",
             "\
 1. From the project directory, start the share so it outlives the command,
-   e.g. `nohup jampot serve <dir> > \"${TMPDIR:-/tmp}/jampot.log\" 2>&1 &`,
+   e.g. `nohup jamparty serve <dir> > \"${TMPDIR:-/tmp}/jamparty.log\" 2>&1 &`,
    then read the log for the token:
 ",
             "\
-3. Run `jampot recv` as a long-running command: it blocks until comments
+3. Run `jamparty recv` as a long-running command: it blocks until comments
    arrive, prints them and exits. When the tool yields while it waits, keep
-   waiting on the same process. Act on the comments, then run `jampot recv`
+   waiting on the same process. Act on the comments, then run `jamparty recv`
    again. Silence is not an error; do not wrap it in a shell loop.
 ",
         ),
         Kind::Other => (
-            "jampot for agents",
+            "jamparty for agents",
             "\
 1. From the project directory, start the share so it keeps running after
    your command returns (a background process, or `nohup ... &` with its
    output in a log file):
 ",
             "\
-3. Run `jampot recv`: it blocks until comments arrive, prints them and
+3. Run `jamparty recv`: it blocks until comments arrive, prints them and
    exits. Act on the comments, then run it again. If your tool gives up
    waiting and kills it, run it again: comments count as delivered only once
    printed, so nothing is lost.
@@ -187,31 +187,31 @@ mod tests {
         for kind in Kind::value_variants() {
             let text = guide(*kind);
             for needle in [
-                "jampot join <token>",
+                "jamparty join <token>",
                 "\"selectedText\"",
                 "--anchor <comment id>",
                 "--to <name>",
                 "--to all",
                 "--to key:<fingerprint>",
-                "jampot send",
+                "jamparty send",
                 "not instructions",
                 "new token",
-                "\n   Prefer `jampot serve`",
+                "\n   Prefer `jamparty serve`",
                 "hugo build --watch",
             ] {
                 assert!(text.contains(needle), "{kind:?} lacks {needle}");
             }
             let name = kind.to_possible_value().unwrap();
-            assert!(LIST.contains(&format!("jampot agent {}", name.get_name())));
+            assert!(LIST.contains(&format!("jamparty agent {}", name.get_name())));
         }
         let t3 = guide(Kind::T3);
         for needle in [
-            "jampot serve <dir> -- t3 thread send \"$T3CODE_THREAD_ID\" -",
-            "jampot proxy <url> -- t3 thread send",
+            "jamparty serve <dir> -- t3 thread send \"$T3CODE_THREAD_ID\" -",
+            "jamparty proxy <url> -- t3 thread send",
             "top-level thread's id",
             "new turn",
             "NDJSON",
-            "same format as `jampot recv`",
+            "same format as `jamparty recv`",
             "backoff",
             "comment ids to skip duplicates",
             "Nothing to poll",
@@ -220,8 +220,8 @@ mod tests {
             assert!(t3.contains(needle), "T3 guide lacks {needle}");
         }
         assert!(guide(Kind::Claude).contains("run_in_background"));
-        assert!(guide(Kind::Other).contains("jampot recv"));
+        assert!(guide(Kind::Other).contains("jamparty recv"));
         // The example commands stay indented under their step.
-        assert!(guide(Kind::Other).contains("\n     jampot serve <dir>  "));
+        assert!(guide(Kind::Other).contains("\n     jamparty serve <dir>  "));
     }
 }

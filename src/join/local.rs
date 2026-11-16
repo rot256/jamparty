@@ -1,5 +1,5 @@
 //! The joiner's local HTTP server on `127.0.0.1`: checks each request with
-//! the core decision, answers jampot's own paths (the browser client
+//! the core decision, answers jamparty's own paths (the browser client
 //! included) and forwards everything else to the share, one iroh stream
 //! per request. What it forwards is bounded on the joiner's side, whatever
 //! the share does: so many requests and tunnels at once
@@ -75,7 +75,7 @@ pub(crate) struct ProxyLimits {
 }
 
 impl ProxyLimits {
-    /// What `jampot join` allows.
+    /// What `jamparty join` allows.
     pub(crate) const JOIN: Self = Self {
         concurrent: 48,
         response_wait: Duration::from_secs(120),
@@ -113,10 +113,10 @@ impl Proxy {
 /// What a page load gets while the share cannot be reached: a short note
 /// that retries by itself (the joiner reconnects after a drop).
 const UNREACHABLE_PAGE: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
-<meta http-equiv=\"refresh\" content=\"2\"><title>jampot: connecting</title>\
+<meta http-equiv=\"refresh\" content=\"2\"><title>jamparty: connecting</title>\
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:32em;margin:4em auto;padding:0 1em;color:#222}</style>\
 </head><body><h1>Connecting to the share…</h1>\
-<p>jampot join cannot reach the share yet. This page retries every few seconds.</p>\
+<p>jamparty join cannot reach the share yet. This page retries every few seconds.</p>\
 <p>If it keeps failing, the share may have stopped; ask for a new token.</p></body></html>\n";
 
 /// Accepts browser connections for `origin` until the task is dropped. A
@@ -180,7 +180,7 @@ async fn handle(
         Ok(Route::Client) => javascript_response(CLIENT_JS),
         Ok(Route::Socket) => socket::open(request, session),
         Ok(Route::Unknown) => {
-            RequestError::new(StatusCode::NOT_FOUND, "no such jampot path").into()
+            RequestError::new(StatusCode::NOT_FOUND, "no such jamparty path").into()
         }
         Ok(Route::Proxy) => match forward(request, session, proxy, connect_wait).await {
             Ok(response) => response,

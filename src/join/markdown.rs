@@ -1,6 +1,6 @@
 //! komtar's restricted Markdown renderer for answers: raw HTML is shown as
 //! text, images are dropped (their alt text stays), and links keep only
-//! `http`, `https`, `mailto` and `jampot:` (element links) destinations.
+//! `http`, `https`, `mailto` and `jamparty:` (element links) destinations.
 //!
 //! The output is bounded: Markdown can grow a lot when rendered (a table
 //! header of many columns gives every row as many cells), so an answer
@@ -145,7 +145,7 @@ fn safe_link(destination: &str) -> bool {
             .get(..colon)
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("http" | "https" | "mailto" | "jampot")
+        Some("http" | "https" | "mailto" | "jamparty")
     )
 }
 
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn markdown_escapes_html_and_rejects_unsafe_links() {
         let html = render(
-            "- one\n- two\n\n<script>alert(1)</script>\n\n[bad](JavaScript:alert(1)) [data](data:text/html,bad) [good](https://example.com) [element](jampot:%23intro%20.item) ![alt text](https://example.com/image.png)",
+            "- one\n- two\n\n<script>alert(1)</script>\n\n[bad](JavaScript:alert(1)) [data](data:text/html,bad) [good](https://example.com) [element](jamparty:%23intro%20.item) ![alt text](https://example.com/image.png)",
         );
         let html = html.as_str();
         assert!(html.contains("<ul>"));
@@ -206,7 +206,7 @@ mod tests {
         assert!(html.contains("bad"));
         assert!(html.contains("data"));
         assert!(html.contains("href=\"https://example.com\""));
-        assert!(html.contains("href=\"jampot:%23intro%20.item\""));
+        assert!(html.contains("href=\"jamparty:%23intro%20.item\""));
         assert!(html.contains("alt text"));
         assert!(!html.contains("<img"));
     }

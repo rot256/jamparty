@@ -17,7 +17,7 @@ use crate::{
         queue::backoff,
         text::Untrusted,
         token::PartyToken,
-        version::{Incompatible, JampotVersion, PROTOCOL},
+        version::{Incompatible, JampartyVersion, PROTOCOL},
     },
     join::{control::Control, session::Session},
     protocol::{
@@ -48,8 +48,8 @@ pub(crate) struct Dial {
 pub(crate) struct Welcome {
     /// What the share serves.
     pub(crate) site: SiteInfo,
-    /// The share's jampot.
-    pub(crate) jampot: JampotVersion,
+    /// The share's jamparty.
+    pub(crate) jamparty: JampartyVersion,
 }
 
 /// Why the joiner gives up on the share for good.
@@ -130,12 +130,12 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
     let hello = Envelope::from(JoinerMessage::Hello(Hello {
         secret: dial.token.secret.clone(),
         name: session.name(),
-        jampot: JampotVersion::current(),
+        jamparty: JampartyVersion::current(),
     }));
     if let Err(error) = lines::write(&mut send, &hello).await {
         return Ended::Failed(error);
     }
-    // Leniently first: a share of another protocol says which jampot it
+    // Leniently first: a share of another protocol says which jamparty it
     // runs even if the rest of its line means nothing here.
     let read = lines::read_with(&mut recv, |line| {
         let greeting = decode_line::<Greeting>(line).ok();
@@ -152,7 +152,7 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
         Ok(Some((Some(greeting), _))) if greeting.version != PROTOCOL => {
             connection.close(VarInt::from_u32(0), b"incompatible");
             return Ended::Final(Final::Incompatible(Incompatible {
-                share: greeting.jampot(),
+                share: greeting.jamparty(),
                 protocol: greeting.version,
             }));
         }
@@ -168,19 +168,22 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
                 undelivered,
                 presence: Support::Supported,
                 site,
-                jampot,
-            } => (you, undelivered, Welcome { site, jampot }),
+                jamparty,
+            } => (you, undelivered, Welcome { site, jamparty }),
             ShareMessage::Refused {
                 reason: RefusedReason::Incompatible,
-                jampot,
+                jamparty,
             } => {
                 connection.close(VarInt::from_u32(0), b"refused");
                 return Ended::Final(Final::Incompatible(Incompatible {
-                    share: jampot,
+                    share: jamparty,
                     protocol: PROTOCOL,
                 }));
             }
-            ShareMessage::Refused { reason, jampot: _ } => {
+            ShareMessage::Refused {
+                reason,
+                jamparty: _,
+            } => {
                 connection.close(VarInt::from_u32(0), b"refused");
                 return refused(reason);
             }

@@ -36,7 +36,7 @@ const MARKUP = `
     </header>
     <ol id="outbox-list"></ol>
   </section>
-  <section id="panel" aria-label="jampot settings" hidden>
+  <section id="panel" aria-label="jamparty settings" hidden>
     <div class="control" id="comment-mode-row">
       <span class="label" id="comment-mode-label">Comment mode</span>
       <button class="chip" id="comment-mode-key" type="button" aria-label="Key for comment mode">C</button>
@@ -80,7 +80,7 @@ const MARKUP = `
     <div id="agent-general"></div>
     <div id="agent-anchored"></div>
   </div>
-  <dialog id="jampot-dialog" aria-labelledby="dialog-label">
+  <dialog id="jamparty-dialog" aria-labelledby="dialog-label">
     <form>
       <label id="dialog-label" for="comment">Comment:</label>
       <div id="selection-preview" hidden>
@@ -183,7 +183,7 @@ export class Ui {
   private constructor(host: HTMLDivElement, shadow: ShadowRoot) {
     const find = <T extends Element>(selector: string, type: new () => T): T => {
       const element = shadow.querySelector(selector);
-      if (!(element instanceof type)) throw new Error(`jampot: missing ${selector}`);
+      if (!(element instanceof type)) throw new Error(`jamparty: missing ${selector}`);
       return element;
     };
     this.host = host;
@@ -223,9 +223,9 @@ export class Ui {
     this.toast = find("#toast", HTMLDivElement);
     this.agentGeneral = find("#agent-general", HTMLDivElement);
     this.agentAnchored = find("#agent-anchored", HTMLDivElement);
-    this.dialog = find("#jampot-dialog", HTMLDialogElement);
+    this.dialog = find("#jamparty-dialog", HTMLDialogElement);
     this.dialogLabel = find("#dialog-label", HTMLLabelElement);
-    this.form = find("#jampot-dialog form", HTMLFormElement);
+    this.form = find("#jamparty-dialog form", HTMLFormElement);
     this.selectionPreview = find("#selection-preview", HTMLDivElement);
     this.selectionText = find("#selection-text", HTMLQuoteElement);
     this.textarea = find("textarea", HTMLTextAreaElement);

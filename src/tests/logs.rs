@@ -15,7 +15,7 @@ use crate::tests::{
 
 fn admitted() -> String {
     format!(
-        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jampot":"{}"}}}}"#,
+        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
         "ab".repeat(32),
         env!("CARGO_PKG_VERSION")
     )
@@ -74,7 +74,7 @@ fn capture() -> Captured {
             let writer = captured.clone();
             let subscriber = tracing_subscriber::fmt()
                 .with_env_filter(
-                    "off,jampot::join::connection=debug,jampot::share::connection=info",
+                    "off,jamparty::join::connection=debug,jamparty::share::connection=info",
                 )
                 .with_ansi(false)
                 .without_time()

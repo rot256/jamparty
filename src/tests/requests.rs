@@ -34,7 +34,7 @@ async fn static_files_with_the_client_injected() {
     assert_eq!(page.status, 200);
     assert!(page.body.contains("<h1 id=\"title\">Fixture</h1>"));
     assert!(
-        page.body.contains("/_jampot/client.js?live=0"),
+        page.body.contains("/_jamparty/client.js?live=0"),
         "{}",
         page.body
     );
@@ -47,7 +47,7 @@ async fn static_files_with_the_client_injected() {
     assert_eq!(css.status, 200);
     assert_eq!(css.body, "h1 { color: red }");
 
-    for hidden in ["/.secret", "/%2esecret", "/missing", "/_jampot/other"] {
+    for hidden in ["/.secret", "/%2esecret", "/missing", "/_jamparty/other"] {
         assert_eq!(get(&joiner, hidden).await.status, 404, "{hidden}");
     }
 }
@@ -110,7 +110,11 @@ async fn proxied_pages_and_streams_are_not_buffered() {
     let page = get(&joiner, "/").await;
     assert_eq!(page.status, 200);
     assert!(page.body.contains("Fixture"));
-    assert!(page.body.contains("/_jampot/client.js\""), "{}", page.body);
+    assert!(
+        page.body.contains("/_jamparty/client.js\""),
+        "{}",
+        page.body
+    );
     assert_eq!(get(&joiner, "/nowhere").await.status, 404);
 
     // The first chunk arrives while the upstream still holds the second.
@@ -191,7 +195,7 @@ async fn load_page(joiner: &Joiner, path: &str) -> Reply {
 async fn a_page_loaded_while_joining_waits_for_the_share() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
-    // `jampot join` opens the browser before it is connected: the first
+    // `jamparty join` opens the browser before it is connected: the first
     // load must wait for the share rather than fail.
     let joiner = joiner(share.token().clone(), share.direct_addrs(), "alice").await;
     let page = load_page(&joiner, "/").await;
@@ -267,7 +271,7 @@ async fn the_joiner_serves_the_client_itself() {
         !joiner.watch().borrow().link.connected
     })
     .await;
-    let client = get(&joiner, "/_jampot/client.js?live=3&version=0.0.1").await;
+    let client = get(&joiner, "/_jamparty/client.js?live=3&version=0.0.1").await;
     assert_eq!(client.status, 200);
     assert_eq!(
         client.headers.get(header::CONTENT_TYPE).unwrap(),
@@ -278,7 +282,7 @@ async fn the_joiner_serves_the_client_itself() {
         "no-store"
     );
     assert_eq!(client.body, include_str!("../../assets/client.js"));
-    let head = local(&joiner, "HEAD", "/_jampot/client.js")
+    let head = local(&joiner, "HEAD", "/_jamparty/client.js")
         .body(Full::default())
         .unwrap();
     assert_eq!(fetch(&joiner, head).await.status, 200);

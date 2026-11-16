@@ -7,7 +7,7 @@
 //! [`finish`] reports the result: `Ok` drops the batch, `Error`
 //! keeps it and backs off on the injected clock, `Returned` keeps it with
 //! no backoff (the taker went away before it was delivered, e.g. a
-//! `jampot recv` that died), `Gone` keeps it and holds the queue for good
+//! `jamparty recv` that died), `Gone` keeps it and holds the queue for good
 //! (the share must be restarted to deliver elsewhere). A kept batch is
 //! sent again unchanged, never merged with newer comments, so a target
 //! can tell a retry from new comments. No timers here: the caller retries
@@ -33,7 +33,7 @@ pub(crate) enum DeliveryResult {
     /// A failure worth retrying.
     Error,
     /// The batch came back undelivered through no fault of the target
-    /// (a `jampot recv` died before printing it): no backoff.
+    /// (a `jamparty recv` died before printing it): no backoff.
     Returned,
     /// The target reports itself gone (e.g. the command cannot be started).
     Gone,

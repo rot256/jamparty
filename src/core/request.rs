@@ -12,8 +12,8 @@
 //!   that one too.
 //!
 //! Paths are matched exactly as received (no decoding or normalisation).
-//! The joiner answers `/_jampot/client.js` (GET or HEAD) itself, so a
-//! page's client is always its joiner's. Everything under `/_jampot/api/`
+//! The joiner answers `/_jamparty/client.js` (GET or HEAD) itself, so a
+//! page's client is always its joiner's. Everything under `/_jamparty/api/`
 //! is the joiner's own too: the page's socket (GET with an upgrade), and
 //! a 404 for any other path, which never reaches the share. Everything
 //! else goes to the share.
@@ -24,10 +24,10 @@ use crate::core::{ids::Sid, port::Port};
 pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
 
 /// The browser client the share's pages load.
-pub(crate) const CLIENT_PATH: &str = "/_jampot/client.js";
+pub(crate) const CLIENT_PATH: &str = "/_jamparty/client.js";
 /// The joiner's API paths start with this.
-const API_PREFIX: &str = "/_jampot/api/";
-pub(crate) const SOCKET_PATH: &str = "/_jampot/api/socket";
+const API_PREFIX: &str = "/_jamparty/api/";
+pub(crate) const SOCKET_PATH: &str = "/_jamparty/api/socket";
 
 /// The request method, as far as the decision cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

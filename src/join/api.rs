@@ -155,7 +155,7 @@ pub(crate) enum FromPage {
 
 /// The TypeScript the page's client is checked against
 /// (`client/src/generated/api.ts`), generated from the types above. The
-/// test fails when the file is stale; `JAMPOT_UPDATE_BINDINGS=1 cargo test
+/// test fails when the file is stale; `JAMPARTY_UPDATE_BINDINGS=1 cargo test
 /// bindings` rewrites it.
 #[cfg(test)]
 mod bindings {
@@ -234,7 +234,7 @@ mod bindings {
         ];
         let mut out = String::from(
             "// Generated from the Rust types by `cargo test` (src/join/api.rs); do not edit.\n\
-             // Regenerate: JAMPOT_UPDATE_BINDINGS=1 cargo test bindings\n\n",
+             // Regenerate: JAMPARTY_UPDATE_BINDINGS=1 cargo test bindings\n\n",
         );
         // The limits the share enforces, for the client to stay within.
         let limits = [
@@ -288,7 +288,7 @@ mod bindings {
     fn bindings_are_current() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("client/src/generated/api.ts");
         let generated = generate();
-        if env::var_os("JAMPOT_UPDATE_BINDINGS").is_some() {
+        if env::var_os("JAMPARTY_UPDATE_BINDINGS").is_some() {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, &generated).unwrap();
             return;
@@ -296,7 +296,7 @@ mod bindings {
         let current = fs::read_to_string(&path).unwrap_or_default();
         assert!(
             current == generated,
-            "{} is stale: run JAMPOT_UPDATE_BINDINGS=1 cargo test bindings",
+            "{} is stale: run JAMPARTY_UPDATE_BINDINGS=1 cargo test bindings",
             path.display()
         );
     }

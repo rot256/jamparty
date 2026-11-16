@@ -1,4 +1,4 @@
-//! `jampot join` against a share of another protocol, as a person runs
+//! `jamparty join` against a share of another protocol, as a person runs
 //! it: it exits with an error on stderr naming both versions and what to
 //! install. The share here is a stand-in that greets with protocol 2.
 
@@ -10,9 +10,9 @@ use std::{
 
 use iroh::{Endpoint, RelayMode, SecretKey, endpoint::presets};
 
-/// What jampot's connections are made with (the protocol version is in
+/// What jamparty's connections are made with (the protocol version is in
 /// each line, not here).
-const ALPN: &[u8] = b"jampot/1";
+const ALPN: &[u8] = b"jamparty/1";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn join_names_both_versions_and_exits() {
@@ -42,7 +42,7 @@ async fn join_names_both_versions_and_exits() {
             let mut byte = [0];
             while recv.read_exact(&mut byte).await.is_ok() && byte != *b"\n" {}
             let line =
-                b"{\"version\":2,\"message\":{\"type\":\"welcome\",\"jampot\":\"999.0.0\"}}\n";
+                b"{\"version\":2,\"message\":{\"type\":\"welcome\",\"jamparty\":\"999.0.0\"}}\n";
             let _ = send.write_all(line).await;
             kept.push((connection, send, recv));
         }
@@ -57,7 +57,7 @@ async fn join_names_both_versions_and_exits() {
         .to_owned();
 
     let home = tempfile::tempdir().unwrap();
-    let mut join = Command::new(env!("CARGO_BIN_EXE_jampot"))
+    let mut join = Command::new(env!("CARGO_BIN_EXE_jamparty"))
         .args(["join", "-", "--no-open", "--share-addr", &addr.to_string()])
         .env("HOME", home.path())
         .env("XDG_CONFIG_HOME", home.path().join("config"))
@@ -73,7 +73,7 @@ async fn join_names_both_versions_and_exits() {
         tokio::task::spawn_blocking(move || join.wait_with_output()),
     )
     .await
-    .expect("jampot join exits")
+    .expect("jamparty join exits")
     .unwrap()
     .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -81,8 +81,8 @@ async fn join_names_both_versions_and_exits() {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            "jampot: error: the share runs jampot 999.0.0 (protocol 2); this is jampot {ours} \
-             (protocol 1). Install the share's version: cargo install --locked jampot@999.0.0"
+            "jamparty: error: the share runs jamparty 999.0.0 (protocol 2); this is jamparty {ours} \
+             (protocol 1). Install the share's version: cargo install --locked jamparty@999.0.0"
         )),
         "{stderr}"
     );

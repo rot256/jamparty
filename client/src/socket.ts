@@ -31,7 +31,7 @@ export interface SocketHandlers {
   open(open: boolean): void;
 }
 
-const UNREACHABLE = "jampot join is not reachable";
+const UNREACHABLE = "jamparty join is not reachable";
 const COMMENT_LOST: CommentOutcome = { unsent: { error: UNREACHABLE } };
 const SETTINGS_LOST: SettingsOutcome = { refused: { error: `not saved: ${UNREACHABLE}` } };
 

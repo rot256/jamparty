@@ -1,5 +1,5 @@
-//! The agent's side: `jampot recv` and `jampot send` over the runtime
-//! socket, and the fixed texts (`jampot`, `jampot agent`).
+//! The agent's side: `jamparty recv` and `jamparty send` over the runtime
+//! socket, and the fixed texts (`jamparty`, `jamparty agent`).
 
 pub(crate) mod guides;
 

@@ -31,7 +31,7 @@ pub(crate) struct PageSettings {
 pub(crate) struct Preferences {
     /// The settings file's, changed by pages since.
     pub(crate) settings: Settings,
-    /// `jampot join --name`: this run's name, until one is chosen in the
+    /// `jamparty join --name`: this run's name, until one is chosen in the
     /// page.
     pub(crate) given: Option<JoinerName>,
     /// The name when none is given or chosen (`user@host`).

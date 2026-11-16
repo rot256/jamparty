@@ -1,4 +1,4 @@
-//! The share <-> joiner protocol over iroh (ALPN `jampot/1`).
+//! The share <-> joiner protocol over iroh (ALPN `jamparty/1`).
 //!
 //! - Control: one long-lived bidirectional stream opened by the joiner;
 //!   newline-delimited JSON, one [`control::Envelope`] per line. The
@@ -6,8 +6,8 @@
 //!   read or served before the share admits it.
 //! - Requests: HTTP/1.1 on joiner-opened streams (not modelled here).
 //!
-//! [`agent`] is the local runtime socket used by `jampot recv` and
-//! `jampot send`.
+//! [`agent`] is the local runtime socket used by `jamparty recv` and
+//! `jamparty send`.
 
 pub(crate) mod agent;
 pub(crate) mod comment;
@@ -25,8 +25,8 @@ use zeroize::Zeroizing;
 
 /// The iroh ALPN. It stays the same across protocol versions (each line
 /// carries its own), so a share and a joiner of different ones still
-/// connect and can tell each other which jampot they run.
-pub(crate) const ALPN: &[u8] = b"jampot/1";
+/// connect and can tell each other which jamparty they run.
+pub(crate) const ALPN: &[u8] = b"jamparty/1";
 
 /// Maximum length of one control line, newline included, in either
 /// direction. A maximal comment draft with every character escaped as

@@ -1,10 +1,10 @@
 [package]
-name = "jampot"
+name = "jamparty"
 version = "0.1.0"
 edition = "2024"
 description = "Share a site under development with a few people, peer to peer, and route their browser comments to a coding agent"
 license = "MIT"
-repository = "https://github.com/rot256/jampot"
+repository = "https://github.com/rot256/jamparty"
 readme = "README.md"
 keywords = ["browser", "cli", "development", "feedback", "proxy"]
 categories = ["command-line-utilities", "development-tools", "web-programming::http-server"]

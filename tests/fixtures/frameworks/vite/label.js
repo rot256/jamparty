@@ -1,1 +1,1 @@
-export const label = "jampot-marker-0";
+export const label = "jamparty-marker-0";

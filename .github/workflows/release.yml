@@ -39,9 +39,9 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
         run: |
-          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "jampot") | .version')"
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "jamparty") | .version')"
           if [ -z "$version" ] || [ "$version" = "null" ]; then
-            echo "Could not read the jampot package version" >&2
+            echo "Could not read the jamparty package version" >&2
             exit 1
           fi
           if [ "$REF_TYPE" != "tag" ]; then
@@ -112,7 +112,7 @@ jobs:
       - name: Verify static Linux binary
         if: runner.os == 'Linux'
         env:
-          BINARY: target/${{ matrix.target }}/release/jampot
+          BINARY: target/${{ matrix.target }}/release/jamparty
         run: |
           file "$BINARY"
           file "$BINARY" | grep -Eq 'statically linked|static-pie linked'
@@ -120,7 +120,7 @@ jobs:
       - name: Verify macOS ARM64 binary
         if: runner.os == 'macOS'
         env:
-          BINARY: target/${{ matrix.target }}/release/jampot
+          BINARY: target/${{ matrix.target }}/release/jamparty
         run: |
           file "$BINARY"
           file "$BINARY" | grep -q 'arm64'
@@ -130,13 +130,13 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           mkdir -p dist
-          tar -C "target/$TARGET/release" -czf "dist/jampot-$TARGET.tar.gz" jampot
-          shasum -a 256 "dist/jampot-$TARGET.tar.gz" > "dist/jampot-$TARGET.tar.gz.sha256"
+          tar -C "target/$TARGET/release" -czf "dist/jamparty-$TARGET.tar.gz" jamparty
+          shasum -a 256 "dist/jamparty-$TARGET.tar.gz" > "dist/jamparty-$TARGET.tar.gz.sha256"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: jampot-${{ matrix.target }}
+          name: jamparty-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 

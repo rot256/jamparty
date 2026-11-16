@@ -1,4 +1,4 @@
-//! The runtime socket between `jampot recv` / `jampot send` and the running
+//! The runtime socket between `jamparty recv` / `jamparty send` and the running
 //! share: newline-delimited JSON, one [`Envelope`] per line, both ways.
 //!
 //! - recv: the client sends `recv`; when comments are pending the share
@@ -25,7 +25,7 @@ use crate::{
     },
 };
 
-/// Who an answer is for (`jampot send --to`): everyone (`all`), a person
+/// Who an answer is for (`jamparty send --to`): everyone (`all`), a person
 /// by name (`alice`), or by key (`key:<fingerprint>` or `key:<64 hex>`).
 /// Names cannot contain `:`, so no name can pass for a key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

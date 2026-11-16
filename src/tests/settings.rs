@@ -70,7 +70,7 @@ async fn a_pages_changes_hold_for_this_join_and_never_reach_the_file() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let home = tempfile::tempdir().unwrap();
-    let path = home.path().join("jampot/settings.json");
+    let path = home.path().join("jamparty/settings.json");
 
     // No file: the defaults, and the page asks for a name.
     let first = joiner(&share, None, &path).await;
@@ -155,7 +155,7 @@ async fn a_change_from_one_shares_page_does_not_reach_another_join() {
     let hostile = share_files(&dir).await;
     let other = share_files(&dir).await;
     let home = tempfile::tempdir().unwrap();
-    let path = home.path().join("jampot/settings.json");
+    let path = home.path().join("jamparty/settings.json");
     write_settings(&path, r#"{"name":"dora"}"#);
 
     let first = joiner(&hostile, None, &path).await;
