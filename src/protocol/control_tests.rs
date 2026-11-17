@@ -11,7 +11,7 @@ use crate::{
             MAX_STATUS_LINE, RefusedReason, Revision, ShareMessage, SiteInfo, StatusLine,
         },
         decode_line, encode_line,
-        presence::{MAX_CURSOR_SELECTOR, MAX_PAGE_PATH, Person, Support},
+        presence::{MAX_CURSOR_SELECTOR, MAX_PAGE_PATH, Person},
     },
 };
 
@@ -162,12 +162,12 @@ fn share_messages() {
     let reference = |raw: &str| CommentRef::try_from(raw.to_owned()).unwrap();
     let cases = [
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], presence: Support::Supported, site: SiteInfo::Proxy { port: 1313.try_into().unwrap() }, jamparty: "0.1.0".to_owned().try_into().unwrap() },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"presence":"supported","site":{{"kind":"proxy","port":1313}},"jamparty":"0.1.0"}}"#),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![ID.parse().unwrap()], site: SiteInfo::Proxy { port: 1313.try_into().unwrap() }, jamparty: "0.1.0".to_owned().try_into().unwrap() },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":["{ID}"],"site":{{"kind":"proxy","port":1313}},"jamparty":"0.1.0"}}"#),
         ),
         (
-            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], presence: Support::Supported, site: SiteInfo::Files, jamparty: "0.1.0".to_owned().try_into().unwrap() },
-            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"0.1.0"}}"#),
+            ShareMessage::Admitted { you: author.clone(), undelivered: vec![], site: SiteInfo::Files, jamparty: "0.1.0".to_owned().try_into().unwrap() },
+            format!(r#"{{"type":"admitted","you":{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"site":{{"kind":"files"}},"jamparty":"0.1.0"}}"#),
         ),
         (
             ShareMessage::Refused { reason: RefusedReason::WrongSecret, jamparty: None },
@@ -233,10 +233,9 @@ fn share_messages() {
         ),
         (
             ShareMessage::Presence {
-                joiners: vec![author.clone()],
                 here: vec![Person::new(author.clone(), Some("/a?b#c".to_owned().try_into().unwrap()), Switch::On)],
             },
-            format!(r#"{{"type":"presence","joiners":[{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}"}}],"here":[{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}","colour":3,"url":"/a?b#c","cursor":"on"}}]}}"#),
+            format!(r#"{{"type":"presence","here":[{{"name":"alice@laptop","fingerprint":"ababababab","key":"{key}","colour":3,"url":"/a?b#c","cursor":"on"}}]}}"#),
         ),
     ];
     for (message, json) in cases {
@@ -253,7 +252,7 @@ fn share_messages() {
         r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{key}"}}}}}}"#
     );
     assert!(decode_line::<Envelope<ShareMessage>>(partial.as_bytes()).is_err());
-    let partial = r#"{"version":1,"message":{"type":"presence","joiners":[]}}"#;
+    let partial = r#"{"version":1,"message":{"type":"presence"}}"#;
     assert!(decode_line::<Envelope<ShareMessage>>(partial.as_bytes()).is_err());
     // A newer share may add fields.
     let extra = r#"{"version":1,"message":{"type":"reload","revision":3,"at":"now"}}"#;
@@ -274,7 +273,7 @@ fn text_limits() {
 fn site_announcements() {
     let admitted = |site: &str| {
         let line = format!(
-            r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{site},"jamparty":"0.1.0"}}}}"#,
+            r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"a","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"site":{site},"jamparty":"0.1.0"}}}}"#,
             "ab".repeat(32)
         );
         decode_line::<Envelope<ShareMessage>>(line.as_bytes()).map(|envelope| {
@@ -329,5 +328,27 @@ fn choices_are_capped_on_both_sides() {
                 assert!(serde_json::from_value::<AgentRequest>(message).is_err());
             }
         }
+    }
+}
+
+#[test]
+fn v0_1_2_greetings_are_classified_before_message_parsing() {
+    use crate::protocol::control::Greeting;
+    let ours = "0.2.0".to_owned().try_into().unwrap();
+    // Shapes from v0.1.2: hello, refusal, and admission. The greeting
+    // parser needs only the envelope version and jamparty, even if the
+    // full message has fields this release no longer understands.
+    for message in [
+        r#"{"type":"hello","secret":"unused","name":"alice","jamparty":"0.1.2"}"#,
+        r#"{"type":"refused","reason":"incompatible","jamparty":"0.1.2"}"#,
+        &format!(
+            r#"{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"0.1.2"}}"#,
+            "ab".repeat(32)
+        ),
+    ] {
+        let line = format!(r#"{{"version":1,"message":{message}}}"#);
+        let greeting = decode_line::<Greeting>(line.as_bytes()).unwrap();
+        assert!(greeting.incompatible_with(&ours));
+        assert_eq!(greeting.jamparty().unwrap().to_string(), "0.1.2");
     }
 }

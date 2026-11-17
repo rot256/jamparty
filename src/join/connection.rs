@@ -29,7 +29,6 @@ use crate::{
             SiteInfo,
         },
         decode_line,
-        presence::Support,
     },
 };
 
@@ -151,9 +150,7 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
     };
     let (you, undelivered, welcome) = match line {
         Ok(Some((Some(greeting), _)))
-            if greeting
-                .jamparty()
-                .is_some_and(|version| !version.compatible(&JampartyVersion::current())) =>
+            if greeting.incompatible_with(&JampartyVersion::current()) =>
         {
             connection.close(VarInt::from_u32(0), b"incompatible");
             return Ended::Final(Final::Incompatible(Incompatible {
@@ -170,7 +167,6 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
             ShareMessage::Admitted {
                 you,
                 undelivered,
-                presence: Support::Supported,
                 site,
                 jamparty: _,
             } => (you, undelivered, Welcome { site }),

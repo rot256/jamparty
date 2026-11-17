@@ -77,7 +77,7 @@ async fn another_patch_of_the_same_line_is_admitted() {
     let mut patch = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
     patch.patch += 1;
     let share = fake_share(vec![format!(
-        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"{patch}"}}}}"#
+        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"site":{{"kind":"files"}},"jamparty":"{patch}"}}}}"#
     )])
     .await;
     let joiner = within(
@@ -133,4 +133,55 @@ async fn a_share_that_never_answers_the_hello_is_tried_again() {
     .await;
     assert!(!joining.is_finished());
     joining.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_v0_1_2_shaped_refusal_is_final() {
+    let said = refusal(
+        r#"{"version":1,"message":{"type":"refused","reason":"incompatible","jamparty":"0.1.2"}}"#,
+    )
+    .await;
+    assert!(said.starts_with("the share runs jamparty 0.1.2;"), "{said}");
+    if !JampartyVersion::current().compatible(&"0.1.2".to_owned().try_into().unwrap()) {
+        assert!(
+            said.ends_with("Ask the person sharing to update jamparty."),
+            "{said}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_v0_1_2_shaped_hello_gets_a_readable_reply() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let (_endpoint, connection) = raw_connection(&share).await;
+    let (mut send, recv) = connection.open_bi().await.unwrap();
+    let secret = share.token().secret.to_string();
+    let hello = format!(
+        r#"{{"version":1,"message":{{"type":"hello","secret":"{secret}","name":"alice","jamparty":"0.1.2"}}}}"#
+    );
+    send.write_all(format!("{hello}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut recv = tokio::io::BufReader::new(recv);
+    let reply = within(
+        "the reply to v0.1.2",
+        crate::adapters::lines::read::<Envelope<ShareMessage>, _>(&mut recv),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    // This branch intentionally retains 0.1.2 until release. Once it is
+    // bumped to 0.2, the same legacy hello must receive a refusal.
+    if JampartyVersion::current().compatible(&"0.1.2".to_owned().try_into().unwrap()) {
+        assert!(matches!(reply.message, ShareMessage::Admitted { .. }));
+    } else {
+        assert_eq!(
+            reply.message,
+            ShareMessage::Refused {
+                reason: RefusedReason::Incompatible,
+                jamparty: Some(JampartyVersion::current()),
+            }
+        );
+    }
 }

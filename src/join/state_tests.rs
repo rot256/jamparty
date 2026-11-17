@@ -107,8 +107,7 @@ fn run(state: &mut State, op: Op) -> Vec<ToPage> {
             let here: Vec<Person> = (1..=count)
                 .map(|key| Person::new(author(key), None, Switch::Off))
                 .collect();
-            let joiners = (1..=count).map(author).collect();
-            state.apply(ShareMessage::Presence { joiners, here })
+            state.apply(ShareMessage::Presence { here })
         }
         Op::Status(set) => state.apply(ShareMessage::Status {
             line: set.then(|| StatusLine::try_from("retrying".to_owned()).unwrap()),

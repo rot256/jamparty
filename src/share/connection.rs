@@ -36,7 +36,7 @@ use crate::{
         comment::Author,
         control::{Envelope, Greeting, JoinerMessage, REFUSED_CODE, RefusedReason, ShareMessage},
         decode_line,
-        presence::{Support, Whereabouts},
+        presence::Whereabouts,
     },
     share::{
         Shared,
@@ -151,9 +151,7 @@ async fn admission(
     });
     let (first, leftover) = match timeout_at(deadline, read).await {
         Ok(Ok((Some((Some(greeting), _)), _)))
-            if greeting
-                .jamparty()
-                .is_some_and(|version| !version.compatible(&JampartyVersion::current())) =>
+            if greeting.incompatible_with(&JampartyVersion::current()) =>
         {
             shared.versions.incompatible(&greeting);
             return Ok(Admission::Refused {
@@ -259,7 +257,6 @@ async fn joined(
     let mut greeting = vec![ShareMessage::Admitted {
         you: author.clone(),
         undelivered: shared.hub.undelivered_by(author),
-        presence: Support::Supported,
         site: shared.site.info(),
         jamparty: JampartyVersion::current(),
     }];

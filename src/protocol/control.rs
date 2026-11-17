@@ -30,7 +30,7 @@ use crate::{
     },
     protocol::{
         comment::{Author, CommentPage, CommentSelector, Draft},
-        presence::{PagePath, Person, Position, Support},
+        presence::{PagePath, Person, Position},
     },
 };
 
@@ -105,8 +105,6 @@ pub(crate) enum ShareMessage {
     Admitted {
         you: Author,
         undelivered: Vec<CommentId>,
-        /// That the share takes `presence` and `cursor` messages.
-        presence: Support,
         /// What the share serves.
         site: SiteInfo,
         /// The share's jamparty.
@@ -146,14 +144,9 @@ pub(crate) enum ShareMessage {
     Reload { revision: Revision },
     /// The status line (`null` clears it).
     Status { line: Option<StatusLine> },
-    /// Who is connected now, once per key: `here` with their colour,
-    /// page and cursor switch. `joiners`, the same people as their
-    /// comments are signed, is part of the version-1 schema; joiners read
-    /// `here`.
-    Presence {
-        joiners: Vec<Author>,
-        here: Vec<Person>,
-    },
+    /// Who is connected now, once per key, with their colour, page and
+    /// cursor switch.
+    Presence { here: Vec<Person> },
     /// Joiner `key`'s pointer on page `url` (the recipient's page), or
     /// (none) it left. Sent only to joiners on that page that announced
     /// it.
@@ -297,6 +290,14 @@ struct GreetingMessage {
 }
 
 impl Greeting {
+    /// Whether the sender names a different release line, before parsing
+    /// the rest of its greeting.
+    #[must_use]
+    pub(crate) fn incompatible_with(&self, ours: &JampartyVersion) -> bool {
+        self.jamparty()
+            .is_some_and(|version| !version.compatible(ours))
+    }
+
     /// The sender's jamparty, if it said a valid one.
     #[must_use]
     pub(crate) fn jamparty(&self) -> Option<JampartyVersion> {

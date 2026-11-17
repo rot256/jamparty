@@ -16,14 +16,6 @@ use crate::{
     protocol::comment::Author,
 };
 
-/// That the share takes `presence` and `cursor` messages, as admission
-/// says in the version-1 schema; every share does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Support {
-    Supported,
-}
-
 pub(crate) const MAX_PAGE_PATH: usize = 512;
 
 /// Where a joiner is: the path, query and fragment of the page's URL (the

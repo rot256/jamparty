@@ -294,7 +294,7 @@ impl State {
                 self.revision = Some(revision);
                 vec![ToPage::Reload { revision }]
             }
-            ShareMessage::Presence { joiners: _, here } => {
+            ShareMessage::Presence { here } => {
                 self.people.clone_from(&here);
                 vec![ToPage::People { here }]
             }

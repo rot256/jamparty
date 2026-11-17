@@ -15,7 +15,7 @@ use crate::tests::{
 
 fn admitted() -> String {
     format!(
-        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
+        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
         "ab".repeat(32),
         env!("CARGO_PKG_VERSION")
     )

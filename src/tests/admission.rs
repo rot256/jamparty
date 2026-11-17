@@ -18,10 +18,7 @@ use crate::{
         version::JampartyVersion,
     },
     join::Refused,
-    protocol::{
-        control::{Envelope, REFUSED_CODE, RefusedReason, ShareMessage, SiteInfo},
-        presence::Support,
-    },
+    protocol::control::{Envelope, REFUSED_CODE, RefusedReason, ShareMessage, SiteInfo},
     share::{Source, delivery::Target},
     tests::harness::{
         config, connected, fixture_dir, joiner, net, raw_connection, share_files, share_proxy,
@@ -139,7 +136,6 @@ async fn right_secret_is_admitted_then_served() {
     let ShareMessage::Admitted {
         you,
         undelivered,
-        presence,
         site,
         jamparty,
     } = admitted.message
@@ -148,7 +144,6 @@ async fn right_secret_is_admitted_then_served() {
     };
     assert_eq!(you.name.to_string(), "mallory");
     assert!(undelivered.is_empty());
-    assert_eq!(presence, Support::Supported);
     assert_eq!(site, SiteInfo::Files);
     assert_eq!(jamparty, JampartyVersion::current());
     let answered = String::from_utf8(try_request(&connection).await).unwrap();

@@ -34,9 +34,10 @@ later on PATH; they download Hugo and Zola):
 uv run pytest -m frameworks
 ```
 
-Do not add production integration hooks. Preserve the version-1
-newline-delimited JSON schema unless a breaking format change is explicitly
-requested.
+Do not add production integration hooks. Keep the agent-facing comment NDJSON
+that `jamparty recv` prints (`"version":1`) stable within a release line;
+change it only when explicitly requested. The internal peer protocol follows
+the versioning policy below.
 
 ## Versioning policy
 

@@ -16,7 +16,7 @@ fn admitted(undelivered: &[CommentId]) -> String {
     let key = "ab".repeat(32);
     let undelivered = serde_json::to_string(undelivered).unwrap();
     format!(
-        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":{undelivered},"presence":"supported","site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
+        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":{undelivered},"site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
         env!("CARGO_PKG_VERSION")
     )
 }

@@ -34,8 +34,7 @@ fn authors(here: &[Person]) -> Vec<Author> {
 impl Hub {
     pub(super) fn broadcast_presence(&self) {
         let here = self.here();
-        let joiners = authors(&here);
-        self.broadcast(ShareMessage::Presence { joiners, here });
+        self.broadcast(ShareMessage::Presence { here });
     }
 
     /// Who is connected, in order of admission, once per key.
@@ -267,14 +266,14 @@ impl Presence {
     #[must_use]
     pub(crate) fn redact(&self, message: ShareMessage) -> ShareMessage {
         match message {
-            ShareMessage::Presence { joiners, mut here } => {
+            ShareMessage::Presence { mut here } => {
                 let mine = self.url();
                 for person in &mut here {
                     if person.url != mine {
                         person.url = None;
                     }
                 }
-                ShareMessage::Presence { joiners, here }
+                ShareMessage::Presence { here }
             }
             other @ (ShareMessage::Admitted { .. }
             | ShareMessage::Refused { .. }

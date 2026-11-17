@@ -65,7 +65,7 @@ impl HoldingShare {
             let mut byte = [0];
             while recv.read_exact(&mut byte).await.is_ok() && byte != *b"\n" {}
             let admitted = format!(
-                r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
+                r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{}"}},"undelivered":[],"site":{{"kind":"files"}},"jamparty":"{}"}}}}"#,
                 "ab".repeat(32),
                 env!("CARGO_PKG_VERSION")
             );
