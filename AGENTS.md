@@ -50,10 +50,20 @@ capability negotiation or migration code for older releases. The NDJSON
 Peers on different lines refuse one another; a joiner gets an install
 hint only when it is behind the share. Compatible patches need no note.
 
+## Branches and merging
+
+Build each feature on its own branch. The feature decides the version:
+a minor bump if it breaks compatibility (see above), a patch bump
+otherwise. Bump first: the version change is the branch's first commit
+(or is rebased in before the first commit that needs it), so no commit
+anywhere carries a change under the old version. Merge into main with a
+signed merge commit (`git merge --no-ff`) whose message describes the
+feature. Every merge bumps the version, whether or not it is released.
+
 ## Releasing
 
-Bump `version` in Cargo.toml on main, wait for CI to pass, then push a
-signed tag that matches it:
+Releasing is separate from merging: main already carries the version. Wait
+for CI to pass on main, then push a signed tag that matches Cargo.toml:
 
 ```sh
 git tag -s vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z
