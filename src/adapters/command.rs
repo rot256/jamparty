@@ -1,9 +1,6 @@
-//! The `command` target: runs the argv given after `--` once per batch,
-//! the batch as NDJSON on its stdin; exit status 0 means delivered. A run
-//! that outlasts its timeout is killed, with everything it started (it
-//! runs in a process group of its own), and counts as failed.
+//! Runs a nudge command with a plain-text notice and a bounded lifetime.
 
-use std::{ffi::OsString, io::ErrorKind, process::Stdio, time::Duration};
+use std::{ffi::OsString, process::Stdio, time::Duration};
 
 use nix::{
     sys::signal::{Signal, killpg},
@@ -11,26 +8,28 @@ use nix::{
 };
 use tokio::{io::AsyncWriteExt, process::Command, time};
 
-use crate::{core::queue::Attempt, protocol::comment::Comment};
+/// Kills descendants too when the nudge future is cancelled.
+struct ProcessGroup(Option<Pid>);
 
-/// Delivers `batch` to `argv`. A command that cannot be started at all is
-/// gone.
-pub(crate) async fn deliver(argv: &[OsString], timeout: Duration, batch: &[Comment]) -> Attempt {
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        if let Some(group) = self.0 {
+            let _ = killpg(group, Signal::SIGKILL);
+        }
+    }
+}
+
+/// Sends a plain-text reminder to the command. It cannot deliver comments.
+pub(crate) async fn nudge(
+    argv: &[OsString],
+    timeout: Duration,
+    notice: &str,
+) -> Result<(), String> {
     let Some((program, args)) = argv.split_first() else {
-        return Attempt::Gone {
-            why: "no command".to_owned(),
-        };
+        return Err("no nudge command".to_owned());
     };
     let name = program.to_string_lossy();
-    let mut input = Vec::new();
-    for comment in batch {
-        if let Err(error) = serde_json::to_writer(&mut input, comment) {
-            return Attempt::Failed {
-                why: format!("could not encode a comment: {error}"),
-            };
-        }
-        input.push(b'\n');
-    }
+    let input = notice.as_bytes();
     let mut child = match Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
@@ -39,54 +38,38 @@ pub(crate) async fn deliver(argv: &[OsString], timeout: Duration, batch: &[Comme
         .spawn()
     {
         Ok(child) => child,
-        Err(error) => {
-            let gone = matches!(
-                error.kind(),
-                ErrorKind::NotFound | ErrorKind::PermissionDenied
-            );
-            let why = format!("could not run {name}: {error}");
-            return if gone {
-                Attempt::Gone { why }
-            } else {
-                Attempt::Failed { why }
-            };
-        }
+        Err(error) => return Err(format!("could not run {name}: {error}")),
     };
     let group = child
         .id()
         .and_then(|id| i32::try_from(id).ok())
         .map(Pid::from_raw);
+    let mut cleanup = ProcessGroup(group);
     let stdin = child.stdin.take();
     let run = async {
         if let Some(mut stdin) = stdin {
             // A command that exits without reading is judged by its status.
-            let _ = stdin.write_all(&input).await;
+            let _ = stdin.write_all(input).await;
             drop(stdin);
         }
         child.wait().await
     };
     let status = time::timeout(timeout, run).await;
-    match status {
-        Ok(Ok(status)) if status.success() => Attempt::Delivered,
-        Ok(Ok(status)) => Attempt::Failed {
-            why: format!("{name} exited with {status}"),
-        },
-        Ok(Err(error)) => Attempt::Failed {
-            why: format!("{name}: {error}"),
-        },
+    let result = match status {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(status)) => Err(format!("{name} exited with {status}")),
+        Ok(Err(error)) => Err(format!("{name}: {error}")),
         Err(_) => {
-            if let Some(group) = group {
-                let _ = killpg(group, Signal::SIGKILL);
-            }
+            drop(ProcessGroup(cleanup.0.take()));
             let _ = child.kill().await;
-            Attempt::Failed {
-                why: format!(
-                    "{name} took longer than {}s and was killed",
-                    timeout.as_secs()
-                ),
-            }
+            Err(format!(
+                "{name} took longer than {}s and was killed",
+                timeout.as_secs()
+            ))
         }
-    }
+    };
+    cleanup.0 = None;
+    result
 }
 
 #[cfg(test)]
@@ -99,77 +82,21 @@ mod tests {
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
     use tokio::time;
 
-    use crate::{adapters::command::deliver, core::queue::Attempt};
+    use crate::adapters::command::nudge;
 
     #[tokio::test]
-    async fn maximal_comments_fit_and_backlogs_reach_command_in_bounded_batches() {
-        use crate::{
-            core::{
-                ids::{CommentId, EndpointKey},
-                name::MAX_NAME,
-                queue::{DeliveryQueue, DeliveryResult},
-                rng::SeededRng,
-            },
-            protocol::{
-                comment::{
-                    Author, Comment, Draft, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT,
-                    MAX_SELECTOR,
-                },
-                line_size,
-            },
-            share::delivery::MAX_BATCH_BYTES,
-        };
-
-        // U+0000 takes the longest JSON escape (six bytes) and is valid
-        // in every free-text field, including a nonblank comment.
-        let draft = Draft::try_from(DraftFields {
-            page: "\0".repeat(MAX_PAGE).try_into().unwrap(),
-            selector: "\0".repeat(MAX_SELECTOR).try_into().unwrap(),
-            choice: None,
-            selected_text: Some("\0".repeat(MAX_SELECTED_TEXT)),
-            comment: "\0".repeat(MAX_COMMENT),
-        })
-        .unwrap();
-        let comment = Comment::new(
-            CommentId::generate(&SeededRng::new(1)),
-            Author::new(
-                "x".repeat(MAX_NAME).try_into().unwrap(),
-                EndpointKey([0xff; 32]),
-            ),
-            draft,
-        );
-        let size = line_size(&comment).unwrap();
-        assert!(size <= MAX_BATCH_BYTES, "maximal comment is {size} bytes");
-        eprintln!("maximal comment NDJSON: {size} bytes");
-        let now = jiff::Timestamp::from_second(1_800_000_000).unwrap();
-        let mut queue = DeliveryQueue::new();
-        for _ in 0..3 {
-            queue.push(comment.clone()).unwrap();
-        }
+    async fn notice_is_plain_text_on_stdin() {
         let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join("batch");
+        let output = dir.path().join("notice");
+        let notice = "jamparty: 2 comments waiting on test; run jamparty recv --share test\n";
         let argv = [
             "sh".into(),
             "-c".into(),
             "cat > \"$0\"".into(),
             output.clone().into(),
         ];
-        for _ in 0..3 {
-            let batch = queue
-                .start(now, MAX_BATCH_BYTES, |c| line_size(c).unwrap())
-                .unwrap();
-            assert_eq!(batch, vec![comment.clone()]);
-            assert_eq!(
-                deliver(&argv, Duration::from_secs(5), &batch).await,
-                Attempt::Delivered
-            );
-            let bytes = fs::read(&output).unwrap();
-            assert_eq!(bytes.len(), size);
-            assert_eq!(bytes.last(), Some(&b'\n'));
-            assert_eq!(serde_json::from_slice::<Comment>(&bytes).unwrap(), comment);
-            queue.finish(DeliveryResult::Ok, now).unwrap();
-        }
-        assert!(queue.is_empty());
+        nudge(&argv, Duration::from_secs(5), notice).await.unwrap();
+        assert_eq!(fs::read_to_string(output).unwrap(), notice);
     }
 
     /// Whether `pid` still runs. A killed process whose parent died stays
@@ -188,7 +115,7 @@ mod tests {
         !zombie
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_timeout_kills_what_the_command_started() {
         let dir = tempfile::tempdir().unwrap();
         let pid = dir.path().join("pid");
@@ -198,13 +125,50 @@ mod tests {
             r#"sleep 30 & echo $! > "$0"; wait"#.into(),
             pid.clone().into(),
         ];
-        let attempt = deliver(&argv, Duration::from_millis(300), &[]).await;
-        assert!(matches!(attempt, Attempt::Failed { .. }), "{attempt:?}");
+        let task =
+            tokio::spawn(async move { nudge(&argv, Duration::from_secs(60), "notice\n").await });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fs::read_to_string(&pid).is_ok_and(|text| text.trim().parse::<i32>().is_ok()) {
+            assert!(Instant::now() < deadline, "command did not start");
+            tokio::task::yield_now().await;
+        }
+        time::advance(Duration::from_secs(60)).await;
+        let attempt = task.await.unwrap();
+        assert!(attempt.unwrap_err().contains("was killed"));
         let pid: i32 = fs::read_to_string(&pid).unwrap().trim().parse().unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while running(pid) {
             assert!(Instant::now() < deadline, "the background sleep survived");
-            time::sleep(Duration::from_millis(20)).await;
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_kills_what_the_command_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid = dir.path().join("pid");
+        let argv = [
+            "sh".into(),
+            "-c".into(),
+            r#"sleep 30 & echo $! > "$0"; wait"#.into(),
+            pid.clone().into(),
+        ];
+        let task =
+            tokio::spawn(async move { nudge(&argv, Duration::from_secs(60), "notice\n").await });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fs::read_to_string(&pid).is_ok_and(|text| text.trim().parse::<i32>().is_ok()) {
+            assert!(Instant::now() < deadline, "command did not start");
+            tokio::task::yield_now().await;
+        }
+        let descendant = fs::read_to_string(&pid).unwrap().trim().parse().unwrap();
+        assert!(running(descendant));
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let pid: i32 = fs::read_to_string(&pid).unwrap().trim().parse().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while running(pid) {
+            assert!(Instant::now() < deadline, "the background sleep survived");
+            tokio::task::yield_now().await;
         }
     }
 }

@@ -1,40 +1,40 @@
-//! The command target: success, failure with backoff on a manual clock,
-//! a timeout, and holding comments when the command is gone.
+//! Nudges are independent of recv delivery, including failed reminders.
 
-use std::{
-    ffi::OsString,
-    fs,
-    path::Path,
-    process::{Command, Stdio},
-    sync::Arc,
-    time::Duration,
-};
+use std::{ffi::OsString, fs, path::Path, sync::Arc, time::Duration};
 
 use jiff::SignedDuration;
 use tempfile::TempDir;
-use tokio::net::UnixStream;
+use tokio::{io::AsyncWriteExt, net::UnixStream};
 
 use crate::{
     agent,
-    core::{clock::ManualClock, queue::DeliveryState},
-    share::{
-        delivery::{CommandTarget, Target},
-        hub::{HELD, RETRYING},
-    },
+    core::clock::ManualClock,
+    protocol::comment::{Draft, DraftFields},
+    share::delivery::{CommandTarget, Target},
     tests::harness::{
         DRAFT, TestShare, commented, fixture_dir, join, post_comment, share_files_to, t0, until,
         within,
     },
 };
 
-async fn share_to(
-    dir: &TempDir,
-    argv: Vec<OsString>,
-    timeout: Duration,
-    clock: Arc<ManualClock>,
-) -> TestShare {
-    let command = CommandTarget { argv, timeout };
-    share_files_to(dir, Target::Command(command), clock).await
+async fn share_to(dir: &TempDir, argv: Vec<OsString>, clock: Arc<ManualClock>) -> TestShare {
+    share_files_to(
+        dir,
+        Target::Nudge(CommandTarget {
+            argv,
+            timeout: Duration::from_secs(60),
+        }),
+        clock,
+    )
+    .await
+}
+
+async fn recv(share: &TestShare) {
+    let stream = UnixStream::connect(share.socket_path()).await.unwrap();
+    within("recv", agent::recv(stream, &mut Vec::new()))
+        .await
+        .unwrap();
+    until("delivery confirmed", || share.queued().is_empty()).await;
 }
 
 /// `sh -c <script> <log> <flag>`: appends stdin to `log`, fails while
@@ -56,140 +56,151 @@ fn lines(path: &Path) -> usize {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_failing_command_backs_off_on_the_clock_then_delivers() {
+async fn failed_nudges_retry_but_only_recv_delivers() {
     let dir = fixture_dir();
     let work = tempfile::tempdir().unwrap();
     let (log, flag) = (work.path().join("log"), work.path().join("fail"));
     fs::write(&flag, "").unwrap();
     let clock = Arc::new(ManualClock::new(t0()));
-    let argv = logging_command(&log, &flag);
-    let share = share_to(&dir, argv, Duration::from_secs(60), Arc::clone(&clock)).await;
+    let share = share_to(&dir, logging_command(&log, &flag), Arc::clone(&clock)).await;
     let alice = join(&share, "alice").await;
     assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
-
-    until("the first attempt", || {
+    until("first failure", || {
         lines(&log) == 1 && share.hub().wake_at() == Some(t0() + SignedDuration::from_secs(1))
     })
     .await;
-    let mut view = alice.watch();
-    let status = within(
-        "the status line",
-        view.wait_for(|view| view.link.status.is_some()),
-    )
-    .await
-    .unwrap()
-    .link
-    .status
-    .clone()
-    .unwrap();
-    assert_eq!(String::from(status), RETRYING);
-
-    // The retry waits for the clock, then backs off further.
     clock.advance(SignedDuration::from_secs(1));
     share.hub().wake();
-    until("the second attempt", || {
+    until("second failure", || {
         lines(&log) == 2 && share.hub().wake_at() == Some(t0() + SignedDuration::from_secs(3))
     })
     .await;
     assert_eq!(share.queued().len(), 1);
-
     fs::remove_file(&flag).unwrap();
     clock.advance(SignedDuration::from_secs(2));
     share.hub().wake();
-    within(
-        "delivery",
-        view.wait_for(|view| view.pending() == 0 && view.link.status.is_none()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(lines(&log), 3);
-    assert!(share.queued().is_empty());
-    assert_eq!(share.hub().delivery_state(), DeliveryState::Ready);
-    let last = fs::read_to_string(&log).unwrap();
-    assert!(last.lines().last().unwrap().contains("\"Bigger, please\""));
-
-    // recv is not how this share delivers.
-    let stream = UnixStream::connect(share.socket_path()).await.unwrap();
-    let error = agent::recv(stream, &mut Vec::new()).await.unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("delivers comments to the command sh, not to jamparty recv"),
-        "{error}"
+    until("successful reminder", || lines(&log) == 3).await;
+    assert_eq!(share.queued().len(), 1);
+    let text = fs::read_to_string(&log).unwrap();
+    let notice = format!(
+        "jamparty: 1 comment waiting on {}; run jamparty recv --share {}",
+        share.id(),
+        share.id()
     );
+    assert!(text.lines().all(|line| line == notice));
+    assert!(!text.contains("Bigger, please"));
+    recv(&share).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_missing_command_holds_comments() {
+async fn a_missing_nudge_command_does_not_hold_delivery() {
     let dir = fixture_dir();
-    let missing = vec![OsString::from("/nonexistent/jamparty-agent")];
     let clock = Arc::new(ManualClock::new(t0()));
-    let share = share_to(&dir, missing, Duration::from_secs(60), clock).await;
+    let share = share_to(&dir, vec!["/nonexistent/jamparty-nudge".into()], clock).await;
     let alice = join(&share, "alice").await;
     assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
-    until("the hold", || {
-        share.hub().delivery_state() == DeliveryState::Held
-    })
-    .await;
-    let mut view = alice.watch();
-    let status = within(
-        "the status line",
-        view.wait_for(|view| view.link.status.is_some()),
-    )
-    .await
-    .unwrap()
-    .link
-    .status
-    .clone()
-    .unwrap();
-    // What went wrong stays in the share's log.
-    assert_eq!(String::from(status), HELD);
-    // New comments still queue, nothing is sent.
-    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
-    assert_eq!(share.queued().len(), 2);
-    assert_eq!(share.hub().delivery_state(), DeliveryState::Held);
+    until("failure", || share.hub().wake_at().is_some()).await;
+    assert_eq!(share.queued().len(), 1);
+    recv(&share).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_command_that_takes_too_long_is_killed_and_retried() {
+async fn listening_disconnects_and_between_batches() {
     let dir = fixture_dir();
     let work = tempfile::tempdir().unwrap();
-    let pid = work.path().join("pid");
+    let log = work.path().join("log");
+    let flag = work.path().join("absent");
+    let share = share_to(
+        &dir,
+        logging_command(&log, &flag),
+        Arc::new(ManualClock::new(t0())),
+    )
+    .await;
+    let alice = join(&share, "alice").await;
+    let mut waiting = UnixStream::connect(share.socket_path()).await.unwrap();
+    waiting
+        .write_all(b"{\"version\":1,\"message\":{\"type\":\"recv\"}}\n")
+        .await
+        .unwrap();
+    until("listener", || share.hub().listeners() == 1).await;
+    drop(waiting);
+    until("disconnected listener", || share.hub().listeners() == 0).await;
+
+    let path = share.socket_path().to_owned();
+    let waiting = tokio::spawn(async move {
+        let stream = UnixStream::connect(path).await.unwrap();
+        agent::recv(stream, &mut Vec::new()).await.unwrap();
+    });
+    until("listener", || share.hub().listeners() == 1).await;
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
+    within("waiting recv", waiting).await.unwrap();
+    until("delivery confirmed", || share.queued().is_empty()).await;
+    assert_eq!(share.hub().listeners(), 0);
+    assert_eq!(lines(&log), 0);
+
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
+    until("nudge between batches", || lines(&log) == 1).await;
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
+    assert_eq!(share.queued().len(), 2);
+    recv(&share).await;
+    assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
+    until("new backlog reminder", || lines(&log) == 2).await;
+    recv(&share).await;
+    assert_eq!(lines(&log), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recv_does_not_wait_for_a_running_nudge() {
+    let dir = fixture_dir();
+    let work = tempfile::tempdir().unwrap();
+    let ready = work.path().join("ready");
     let argv = vec![
         "sh".into(),
         "-c".into(),
-        r#"echo $$ > "$0"; exec sleep 30"#.into(),
-        pid.clone().into(),
+        r#"cat > "$0"; exec tail -f /dev/null"#.into(),
+        ready.clone().into(),
     ];
-    let clock = Arc::new(ManualClock::new(t0()));
-    let share = share_to(&dir, argv, Duration::from_millis(300), clock).await;
+    let share = share_to(&dir, argv, Arc::new(ManualClock::new(t0()))).await;
     let alice = join(&share, "alice").await;
     assert!(commented(&post_comment(&alice, DRAFT).await).is_some());
-    let mut view = alice.watch();
-    let status = within(
-        "the status line",
-        view.wait_for(|view| view.link.status.is_some()),
+    until("nudge running", || {
+        fs::read_to_string(&ready).is_ok_and(|text| text.ends_with('\n'))
+    })
+    .await;
+    recv(&share).await;
+    // The nudge never exits itself. Recv still completes and confirms the batch.
+    share.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_partial_recv_triggers_another_nudge() {
+    let dir = fixture_dir();
+    let work = tempfile::tempdir().unwrap();
+    let log = work.path().join("log");
+    let flag = work.path().join("absent");
+    let share = share_to(
+        &dir,
+        logging_command(&log, &flag),
+        Arc::new(ManualClock::new(t0())),
     )
-    .await
-    .unwrap()
-    .link
-    .status
-    .clone()
-    .unwrap();
-    assert_eq!(String::from(status), RETRYING);
-    assert_eq!(
-        share.hub().wake_at(),
-        Some(t0() + SignedDuration::from_secs(1))
-    );
-    assert_eq!(share.queued().len(), 1);
-    let pid = fs::read_to_string(&pid).unwrap();
-    let alive = || {
-        Command::new("kill")
-            .args(["-0", pid.trim()])
-            .stderr(Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    };
-    until("the command to be killed", || !alive()).await;
+    .await;
+    let alice = join(&share, "alice").await;
+    let mut fields = DraftFields::from(serde_json::from_str::<Draft>(DRAFT).unwrap());
+    fields.comment = "\u{0001}".repeat(10_000);
+    let draft = serde_json::to_string(&Draft::try_from(fields).unwrap()).unwrap();
+    assert!(commented(&post_comment(&alice, &draft).await).is_some());
+    until("first nudge", || lines(&log) == 1).await;
+    assert!(commented(&post_comment(&alice, &draft).await).is_some());
+    assert_eq!(share.queued().len(), 2);
+
+    let stream = UnixStream::connect(share.socket_path()).await.unwrap();
+    let mut output = Vec::new();
+    within("first batch", agent::recv(stream, &mut output))
+        .await
+        .unwrap();
+    assert_eq!(String::from_utf8(output).unwrap().lines().count(), 1);
+    until("first batch confirmed", || share.queued().len() == 1).await;
+    until("remaining backlog nudge", || lines(&log) == 2).await;
+    recv(&share).await;
+    assert_eq!(lines(&log), 2);
 }

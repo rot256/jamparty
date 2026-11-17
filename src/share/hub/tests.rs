@@ -7,7 +7,7 @@ use crate::{
     core::{
         clock::ManualClock,
         ids::{CommentId, EndpointKey},
-        queue::Attempt,
+        queue::DeliveryResult,
         rng::SeededRng,
         settings::Switch,
     },
@@ -100,7 +100,7 @@ async fn a_ref_sent_again_after_delivery_is_reported_delivered() {
         panic!("not queued");
     };
     hub.next_batch().await;
-    hub.finish(Attempt::Delivered);
+    hub.finish(DeliveryResult::Ok);
     assert_eq!(
         hub.comment(&alice, reference, draft()),
         AckOutcome::Delivered { id }
@@ -352,7 +352,7 @@ async fn the_ack_goes_to_its_connection_before_the_delivery() {
         panic!("not queued");
     };
     hub.next_batch().await;
-    hub.finish(Attempt::Delivered);
+    hub.finish(DeliveryResult::Ok);
     assert_eq!(
         sent(&mut outbox),
         [
@@ -399,7 +399,7 @@ async fn new_acks_do_not_hold_back_an_earlier_broadcast() {
         panic!("not queued");
     };
     hub.next_batch().await;
-    hub.finish(Attempt::Delivered);
+    hub.finish(DeliveryResult::Ok);
     // A new ack comes before each message the writer takes.
     let mut taken = Vec::new();
     for _ in 0..ACK_QUEUE {
@@ -580,7 +580,7 @@ async fn pick_ack_precedes_resolution_and_resolved_records_are_bounded() {
         let id = question(&hub, None, None);
         assert!(queued(hub.comment(&alice, fresh(), pick(id, "Keep it"))));
         let _ = hub.next_batch().await;
-        hub.finish(Attempt::Delivered);
+        hub.finish(DeliveryResult::Ok);
     }
     assert_eq!(hub.lock().answers.len(), MAX_ANSWERS);
     assert!(hub.catch_up(alice.key).is_empty());
@@ -684,4 +684,91 @@ fn catch_up_on_either_side_of_pick_and_reconnect_after_missed_resolution() {
         let (_presence, _inbox) = hub.join(alice.clone()).unwrap();
         assert!(hub.catch_up(alice.key).is_empty());
     }
+}
+
+#[tokio::test]
+async fn nudge_reservation_and_recv_have_one_order() {
+    for recv_first in [true, false] {
+        let (hub, _) = hub();
+        let alice = author("alice", 1);
+        let listening = recv_first.then(|| hub.listen());
+        assert!(queued(hub.comment(&alice, fresh(), draft())));
+        if recv_first {
+            assert!(hub.next_nudge().now_or_never().is_none());
+        } else {
+            let (generation, count) = hub.next_nudge().now_or_never().unwrap();
+            assert_eq!(count, 1);
+            hub.finish_nudge(generation, Ok(()));
+        }
+        let late_listener = (!recv_first).then(|| hub.listen());
+        let batch = hub.next_batch().await;
+        drop(listening);
+        drop(late_listener);
+        // A client holding a batch is no longer listening, but its comments
+        // are already taken; don't remind while waiting for printed.
+        assert_eq!(hub.listeners(), 0);
+        assert!(hub.next_nudge().now_or_never().is_none());
+        assert_eq!(batch.len(), 1);
+        hub.finish(DeliveryResult::Ok);
+        assert!(hub.queued().is_empty());
+        assert!(queued(hub.comment(&alice, fresh(), draft())));
+        let (generation, count) = hub.next_nudge().now_or_never().unwrap();
+        assert_eq!(count, 1);
+        hub.finish_nudge(generation, Ok(()));
+        assert!(queued(hub.comment(&alice, fresh(), draft())));
+        assert!(hub.next_nudge().now_or_never().is_none());
+    }
+}
+
+#[tokio::test]
+async fn nudge_backoff_is_independent_and_old_results_cannot_rearm_a_backlog() {
+    let (hub, clock) = hub();
+    let alice = author("alice", 1);
+    assert!(queued(hub.comment(&alice, fresh(), draft())));
+    let (old, _) = hub.next_nudge().await;
+    hub.finish_nudge(old, Err("failed".into()));
+    assert!(hub.next_nudge().now_or_never().is_none());
+    clock.advance(SignedDuration::from_secs(1));
+    let (old, _) = hub.next_nudge().now_or_never().unwrap();
+    hub.next_batch().await;
+    hub.finish(DeliveryResult::Ok);
+    assert!(queued(hub.comment(&alice, fresh(), draft())));
+    let (new, _) = hub.next_nudge().await;
+    hub.finish_nudge(new, Ok(()));
+    hub.finish_nudge(old, Err("late failure".into()));
+    assert!(hub.next_nudge().now_or_never().is_none());
+}
+
+#[tokio::test]
+async fn each_confirmed_batch_rearms_the_remaining_backlog() {
+    let (hub, _) = hub();
+    let alice = author("alice", 1);
+    for _ in 0..2 {
+        let mut fields = DraftFields::from(draft());
+        fields.comment = "\u{0001}".repeat(10_000);
+        assert!(queued(hub.comment(
+            &alice,
+            fresh(),
+            fields.try_into().unwrap()
+        )));
+    }
+    let (old, count) = hub.next_nudge().await;
+    assert_eq!(count, 2);
+    hub.finish_nudge(old, Ok(()));
+    assert!(hub.next_nudge().now_or_never().is_none());
+    assert_eq!(hub.next_batch().await.len(), 1);
+    hub.finish(DeliveryResult::Returned);
+    assert!(hub.next_nudge().now_or_never().is_none());
+    assert_eq!(hub.next_batch().await.len(), 1);
+    hub.finish(DeliveryResult::Ok);
+    let (new, count) = hub.next_nudge().now_or_never().unwrap();
+    assert_ne!(old, new);
+    assert_eq!(count, 1);
+    hub.finish_nudge(new, Ok(()));
+    hub.finish_nudge(old, Err("late failure".into()));
+    assert!(hub.next_nudge().now_or_never().is_none());
+    assert_eq!(hub.next_batch().await.len(), 1);
+    hub.finish(DeliveryResult::Ok);
+    assert!(hub.queued().is_empty());
+    assert!(hub.next_nudge().now_or_never().is_none());
 }

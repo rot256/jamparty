@@ -8,7 +8,7 @@ use crate::{
     core::{
         clock::ManualClock,
         ids::{CommentId, EndpointKey},
-        queue::Attempt,
+        queue::DeliveryResult,
         rng::SeededRng,
         settings::{Corner, Keys, Switch},
     },
@@ -317,7 +317,7 @@ async fn an_ack_ahead_of_a_delivery_at_a_full_queue_is_taken() {
     }
     assert_eq!(state.snapshot().pending(), MAX_QUEUED_PER_KEY);
     let batch = hub.next_batch().await;
-    hub.finish(Attempt::Delivered);
+    hub.finish(DeliveryResult::Ok);
     let reference: CommentRef = "after-delivery".to_owned().try_into().unwrap();
     let outcome = presence
         .comment(&alice, reference.clone(), draft())
@@ -374,7 +374,7 @@ async fn a_comment_queued_as_a_batch_finishes_is_acked_after_it() {
         .join()
         .unwrap();
     });
-    hub.finish(Attempt::Delivered);
+    hub.finish(DeliveryResult::Ok);
     assert_eq!(hub.queued().len(), 1, "the comment went in during finish");
     let taken = take(&mut outbox, &mut state);
     assert!(

@@ -248,7 +248,7 @@ def test_bare_jamparty_and_the_agent_guides(tmp_path: Path) -> None:
     assert "jamparty recv" in jamparty(tmp_path, "agent", "claude")
     t3 = jamparty(tmp_path, "agent", "t3")
     assert 't3 thread send "$T3CODE_THREAD_ID" -' in t3
-    assert "comment ids to skip duplicates" in t3
+    assert "run `jamparty recv`" in t3
     help_text = jamparty(tmp_path, "--help")
     assert "serve" in help_text and "recv" not in help_text
 

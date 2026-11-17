@@ -125,13 +125,13 @@ fn delivery_options_choose_the_target() {
     let (_, note) = choose(&[], true);
     assert_eq!(
         note.unwrap(),
-        r#"inside T3, deliver to this thread with: jamparty serve /srv/site -- t3 thread send "$T3CODE_THREAD_ID" -"#
+        r#"inside T3, nudge this thread with: jamparty serve /srv/site -- t3 thread send "$T3CODE_THREAD_ID" -"#
     );
 
     let (command, note) = choose(&["site", "--", "agent", "--flag"], true);
     assert_eq!(
         command,
-        Target::Command(CommandTarget {
+        Target::Nudge(CommandTarget {
             argv: vec![OsString::from("agent"), OsString::from("--flag")],
             timeout: Duration::from_secs(60),
         })
@@ -140,7 +140,7 @@ fn delivery_options_choose_the_target() {
     for (given, secs) in [("5", 5), ("90s", 90), ("2m", 120), ("1h", 3600)] {
         let (command, _) = choose(&["--command-timeout", given, "--", "agent"], false);
         assert!(
-            matches!(&command, Target::Command(c) if c.timeout == Duration::from_secs(secs)),
+            matches!(&command, Target::Nudge(c) if c.timeout == Duration::from_secs(secs)),
             "{given}: {command:?}"
         );
     }
@@ -177,7 +177,7 @@ fn t3_startup_note_pastes_exactly_or_not_at_all() {
         assert_eq!(
             note.unwrap(),
             format!(
-                r#"inside T3, deliver to this thread with: jamparty {shown} -- t3 thread send "$T3CODE_THREAD_ID" -"#
+                r#"inside T3, nudge this thread with: jamparty {shown} -- t3 thread send "$T3CODE_THREAD_ID" -"#
             )
         );
     }

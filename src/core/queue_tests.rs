@@ -1,13 +1,9 @@
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 use proptest::{collection, prelude::*};
 
 use crate::core::queue::{
     DeliveryQueue, DeliveryResult, DeliveryState, MAX_BACKOFF, MAX_QUEUED, QueueError, backoff,
 };
-
-fn t0() -> Timestamp {
-    Timestamp::from_second(1_800_000_000).unwrap()
-}
 
 fn secs(n: i64) -> SignedDuration {
     SignedDuration::from_secs(n)
@@ -18,61 +14,24 @@ fn one_batch_in_flight_and_arrivals_form_the_next() {
     let mut queue = DeliveryQueue::new();
     queue.push(1).unwrap();
     queue.push(2).unwrap();
-    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), Some(vec![1, 2]));
+    assert_eq!(queue.start(usize::MAX, |_| 1), Some(vec![1, 2]));
     assert_eq!(queue.state(), DeliveryState::InFlight);
     queue.push(3).unwrap();
     assert_eq!(
-        queue.start(t0(), usize::MAX, |_| 1),
+        queue.start(usize::MAX, |_| 1),
         None,
         "one delivery in flight"
     );
-    assert_eq!(queue.finish(DeliveryResult::Ok, t0()), Ok(vec![1, 2]));
+    assert_eq!(queue.finish(DeliveryResult::Ok), Ok(vec![1, 2]));
     assert_eq!(queue.len(), 1);
-    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), Some(vec![3]));
-    assert_eq!(queue.finish(DeliveryResult::Ok, t0()), Ok(vec![3]));
+    assert_eq!(queue.start(usize::MAX, |_| 1), Some(vec![3]));
+    assert_eq!(queue.finish(DeliveryResult::Ok), Ok(vec![3]));
     assert!(queue.is_empty());
-    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), None);
+    assert_eq!(queue.start(usize::MAX, |_| 1), None);
     assert_eq!(
-        queue.finish(DeliveryResult::Ok, t0()),
+        queue.finish(DeliveryResult::Ok),
         Err(QueueError::NotInFlight)
     );
-}
-
-#[test]
-fn errors_back_off_and_retry_the_same_batch() {
-    let mut queue = DeliveryQueue::new();
-    queue.push(1).unwrap();
-    queue.start(t0(), usize::MAX, |_| 1).unwrap();
-    queue.push(2).unwrap();
-    assert_eq!(queue.finish(DeliveryResult::Error, t0()), Ok(vec![]));
-    assert_eq!(queue.wake_at(), Some(t0() + secs(1)));
-    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), None);
-    // Unchanged: the comment that arrived meanwhile waits for the next.
-    assert_eq!(
-        queue.start(t0() + secs(1), usize::MAX, |_| 1),
-        Some(vec![1])
-    );
-    queue.finish(DeliveryResult::Error, t0() + secs(1)).unwrap();
-    assert_eq!(queue.wake_at(), Some(t0() + secs(3)));
-    assert_eq!(
-        queue.start(t0() + secs(3), usize::MAX, |_| 1),
-        Some(vec![1])
-    );
-    assert_eq!(
-        queue.finish(DeliveryResult::Ok, t0() + secs(3)),
-        Ok(vec![1])
-    );
-    assert_eq!(queue.state(), DeliveryState::Ready);
-    assert_eq!(
-        queue.start(t0() + secs(3), usize::MAX, |_| 1),
-        Some(vec![2])
-    );
-    queue.finish(DeliveryResult::Ok, t0() + secs(3)).unwrap();
-    // Success resets the backoff.
-    queue.push(3).unwrap();
-    queue.start(t0() + secs(3), usize::MAX, |_| 1).unwrap();
-    queue.finish(DeliveryResult::Error, t0() + secs(3)).unwrap();
-    assert_eq!(queue.wake_at(), Some(t0() + secs(4)));
 }
 
 #[test]
@@ -88,24 +47,11 @@ fn backoff_doubles_up_to_a_minute() {
 fn returned_batches_come_back_without_backoff() {
     let mut queue = DeliveryQueue::new();
     queue.push(1).unwrap();
-    queue.start(t0(), usize::MAX, |_| 1).unwrap();
+    queue.start(usize::MAX, |_| 1).unwrap();
     queue.push(2).unwrap();
-    assert_eq!(queue.finish(DeliveryResult::Returned, t0()), Ok(vec![]));
+    assert_eq!(queue.finish(DeliveryResult::Returned), Ok(vec![]));
     assert_eq!(queue.state(), DeliveryState::Ready);
-    assert_eq!(queue.start(t0(), usize::MAX, |_| 1), Some(vec![1]));
-}
-
-#[test]
-fn gone_holds_everything() {
-    let mut queue = DeliveryQueue::new();
-    queue.push(1).unwrap();
-    queue.start(t0(), usize::MAX, |_| 1).unwrap();
-    assert_eq!(queue.finish(DeliveryResult::Gone, t0()), Ok(vec![]));
-    assert_eq!(queue.state(), DeliveryState::Held);
-    queue.push(2).unwrap();
-    assert_eq!(queue.start(t0() + secs(86_400), usize::MAX, |_| 1), None);
-    assert_eq!(queue.wake_at(), None);
-    assert_eq!(queue.len(), 2);
+    assert_eq!(queue.start(usize::MAX, |_| 1), Some(vec![1]));
 }
 
 #[test]
@@ -115,9 +61,9 @@ fn cap_counts_the_batch_in_flight() {
         queue.push(n).unwrap();
     }
     assert_eq!(queue.push(MAX_QUEUED), Err(QueueError::Full));
-    queue.start(t0(), usize::MAX, |_| 1).unwrap();
+    queue.start(usize::MAX, |_| 1).unwrap();
     assert_eq!(queue.push(MAX_QUEUED), Err(QueueError::Full));
-    queue.finish(DeliveryResult::Ok, t0()).unwrap();
+    queue.finish(DeliveryResult::Ok).unwrap();
     assert_eq!(queue.push(MAX_QUEUED), Ok(()));
 }
 
@@ -126,8 +72,6 @@ enum Op {
     Push,
     Start,
     Finish(DeliveryResult),
-    /// Advance the clock by this many milliseconds.
-    Wait(i64),
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -135,10 +79,7 @@ fn op() -> impl Strategy<Value = Op> {
         6 => Just(Op::Push),
         3 => Just(Op::Start),
         2 => Just(Op::Finish(DeliveryResult::Ok)),
-        2 => Just(Op::Finish(DeliveryResult::Error)),
         1 => Just(Op::Finish(DeliveryResult::Returned)),
-        1 => Just(Op::Finish(DeliveryResult::Gone)),
-        3 => (0i64..90_000).prop_map(Op::Wait),
     ]
 }
 
@@ -148,17 +89,13 @@ proptest! {
     #[test]
     fn delivery_model(ops in collection::vec(op(), 1..300), burst in 0usize..2) {
         let mut queue = DeliveryQueue::new();
-        let mut now = t0();
         // Model: items accepted in order, how many are delivered, the batch
-        // out, failures since the last success, earliest retry, gone.
+        // out.
         let mut accepted: Vec<u64> = Vec::new();
         let mut delivered = 0usize;
         // The size of the batch out or kept for a retry; whether it is out.
         let mut batch: Option<usize> = None;
         let mut in_flight = false;
-        let mut failures = 0u32;
-        let mut retry_at: Option<Timestamp> = None;
-        let mut gone = false;
         let mut next = 0u64;
 
         // Optionally start near the cap so `Full` is exercised.
@@ -184,10 +121,8 @@ proptest! {
                 },
                 Op::Start => {
                     let may = !in_flight
-                        && !gone
-                        && retry_at.is_none_or(|at| at <= now)
                         && undelivered > 0;
-                    match queue.start(now, usize::MAX, |_| 1) {
+                    match queue.start(usize::MAX, |_| 1) {
                         Some(sent) => {
                             prop_assert!(may);
                             // A failed batch again unchanged, else everything
@@ -201,7 +136,7 @@ proptest! {
                     }
                 }
                 Op::Finish(result) => {
-                    let outcome = queue.finish(result, now);
+                    let outcome = queue.finish(result);
                     let (true, Some(size)) = (in_flight, batch) else {
                         prop_assert_eq!(outcome, Err(QueueError::NotInFlight));
                         continue;
@@ -213,27 +148,12 @@ proptest! {
                             prop_assert_eq!(done.as_slice(), accepted.get(delivered..delivered + size).unwrap());
                             delivered += size;
                             batch = None;
-                            failures = 0;
-                            retry_at = None;
-                        }
-                        DeliveryResult::Error => {
-                            prop_assert!(done.is_empty());
-                            failures += 1;
-                            let at = now + backoff(failures);
-                            prop_assert_eq!(queue.wake_at(), Some(at));
-                            retry_at = Some(at);
                         }
                         DeliveryResult::Returned => {
                             prop_assert!(done.is_empty());
-                            retry_at = None;
-                        }
-                        DeliveryResult::Gone => {
-                            prop_assert!(done.is_empty());
-                            gone = true;
                         }
                     }
                 }
-                Op::Wait(millis) => now += SignedDuration::from_millis(millis),
             }
 
             // No loss, cap, and the state matches the model.
@@ -241,10 +161,6 @@ proptest! {
             prop_assert!(queue.len() <= MAX_QUEUED);
             let expected = if in_flight {
                 DeliveryState::InFlight
-            } else if gone {
-                DeliveryState::Held
-            } else if let Some(at) = retry_at {
-                DeliveryState::Retrying { at }
             } else {
                 DeliveryState::Ready
             };
@@ -259,15 +175,15 @@ fn bounded_prefix_retries_unchanged_and_remainder_starts_immediately() {
     for size in [4, 6, 1, 9] {
         queue.push(size).unwrap();
     }
-    assert_eq!(queue.start(t0(), 10, |n| *n), Some(vec![4, 6]));
-    queue.finish(DeliveryResult::Error, t0()).unwrap();
+    assert_eq!(queue.start(10, |n| *n), Some(vec![4, 6]));
+    queue.finish(DeliveryResult::Returned).unwrap();
     queue.push(2).unwrap();
     // A retry ignores even a changed limit and size function.
-    assert_eq!(queue.start(t0() + secs(1), 1, |_| 100), Some(vec![4, 6]));
-    queue.finish(DeliveryResult::Ok, t0() + secs(1)).unwrap();
-    assert_eq!(queue.start(t0() + secs(1), 10, |n| *n), Some(vec![1, 9]));
-    queue.finish(DeliveryResult::Ok, t0() + secs(1)).unwrap();
-    assert_eq!(queue.start(t0() + secs(1), 10, |n| *n), Some(vec![2]));
+    assert_eq!(queue.start(1, |_| 100), Some(vec![4, 6]));
+    queue.finish(DeliveryResult::Ok).unwrap();
+    assert_eq!(queue.start(10, |n| *n), Some(vec![1, 9]));
+    queue.finish(DeliveryResult::Ok).unwrap();
+    assert_eq!(queue.start(10, |n| *n), Some(vec![2]));
 }
 
 #[test]
@@ -275,7 +191,61 @@ fn oversized_first_item_still_makes_progress() {
     let mut queue = DeliveryQueue::new();
     queue.push(11).unwrap();
     queue.push(1).unwrap();
-    assert_eq!(queue.start(t0(), 10, |n| *n), Some(vec![11]));
-    queue.finish(DeliveryResult::Ok, t0()).unwrap();
-    assert_eq!(queue.start(t0(), 0, |n| *n), Some(vec![1]));
+    assert_eq!(queue.start(10, |n| *n), Some(vec![11]));
+    queue.finish(DeliveryResult::Ok).unwrap();
+    assert_eq!(queue.start(0, |n| *n), Some(vec![1]));
+}
+
+#[test]
+fn maximal_comments_fit_in_bounded_recv_batches() {
+    use crate::{
+        core::{
+            ids::{CommentId, EndpointKey},
+            name::MAX_NAME,
+            queue::{DeliveryQueue, DeliveryResult},
+            rng::SeededRng,
+        },
+        protocol::{
+            comment::{
+                Author, Comment, Draft, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT,
+                MAX_SELECTOR,
+            },
+            line_size,
+        },
+        share::delivery::MAX_BATCH_BYTES,
+    };
+
+    // U+0000 takes the longest JSON escape (six bytes) and is valid
+    // in every free-text field, including a nonblank comment.
+    let draft = Draft::try_from(DraftFields {
+        page: "\0".repeat(MAX_PAGE).try_into().unwrap(),
+        selector: "\0".repeat(MAX_SELECTOR).try_into().unwrap(),
+        choice: None,
+        selected_text: Some("\0".repeat(MAX_SELECTED_TEXT)),
+        comment: "\0".repeat(MAX_COMMENT),
+    })
+    .unwrap();
+    let comment = Comment::new(
+        CommentId::generate(&SeededRng::new(1)),
+        Author::new(
+            "x".repeat(MAX_NAME).try_into().unwrap(),
+            EndpointKey([0xff; 32]),
+        ),
+        draft,
+    );
+    let size = line_size(&comment).unwrap();
+    assert!(size <= MAX_BATCH_BYTES, "maximal comment is {size} bytes");
+    eprintln!("maximal comment NDJSON: {size} bytes");
+    let mut queue = DeliveryQueue::new();
+    for _ in 0..3 {
+        queue.push(comment.clone()).unwrap();
+    }
+    for _ in 0..3 {
+        let batch = queue
+            .start(MAX_BATCH_BYTES, |c| line_size(c).unwrap())
+            .unwrap();
+        assert_eq!(batch, vec![comment.clone()]);
+        queue.finish(DeliveryResult::Ok).unwrap();
+    }
+    assert!(queue.is_empty());
 }

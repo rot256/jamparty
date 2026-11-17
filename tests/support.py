@@ -146,7 +146,11 @@ def jamparty(home: Path, *arguments: str) -> str:
 
 @contextmanager
 def share(home: Path, *source: str) -> Iterator[Shared]:
-    process = Process([*source, "--local"], environment(home))
+    arguments = list(source)
+    arguments.insert(
+        arguments.index("--") if "--" in arguments else len(arguments), "--local"
+    )
+    process = Process(arguments, environment(home))
     try:
         token = process.wait_for("jamparty: token: ")
         address = process.wait_for("jamparty: direct address: ")

@@ -1,11 +1,4 @@
-//! Delivery: one task per share takes batches from the hub's queue and
-//! hands them to the target. Batches are at most about 100 KB of NDJSON;
-//! large backlogs go out as several batches, without a delay between successes.
-//!
-//! - `recv`: each batch waits for a `jamparty recv` on the runtime socket;
-//!   it is delivered once that client says it printed it, and returned to
-//!   the queue (no backoff) if the client goes away first.
-//! - `command`: the batch goes to the command's stdin.
+//! Only recv delivers comments. Commands receive reminders, never comments.
 
 use std::{ffi::OsString, sync::Arc, time::Duration};
 
@@ -14,20 +7,20 @@ use tokio::{
     task::JoinSet,
 };
 
-use crate::{adapters::command, core::queue::Attempt, protocol::comment::Comment, share::hub::Hub};
+use crate::{
+    adapters::command, core::queue::DeliveryResult, protocol::comment::Comment, share::hub::Hub,
+};
 
-/// Below T3's 120,000 UTF-16-unit message limit: UTF-8 bytes are never
-/// fewer than UTF-16 units. 115,000 leaves a margin while fitting even a
-/// maximal comment whose characters all need six-byte JSON escapes.
+/// Bounded output per recv keeps one agent turn a manageable size.
 pub(crate) const MAX_BATCH_BYTES: usize = 115_000;
 
-/// Where comments go.
+/// Comments always go to recv; optionally remind an idle agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
     /// Held for `jamparty recv`.
     Recv,
-    /// Piped to a command.
-    Command(CommandTarget),
+    /// A reminder when nobody is listening.
+    Nudge(CommandTarget),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,28 +38,30 @@ pub(crate) struct RecvRequest {
     pub(crate) printed: oneshot::Receiver<()>,
 }
 
-/// What a `jamparty recv` finds on the runtime socket.
-#[derive(Clone)]
-pub(crate) enum RecvAccess {
-    /// The target is `recv`: where clients queue up.
-    Open(mpsc::Sender<RecvRequest>),
-    /// Comments go elsewhere.
-    Command(OsString),
+/// Starts recv delivery and, optionally, a separate nudge task.
+pub(crate) fn start(
+    target: Target,
+    hub: Arc<Hub>,
+    share_id: String,
+    tasks: &mut JoinSet<()>,
+) -> mpsc::Sender<RecvRequest> {
+    let (requests, receiver) = mpsc::channel(16);
+    tasks.spawn(to_recv(Arc::clone(&hub), receiver));
+    if let Target::Nudge(command) = target {
+        tasks.spawn(nudge(hub, command, share_id));
+    }
+    requests
 }
 
-/// Starts delivery; returns what `jamparty recv` clients get.
-pub(crate) fn start(target: Target, hub: Arc<Hub>, tasks: &mut JoinSet<()>) -> RecvAccess {
-    match target {
-        Target::Recv => {
-            let (requests, receiver) = mpsc::channel(16);
-            tasks.spawn(to_recv(hub, receiver));
-            RecvAccess::Open(requests)
-        }
-        Target::Command(command) => {
-            let program = command.argv.first().cloned().unwrap_or_default();
-            tasks.spawn(to_command(hub, command));
-            RecvAccess::Command(program)
-        }
+async fn nudge(hub: Arc<Hub>, target: CommandTarget, share_id: String) {
+    loop {
+        let (generation, count) = hub.next_nudge().await;
+        let noun = if count == 1 { "comment" } else { "comments" };
+        let notice = format!(
+            "jamparty: {count} {noun} waiting on {share_id}; run jamparty recv --share {share_id}\n"
+        );
+        let result = command::nudge(&target.argv, target.timeout, &notice).await;
+        hub.finish_nudge(generation, result);
     }
 }
 
@@ -78,19 +73,12 @@ async fn to_recv(hub: Arc<Hub>, mut requests: mpsc::Receiver<RecvRequest>) {
         };
         if batch.send(comments).is_err() {
             // The `jamparty recv` went away.
-            hub.finish(Attempt::Returned);
+            hub.finish(DeliveryResult::Returned);
             continue;
         }
         match printed.await {
-            Ok(()) => hub.finish(Attempt::Delivered),
-            Err(_) => hub.finish(Attempt::Returned),
+            Ok(()) => hub.finish(DeliveryResult::Ok),
+            Err(_) => hub.finish(DeliveryResult::Returned),
         }
-    }
-}
-
-async fn to_command(hub: Arc<Hub>, target: CommandTarget) {
-    loop {
-        let batch = hub.next_batch().await;
-        hub.finish(command::deliver(&target.argv, target.timeout, &batch).await);
     }
 }

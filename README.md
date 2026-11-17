@@ -15,18 +15,20 @@ cargo install --locked jamparty
 ```sh
 jamparty serve ./public                     # a static directory
 jamparty proxy http://127.0.0.1:5173        # a running dev server
-jamparty serve ./public -- ./on-comments.sh # hand comments to a command
+jamparty serve ./public -- ./on-comments.sh # nudge when nobody is listening
 jamparty serve ./public -- t3 thread send "$T3CODE_THREAD_ID" -
 ```
 
 Anyone with the printed token can see the site and comment until the
 share stops.
 
-Commands receive each comment batch as NDJSON on stdin, in the same format
-as `jamparty recv`. Inside T3, the example queues comments as a new turn;
-start the share in the background. A subagent should pass the top-level
-thread's id. Failed commands retry with backoff, so skip duplicate comment
-ids. See [command delivery](docs/delivery.md) or `jamparty agent t3`.
+Comments wait for `jamparty recv`, which prints them as NDJSON and confirms
+delivery. An optional command after `--` receives only a short plain-text
+reminder when comments wait and no recv listens: one nudge per backlog.
+Inside T3, start the share in the background; when the nudge arrives as a new
+turn, run `jamparty recv`, then answer. A subagent should pass the top-level
+thread's id. Failed nudges retry with backoff without affecting the queue.
+See [comment delivery](docs/delivery.md) or `jamparty agent t3`.
 
 ## Join
 

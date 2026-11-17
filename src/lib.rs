@@ -182,14 +182,14 @@ struct ShareNet {
     local: bool,
 }
 
-/// Deliver comments to a command, or hold them for `jamparty recv`.
+/// Hold comments for `jamparty recv`, with an optional reminder command.
 #[derive(Debug, Args)]
 struct Delivery {
-    /// How long a command may take per batch before it is killed: seconds,
+    /// How long a nudge command may take before it is killed: seconds,
     /// or a number with s, m or h.
     #[arg(long, value_name = "SECS", default_value = "60", value_parser = timeout)]
     command_timeout: Duration,
-    /// Hand each batch of comments to this command, as NDJSON on its stdin.
+    /// Remind the agent when comments wait with no recv listening (notice on stdin).
     #[arg(last = true, value_name = "COMMAND")]
     command: Vec<OsString>,
 }
@@ -342,8 +342,7 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
     }
 }
 
-/// Select delivery; inside T3 (`in_t3`: T3CODE_THREAD_ID is set), suggest
-/// the command target when none is given.
+/// Select the optional nudge; inside T3 suggest a reminder command.
 fn target(delivery: Delivery, source: &Source, in_t3: bool) -> (Target, Option<String>) {
     let Delivery {
         command_timeout,
@@ -351,7 +350,7 @@ fn target(delivery: Delivery, source: &Source, in_t3: bool) -> (Target, Option<S
     } = delivery;
     if !command.is_empty() {
         return (
-            Target::Command(CommandTarget {
+            Target::Nudge(CommandTarget {
                 argv: command,
                 timeout: command_timeout,
             }),
@@ -360,7 +359,7 @@ fn target(delivery: Delivery, source: &Source, in_t3: bool) -> (Target, Option<S
     }
     let note = in_t3.then(|| {
         format!(
-            "inside T3, deliver to this thread with: jamparty {} -- t3 thread send \"$T3CODE_THREAD_ID\" -",
+            "inside T3, nudge this thread with: jamparty {} -- t3 thread send \"$T3CODE_THREAD_ID\" -",
             source_args(source)
         )
     });
@@ -420,9 +419,9 @@ async fn share(
     let in_t3 = env::var_os("T3CODE_THREAD_ID").is_some();
     let (target, note) = target(delivery, &source, in_t3);
     let goes_to = match &target {
-        Target::Recv => "jamparty recv".to_owned(),
-        Target::Command(command) => format!(
-            "the command {}",
+        Target::Recv => "jamparty recv (comments wait until printed)".to_owned(),
+        Target::Nudge(command) => format!(
+            "jamparty recv (comments wait until printed); nudging with: {}",
             command
                 .argv
                 .iter()

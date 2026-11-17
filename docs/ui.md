@@ -36,6 +36,9 @@ its own joiner's client.
   clicking the gear again, or anywhere outside the panel, closes it.
   Only one of the two panels is open at a time.
 
+Comments stay queued until `jamparty recv` prints and confirms them. A nudge
+command only reminds the agent and never changes delivery status.
+
 ## Comment list (expanded pill)
 
 - Header: dot, `N queued`, `· connected` (or the state), and `▾` to

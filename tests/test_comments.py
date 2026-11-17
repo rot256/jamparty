@@ -582,3 +582,34 @@ def test_a_comment_before_a_new_tabs_first_hello_is_sent(
         expect(rows).to_have_attribute("data-state", "queued")
         [record] = recv_all(tmp_path)
         assert record["comment"] == "Before the first hello"
+
+
+def test_a_nudge_never_delivers_comments(tmp_path: Path, page: Page) -> None:
+    notice = tmp_path / "notice"
+    with (
+        share(
+            tmp_path, "serve", str(SITE), "--", "sh", "-c", 'cat >> "$0"', str(notice)
+        ) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        comment_on_intro(page, "Only recv may read this comment.")
+        waiting(
+            page,
+            "the nudge",
+            lambda: notice.exists() and "run jamparty recv" in notice.read_text(),
+        )
+        text = notice.read_text()
+        assert text.startswith("jamparty: 1 comment waiting on ")
+        assert "; run jamparty recv --share " in text
+        assert "Only recv" not in text
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        expect(overlay(page, "#outbox-list li")).to_have_attribute(
+            "data-state", "queued"
+        )
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "Only recv may read this comment."
+        expect(overlay(page, "#badge")).to_have_text("0 queued")
+        expect(overlay(page, "#outbox-list li")).to_have_attribute(
+            "data-state", "delivered"
+        )

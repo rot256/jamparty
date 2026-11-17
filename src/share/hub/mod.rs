@@ -4,6 +4,7 @@
 
 mod answers;
 mod comments;
+mod nudge;
 mod outbox;
 mod presence;
 #[cfg(test)]
@@ -40,10 +41,7 @@ use crate::{
 };
 
 #[cfg(test)]
-pub(crate) use crate::share::hub::{
-    comments::{HELD, RETRYING},
-    presence::Ignored,
-};
+pub(crate) use crate::share::hub::presence::Ignored;
 pub(crate) use crate::share::hub::{
     outbox::{Outbox, Stopped},
     presence::{Presence, flush_presence},
@@ -86,6 +84,7 @@ pub(crate) struct Hub {
     broadcast: broadcast::Sender<Outgoing>,
     /// Poked when a comment is queued (or by tests after moving the clock).
     wakeup: Notify,
+    nudge_changed: Notify,
     /// Poked when a joiner's whereabouts changed; see [`flush_presence`].
     presence_changed: Notify,
     clock: Arc<dyn Clock>,
@@ -101,6 +100,9 @@ pub(crate) struct Hub {
 
 struct Inner {
     queue: DeliveryQueue<Comment>,
+    listeners: usize,
+    generation: u64,
+    nudge: nudge::Nudge,
     /// Per joiner key.
     limiter: RateLimiter<EndpointKey>,
     /// Everyone's comments together.
@@ -124,6 +126,9 @@ impl Hub {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 queue: DeliveryQueue::new(),
+                listeners: 0,
+                generation: 0,
+                nudge: nudge::Nudge::default(),
                 limiter: RateLimiter::new(RateLimit::PER_JOINER),
                 global: RateLimiter::new(RateLimit::GLOBAL),
                 joiners: Vec::new(),
@@ -137,6 +142,7 @@ impl Hub {
             order: Mutex::new(Order(0)),
             broadcast: broadcast::channel(BROADCAST_CAPACITY).0,
             wakeup: Notify::new(),
+            nudge_changed: Notify::new(),
             presence_changed: Notify::new(),
             clock,
             rng,
@@ -278,6 +284,7 @@ impl Hub {
     #[cfg(test)]
     pub(crate) fn wake(&self) {
         self.wakeup.notify_one();
+        self.nudge_changed.notify_one();
     }
 
     #[cfg(test)]
@@ -289,7 +296,7 @@ impl Hub {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn wake_at(&self) -> Option<Timestamp> {
-        self.lock().queue.wake_at()
+        self.lock().nudge.retry_at
     }
 
     /// The undelivered comments.

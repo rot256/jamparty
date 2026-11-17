@@ -156,7 +156,12 @@ impl Share {
             versions: VersionLog::default(),
         });
         let mut tasks = JoinSet::new();
-        let recv = delivery::start(target, Arc::clone(&shared.hub), &mut tasks);
+        let recv = delivery::start(
+            target,
+            Arc::clone(&shared.hub),
+            shared.token.share.sid().to_string(),
+            &mut tasks,
+        );
         tasks.spawn(socket::serve(listener, Arc::clone(&shared.hub), recv));
         let (stop_accepting, stopped) = oneshot::channel();
         let accepting = tokio::spawn(accept(

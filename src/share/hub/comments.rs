@@ -1,16 +1,14 @@
 //! Comments: queued once per ref, rate-limited, delivered in batches; the
-//! status line follows the delivery state.
-
-use tokio::time;
+//! author hears delivery only after recv confirms printing.
 
 use crate::{
     core::{
         ids::{CommentId, EndpointKey},
-        queue::{Attempt, DeliveryResult, DeliveryState, QueueError},
+        queue::{DeliveryResult, QueueError},
     },
     protocol::{
         comment::{Author, Comment, Draft, DraftFields},
-        control::{AckOutcome, Anchor, CommentRef, MAX_QUEUED_PER_KEY, ShareMessage, StatusLine},
+        control::{AckOutcome, Anchor, CommentRef, MAX_QUEUED_PER_KEY, ShareMessage},
         line_size,
     },
     share::{
@@ -45,7 +43,10 @@ impl Hub {
     /// Wakes the delivery task for a newly queued comment.
     pub(super) fn wake_for(&self, outcome: AckOutcome) {
         match outcome {
-            AckOutcome::Queued { .. } => self.wakeup.notify_one(),
+            AckOutcome::Queued { .. } => {
+                self.wakeup.notify_one();
+                self.nudge_changed.notify_one();
+            }
             AckOutcome::Delivered { .. }
             | AckOutcome::RateLimited { .. }
             | AckOutcome::ChoiceRefused
@@ -161,33 +162,15 @@ impl Hub {
     pub(crate) async fn next_batch(&self) -> Vec<Comment> {
         loop {
             let notified = self.wakeup.notified();
-            let wake_at = {
+            {
                 let mut inner = self.lock();
-                if let Some(batch) =
-                    inner
-                        .queue
-                        .start(self.clock.now(), MAX_BATCH_BYTES, |comment| {
-                            // One that cannot be encoded goes alone; its
-                            // delivery reports the error.
-                            line_size(comment).unwrap_or(usize::MAX)
-                        })
-                {
+                if let Some(batch) = inner.queue.start(MAX_BATCH_BYTES, |comment| {
+                    line_size(comment).unwrap_or(usize::MAX)
+                }) {
                     return batch;
                 }
-                inner.queue.wake_at()
-            };
-            let wait = wake_at
-                .map(|at| self.clock.now().duration_until(at))
-                .filter(|wait| wait.is_positive());
-            match wait {
-                Some(wait) => {
-                    tokio::select! {
-                        () = notified => {}
-                        () = time::sleep(wait.unsigned_abs()) => {}
-                    }
-                }
-                None => notified.await,
             }
+            notified.await;
         }
     }
 
@@ -197,32 +180,23 @@ impl Hub {
         *self.after_finish_unlock.lock().unwrap() = Some(Box::new(hook));
     }
 
-    /// Records how the in-flight batch's attempt ended; what went wrong
-    /// goes only to the share's log. Delivered ids go to each comment's
-    /// author only; the status line follows the state.
-    pub(crate) fn finish(&self, attempt: Attempt) {
-        let result = DeliveryResult::from(&attempt);
-        let now = self.clock.now();
+    /// Completes recv delivery. Delivered ids go only to their author.
+    pub(crate) fn finish(&self, result: DeliveryResult) {
         let delivered = {
             let mut inner = self.lock();
-            let Ok(delivered) = inner.queue.finish(result, now) else {
+            let Ok(delivered) = inner.queue.finish(result) else {
                 tracing::warn!("delivery finished with nothing in flight");
                 return;
             };
-            let status = match inner.queue.state() {
-                DeliveryState::Ready | DeliveryState::InFlight => None,
-                DeliveryState::Retrying { .. } => status_line(RETRYING),
-                DeliveryState::Held => status_line(HELD),
-            };
-            let changed = inner.status != status;
-            inner.status.clone_from(&status);
+            // A confirmed batch ends this backlog, even if more remain.
+            if result == DeliveryResult::Ok {
+                inner.nudge = Default::default();
+                inner.generation = inner.generation.wrapping_add(1);
+            }
             // Stamped before the lock goes: a comment queued in a slot
             // these free is acknowledged after its author hears of them.
             for (key, ids) in by_author(&delivered) {
                 self.send(Audience::Key(key), ShareMessage::Delivered { ids });
-            }
-            if changed {
-                self.broadcast(ShareMessage::Status { line: status });
             }
             delivered.len()
         };
@@ -233,12 +207,8 @@ impl Hub {
                 hook();
             }
         }
-        match attempt {
-            Attempt::Delivered => tracing::info!(count = delivered, "comments delivered"),
-            Attempt::Failed { why } => tracing::warn!(%why, "delivery failed; retrying"),
-            Attempt::Gone { why } => tracing::warn!(%why, "the target is gone; holding comments"),
-            Attempt::Returned => tracing::info!("comments returned undelivered"),
-        }
+        self.nudge_changed.notify_one();
+        tracing::info!(count = delivered, "recv batch finished");
     }
 }
 
@@ -253,12 +223,4 @@ fn by_author(delivered: &[Comment]) -> Vec<(EndpointKey, Vec<CommentId>)> {
         }
     }
     authors
-}
-
-/// The status lines joiners see; what went wrong is in the share's log.
-pub(crate) const RETRYING: &str = "delivery failing, retrying";
-pub(crate) const HELD: &str = "agent unavailable; comments are kept until the share restarts";
-
-fn status_line(text: &str) -> Option<StatusLine> {
-    StatusLine::try_from(text.to_owned()).ok()
 }

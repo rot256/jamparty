@@ -4,21 +4,15 @@
 //! the longest waiting prefix within the caller's encoded byte limit
 //! (at least one comment). The share uses about 100 KB of NDJSON per batch;
 //! large backlogs and new arrivals form later batches.
-//! [`finish`] reports the result: `Ok` drops the batch, `Error`
-//! keeps it and backs off on the injected clock, `Returned` keeps it with
-//! no backoff (the taker went away before it was delivered, e.g. a
-//! `jamparty recv` that died), `Gone` keeps it and holds the queue for good
-//! (the share must be restarted to deliver elsewhere). A kept batch is
-//! sent again unchanged, never merged with newer comments, so a target
-//! can tell a retry from new comments. No timers here: the caller retries
-//! [`start`] at [`DeliveryQueue::wake_at`].
+//! [`finish`] removes printed comments or returns an unchanged batch when a
+//! recv client goes away. There is no delivery backoff: only nudges retry.
 //!
 //! [`start`]: DeliveryQueue::start
 //! [`finish`]: DeliveryQueue::finish
 
 use std::{collections::VecDeque, mem};
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 
 /// Maximum number of undelivered comments (waiting and in flight).
 pub(crate) const MAX_QUEUED: usize = 500;
@@ -30,41 +24,9 @@ pub(crate) const MAX_BACKOFF: SignedDuration = SignedDuration::from_secs(60);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeliveryResult {
     Ok,
-    /// A failure worth retrying.
-    Error,
     /// The batch came back undelivered through no fault of the target
     /// (a `jamparty recv` died before printing it): no backoff.
     Returned,
-    /// The target reports itself gone (e.g. the command cannot be started).
-    Gone,
-}
-
-/// How a delivery attempt ended; `why` says what went wrong, for the
-/// share's log only.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Attempt {
-    Delivered,
-    /// A failure worth retrying.
-    Failed {
-        why: String,
-    },
-    /// The target reports itself gone (e.g. the command cannot be started).
-    Gone {
-        why: String,
-    },
-    /// The batch came back undelivered through no fault of the target.
-    Returned,
-}
-
-impl From<&Attempt> for DeliveryResult {
-    fn from(attempt: &Attempt) -> Self {
-        match attempt {
-            Attempt::Delivered => Self::Ok,
-            Attempt::Failed { .. } => Self::Error,
-            Attempt::Gone { .. } => Self::Gone,
-            Attempt::Returned => Self::Returned,
-        }
-    }
 }
 
 /// The queue's state, for the status line and the joiners.
@@ -73,12 +35,6 @@ pub(crate) enum DeliveryState {
     /// Nothing in flight; [`DeliveryQueue::start`] sends if anything waits.
     Ready,
     InFlight,
-    /// Waiting until `at` after a failure.
-    Retrying {
-        at: Timestamp,
-    },
-    /// The target is gone; nothing is sent again.
-    Held,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,12 +49,10 @@ pub(crate) enum QueueError {
 pub(crate) struct DeliveryQueue<T> {
     /// Not in a batch yet, oldest first.
     waiting: VecDeque<T>,
-    /// The batch out (`InFlight`) or to be sent again unchanged; empty when
+    /// The batch out or returned unchanged; empty when
     /// the last one was delivered.
     batch: Vec<T>,
     state: DeliveryState,
-    /// Failures since the last success.
-    failures: u32,
 }
 
 impl<T> Default for DeliveryQueue<T> {
@@ -107,7 +61,6 @@ impl<T> Default for DeliveryQueue<T> {
             waiting: VecDeque::new(),
             batch: Vec::new(),
             state: DeliveryState::Ready,
-            failures: 0,
         }
     }
 }
@@ -139,7 +92,6 @@ impl<T: Clone> DeliveryQueue<T> {
         self.waiting.len() + self.batch.len()
     }
 
-    #[cfg(test)]
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
@@ -148,15 +100,6 @@ impl<T: Clone> DeliveryQueue<T> {
     #[must_use]
     pub(crate) fn state(&self) -> DeliveryState {
         self.state
-    }
-
-    /// When to call [`DeliveryQueue::start`] again while retrying.
-    #[must_use]
-    pub(crate) fn wake_at(&self) -> Option<Timestamp> {
-        match self.state {
-            DeliveryState::Retrying { at } => Some(at),
-            DeliveryState::Ready | DeliveryState::InFlight | DeliveryState::Held => None,
-        }
     }
 
     /// Queues `item` behind everything undelivered.
@@ -168,22 +111,11 @@ impl<T: Clone> DeliveryQueue<T> {
         Ok(())
     }
 
-    /// The batch to send, if nothing is in flight, the backoff has passed
-    /// and the target is not gone: the last batch again if it failed,
+    /// The batch to send if nothing is in flight: a returned batch again,
     /// otherwise the longest prefix within `limit`, measured by `size`.
     /// Always takes at least one item, even if that item exceeds the limit.
-    pub(crate) fn start(
-        &mut self,
-        now: Timestamp,
-        limit: usize,
-        size: impl Fn(&T) -> usize,
-    ) -> Option<Vec<T>> {
-        let may_send = match self.state {
-            DeliveryState::Ready => true,
-            DeliveryState::Retrying { at } => at <= now,
-            DeliveryState::InFlight | DeliveryState::Held => false,
-        };
-        if !may_send {
+    pub(crate) fn start(&mut self, limit: usize, size: impl Fn(&T) -> usize) -> Option<Vec<T>> {
+        if self.state == DeliveryState::InFlight {
             return None;
         }
         if self.batch.is_empty() {
@@ -208,29 +140,16 @@ impl<T: Clone> DeliveryQueue<T> {
 
     /// Records the in-flight batch's result; returns the delivered items
     /// (the batch on `Ok`, nothing otherwise).
-    pub(crate) fn finish(
-        &mut self,
-        result: DeliveryResult,
-        now: Timestamp,
-    ) -> Result<Vec<T>, QueueError> {
+    pub(crate) fn finish(&mut self, result: DeliveryResult) -> Result<Vec<T>, QueueError> {
         if self.state != DeliveryState::InFlight {
             return Err(QueueError::NotInFlight);
         }
         match result {
             DeliveryResult::Ok => {
-                self.failures = 0;
                 self.state = DeliveryState::Ready;
                 return Ok(mem::take(&mut self.batch));
             }
-            DeliveryResult::Error => {
-                self.failures = self.failures.saturating_add(1);
-                let at = now
-                    .checked_add(backoff(self.failures))
-                    .unwrap_or(Timestamp::MAX);
-                self.state = DeliveryState::Retrying { at };
-            }
             DeliveryResult::Returned => self.state = DeliveryState::Ready,
-            DeliveryResult::Gone => self.state = DeliveryState::Held,
         }
         Ok(Vec::new())
     }
