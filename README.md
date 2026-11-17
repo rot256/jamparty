@@ -52,3 +52,9 @@ The first pick wins and removes the question for everyone; the picker sees a
 brief confirmation. It arrives through the usual comment delivery with
 `selector: "jamparty-agent:<answer id>"` and `comment` and optional `choice`
 containing the chosen label. Typed replies do not resolve questions.
+
+Peer compatibility follows the release line: `0.x` before 1.0, and the
+major version thereafter (including prereleases). Patch releases stay
+compatible; different lines refuse to connect. If the joiner is behind,
+it prints `cargo install --locked jamparty@X` for the share’s version;
+if it is ahead, it asks the person sharing to update.

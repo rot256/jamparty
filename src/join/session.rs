@@ -38,7 +38,7 @@ struct Inner {
     control: Option<(Admission, Arc<Control>)>,
     /// The latest admission.
     admissions: Admission,
-    /// Set when the share turned out to speak another protocol.
+    /// Set when the share turned out to speak another release line.
     incompatible: Option<Incompatible>,
 }
 
@@ -357,7 +357,7 @@ impl Session {
         result
     }
 
-    /// The share speaks another protocol: the joiner gives up.
+    /// The share speaks another release line: the joiner gives up.
     pub(crate) fn incompatible(&self, incompatible: Incompatible) {
         self.lock().incompatible = Some(incompatible);
     }

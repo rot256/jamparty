@@ -20,7 +20,7 @@ use crate::{
         queue::backoff,
         text::OneLineReport,
         token::PartyToken,
-        version::{Incompatible, JampartyVersion, PROTOCOL},
+        version::{Incompatible, JampartyVersion},
     },
     join::{control::Control, session::Session},
     protocol::{
@@ -51,8 +51,6 @@ pub(crate) struct Dial {
 pub(crate) struct Welcome {
     /// What the share serves.
     pub(crate) site: SiteInfo,
-    /// The share's jamparty.
-    pub(crate) jamparty: JampartyVersion,
 }
 
 /// Why the joiner gives up on the share for good.
@@ -60,7 +58,7 @@ pub(crate) struct Welcome {
 pub(crate) enum Final {
     /// The share refused it.
     Refused(RefusedReason),
-    /// The share speaks another protocol.
+    /// The share speaks another release line.
     Incompatible(Incompatible),
 }
 
@@ -72,7 +70,7 @@ type FirstWaiter = Option<oneshot::Sender<First>>;
 
 /// How one connection attempt ended.
 enum Ended {
-    /// The share refused us, or speaks another protocol; retrying would
+    /// The share refused us, or speaks another release line; retrying would
     /// not help.
     Final(Final),
     /// Admitted, then lost.
@@ -139,7 +137,7 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
     if let Err(error) = lines::write(&mut send, &hello).await {
         return Ended::Failed(error);
     }
-    // Leniently first: a share of another protocol says which jamparty it
+    // Leniently first: a share of another release line says which jamparty it
     // runs even if the rest of its line means nothing here.
     let read = lines::read_with(&mut recv, |line| {
         let greeting = decode_line::<Greeting>(line).ok();
@@ -153,11 +151,14 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
         ));
     };
     let (you, undelivered, welcome) = match line {
-        Ok(Some((Some(greeting), _))) if greeting.version != PROTOCOL => {
+        Ok(Some((Some(greeting), _)))
+            if greeting
+                .jamparty()
+                .is_some_and(|version| !version.compatible(&JampartyVersion::current())) =>
+        {
             connection.close(VarInt::from_u32(0), b"incompatible");
             return Ended::Final(Final::Incompatible(Incompatible {
                 share: greeting.jamparty(),
-                protocol: greeting.version,
             }));
         }
         Ok(Some((
@@ -172,17 +173,14 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
                 undelivered,
                 presence: Support::Supported,
                 site,
-                jamparty,
-            } => (you, undelivered, Welcome { site, jamparty }),
+                jamparty: _,
+            } => (you, undelivered, Welcome { site }),
             ShareMessage::Refused {
                 reason: RefusedReason::Incompatible,
                 jamparty,
             } => {
                 connection.close(VarInt::from_u32(0), b"refused");
-                return Ended::Final(Final::Incompatible(Incompatible {
-                    share: jamparty,
-                    protocol: PROTOCOL,
-                }));
+                return Ended::Final(Final::Incompatible(Incompatible { share: jamparty }));
             }
             ShareMessage::Refused {
                 reason,
@@ -243,10 +241,9 @@ async fn attempt(dial: &Dial, session: &Session, first: &mut FirstWaiter) -> End
 fn refused(reason: RefusedReason) -> Ended {
     match reason {
         RefusedReason::Full => Ended::Failed(report!("the share is full")),
-        RefusedReason::Incompatible => Ended::Final(Final::Incompatible(Incompatible {
-            share: None,
-            protocol: PROTOCOL,
-        })),
+        RefusedReason::Incompatible => {
+            Ended::Final(Final::Incompatible(Incompatible { share: None }))
+        }
         RefusedReason::WrongSecret | RefusedReason::BadHello => {
             Ended::Final(Final::Refused(reason))
         }

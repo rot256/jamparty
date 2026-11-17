@@ -545,9 +545,6 @@ async fn join(
         joiner = Joiner::start(config) => joiner?,
         signal = shutdown_signal() => return Ok(signal?),
     };
-    if let Some(note) = joiner.version_note() {
-        eprintln!("jamparty: {note}");
-    }
     if let Some(fallback) = joiner.fallback() {
         eprintln!("jamparty: {fallback}");
     }

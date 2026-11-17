@@ -38,6 +38,17 @@ Do not add production integration hooks. Preserve the version-1
 newline-delimited JSON schema unless a breaking format change is explicitly
 requested.
 
+## Versioning policy
+
+Peer compatibility follows the release line: `0.x` before 1.0, and the
+major version from 1.0 onward. Prerelease suffixes do not change the line.
+A minor bump in 0.x may break the peer protocol, agent socket or CLI;
+patch releases must remain compatible within their line. Keep no shims,
+capability negotiation or migration code for older releases. The NDJSON
+`"version":1` is the independent comment/envelope format version.
+Peers on different lines refuse one another; a joiner gets an install
+hint only when it is behind the share. Compatible patches need no note.
+
 ## Releasing
 
 Bump `version` in Cargo.toml on main, wait for CI to pass, then push a

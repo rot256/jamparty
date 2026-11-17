@@ -5,7 +5,7 @@
 //! presence and cursors. Parsed strictly (unknown fields are refused): it
 //! is untrusted input, and a field the share does not know (an `author`
 //! in a draft, say) must not pass for one it does. The hello alone
-//! ignores unknown fields, so a later jamparty of this protocol may add
+//! ignores unknown fields, so a later jamparty of this release line may add
 //! some and still be admitted, and told what else it needs to know.
 //!
 //! Share to joiner: admission or refusal, comment acknowledgements,
@@ -26,7 +26,7 @@ use crate::{
         settings::Switch,
         text::{check_line, check_text},
         token::PartySecret,
-        version::{JampartyVersion, ProtocolVersion, Version1},
+        version::{JampartyVersion, Version1},
     },
     protocol::{
         comment::{Author, CommentPage, CommentSelector, Draft},
@@ -118,7 +118,7 @@ pub(crate) enum ShareMessage {
     /// The hello was refused; the share closes the connection after this.
     Refused {
         reason: RefusedReason,
-        /// The share's jamparty, told only to a joiner of another protocol.
+        /// The share's jamparty, told only to a joiner of another release line.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         jamparty: Option<JampartyVersion>,
     },
@@ -236,7 +236,7 @@ pub(crate) enum RefusedReason {
     /// The share has as many joiners as it takes (in all, or with this
     /// key); the joiner retries later.
     Full,
-    /// The joiner speaks another protocol version than the share.
+    /// The joiner speaks another release line than the share.
     Incompatible,
 }
 
@@ -284,12 +284,11 @@ impl TryFrom<&[u8]> for RefusedReason {
 }
 
 /// The first line on a control stream, from either side, read leniently
-/// before it is parsed as this protocol: its protocol version, and the
+/// before it is parsed as this release line: the
 /// sender's jamparty version if it says (a newer jamparty's first line may
 /// carry other things this one cannot parse).
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct Greeting {
-    pub(crate) version: ProtocolVersion,
     #[serde(default)]
     message: GreetingMessage,
 }

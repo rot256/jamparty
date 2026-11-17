@@ -30,7 +30,7 @@ use crate::{
         ids::EndpointKey,
         name::JoinerName,
         text::{OneLineReport, Untrusted},
-        version::{JampartyVersion, PROTOCOL},
+        version::JampartyVersion,
     },
     protocol::{
         comment::Author,
@@ -150,13 +150,17 @@ async fn admission(
     // that is wiped (see `lines::read_hello`); what follows it goes on
     // through a buffered reader.
     let read = lines::read_hello_with(&mut recv, |line| {
-        // Leniently first: a joiner of another protocol is told so, with
+        // Leniently first: a joiner of another release line is told so, with
         // this share's version.
         let greeting = decode_line::<Greeting>(line).ok();
         Ok((greeting, decode_line::<Envelope<JoinerMessage>>(line)))
     });
     let (first, leftover) = match timeout_at(deadline, read).await {
-        Ok(Ok((Some((Some(greeting), _)), _))) if greeting.version != PROTOCOL => {
+        Ok(Ok((Some((Some(greeting), _)), _)))
+            if greeting
+                .jamparty()
+                .is_some_and(|version| !version.compatible(&JampartyVersion::current())) =>
+        {
             shared.versions.incompatible(&greeting);
             return Ok(Admission::Refused {
                 send,
@@ -189,7 +193,7 @@ async fn admission(
 }
 
 async fn refuse(connection: &Connection, mut send: SendStream, reason: RefusedReason) {
-    // Only a joiner of another protocol hears which jamparty this is, to
+    // Only a joiner of another release line hears which jamparty this is, to
     // install it; no other peer needs to know before admission.
     let jamparty = match reason {
         RefusedReason::Incompatible => Some(JampartyVersion::current()),
@@ -378,7 +382,7 @@ pub(crate) async fn forward_reloads(shared: Arc<Shared>) {
     }
 }
 
-/// Says once, on the share's log, that a joiner of another protocol came;
+/// Says once, on the share's log, that a joiner of another release line came;
 /// later ones only at debug level, so joiners cannot flood the log.
 #[derive(Default)]
 pub(crate) struct VersionLog {
@@ -391,12 +395,11 @@ impl VersionLog {
             || "another jamparty".to_owned(),
             |jamparty| format!("jamparty {jamparty}"),
         );
-        let protocol = greeting.version;
         if self.said.swap(true, Ordering::Relaxed) {
-            tracing::debug!(%version, %protocol, "joiner refused: another protocol");
+            tracing::debug!(%version, "joiner refused: another release line");
         } else {
             tracing::warn!(
-                "a joiner runs {version} (protocol {protocol}); this share runs jamparty {} (protocol {PROTOCOL}) and refused it",
+                "a joiner runs {version}; this share runs jamparty {} and refused it",
                 JampartyVersion::current()
             );
         }

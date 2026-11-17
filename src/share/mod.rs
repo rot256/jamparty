@@ -101,7 +101,7 @@ pub(crate) struct Shared {
     site: Site,
     hub: Arc<Hub>,
     admission_timeout: Duration,
-    /// Joiners of another protocol, said once.
+    /// Joiners of another release line, said once.
     versions: VersionLog,
 }
 

@@ -72,7 +72,7 @@ async fn first_line(first: &[u8]) -> (Option<ShareMessage>, Vec<u8>, ConnectionE
 fn assert_refused(reply: Option<ShareMessage>, closed: &ConnectionError, reason: RefusedReason) {
     assert_eq!(
         reply,
-        // Which jamparty this is goes only to a joiner of another protocol.
+        // Which jamparty this is goes only to a joiner of another release line.
         Some(ShareMessage::Refused {
             reason,
             jamparty: None

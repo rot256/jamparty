@@ -1,5 +1,4 @@
-//! The iroh protocol's format version, jamparty's own version, and what to
-//! say when a share and a joiner run different ones.
+//! Release-line compatibility and the independent NDJSON format version.
 
 use std::{cmp::Ordering, fmt};
 
@@ -32,20 +31,6 @@ impl From<Version1> for u32 {
     }
 }
 
-/// A protocol version as a first line says it, whatever it is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(transparent)]
-pub(crate) struct ProtocolVersion(u32);
-
-impl fmt::Display for ProtocolVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-/// The protocol version this jamparty speaks.
-pub(crate) const PROTOCOL: ProtocolVersion = ProtocolVersion(1);
-
 const MAX_JAMPARTY_VERSION: usize = 64;
 
 /// A jamparty release's version, as Cargo has it (`0.1.0`, `0.2.0-rc.1`): 1
@@ -64,6 +49,19 @@ impl JampartyVersion {
 }
 
 impl JampartyVersion {
+    /// Before 1.0, compatibility follows the minor (0.x); from 1.0 on,
+    /// it follows the major. Prerelease and build suffixes do not change it.
+    pub(crate) fn compatible(&self, other: &Self) -> bool {
+        let line = |version: &Self| {
+            let parsed = semver::Version::parse(&version.0).ok()?;
+            Some((
+                parsed.major,
+                if parsed.major == 0 { parsed.minor } else { 0 },
+            ))
+        };
+        matches!((line(self), line(other)), (Some(a), Some(b)) if a == b)
+    }
+
     /// How this version compares with `other` as semver; none when either
     /// is not semver.
     fn compare(&self, other: &Self) -> Option<Ordering> {
@@ -92,25 +90,23 @@ enum Advice<'a> {
     AskShare,
 }
 
-/// The share speaks another protocol than this joiner: the joiner cannot
+/// The share speaks another release line than this joiner: the joiner cannot
 /// go on. Says which versions run where, and what to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Incompatible {
     /// The share's jamparty, if it said.
     pub(crate) share: Option<JampartyVersion>,
-    /// The share's protocol version.
-    pub(crate) protocol: ProtocolVersion,
 }
 
 impl fmt::Display for Incompatible {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { share, protocol } = self;
+        let Self { share } = self;
         let ours = JampartyVersion::current();
         match share {
-            Some(share) => write!(f, "the share runs jamparty {share} (protocol {protocol})")?,
-            None => write!(f, "the share runs another jamparty (protocol {protocol})")?,
+            Some(share) => write!(f, "the share runs jamparty {share}")?,
+            None => write!(f, "the share runs another jamparty")?,
         }
-        write!(f, "; this is jamparty {ours} (protocol {PROTOCOL}).")?;
+        write!(f, "; this is jamparty {ours}.")?;
         match share.as_ref().and_then(|share| share.advice(&ours)) {
             Some(Advice::Install(version)) => write!(
                 f,
@@ -123,25 +119,6 @@ impl fmt::Display for Incompatible {
 }
 
 impl std::error::Error for Incompatible {}
-
-/// One line for a joiner whose share runs another jamparty of the same
-/// protocol: it works, but the versions differ. None when they do not.
-#[must_use]
-pub(crate) fn mismatch_note(share: &JampartyVersion) -> Option<String> {
-    let ours = JampartyVersion::current();
-    if *share == ours {
-        return None;
-    }
-    let hint = match share.advice(&ours) {
-        Some(Advice::Install(version)) => {
-            format!("; consider updating: cargo install --locked jamparty@{version}")
-        }
-        Some(Advice::AskShare) | None => String::new(),
-    };
-    Some(format!(
-        "the share runs jamparty {share}; this is {ours}{hint}"
-    ))
-}
 
 impl TryFrom<String> for JampartyVersion {
     type Error = Invalid;
@@ -175,82 +152,54 @@ impl fmt::Display for JampartyVersion {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::version::{
-        Incompatible, JampartyVersion, ProtocolVersion, Version1, mismatch_note,
-    };
+    use crate::core::version::{Incompatible, JampartyVersion, Version1};
 
     fn version(text: &str) -> JampartyVersion {
         JampartyVersion::try_from(text.to_owned()).unwrap()
     }
 
-    /// A version far behind and far ahead of this one.
-    const BEHIND: &str = "0.0.1";
-    const AHEAD: &str = "999.0.0";
+    #[test]
+    fn release_lines() {
+        for (left, right, compatible) in [
+            ("0.2.0", "0.2.99", true),
+            ("0.2.0-rc.1", "0.2.0", true),
+            ("0.2.0-rc.1+build", "0.2.9", true),
+            ("0.1.9", "0.2.0", false),
+            ("1.0.0", "1.99.0", true),
+            ("1.9.0", "2.0.0", false),
+            ("0.9.0", "1.0.0", false),
+            ("nightly", "nightly", false),
+        ] {
+            assert_eq!(version(left).compatible(&version(right)), compatible);
+            assert_eq!(version(right).compatible(&version(left)), compatible);
+        }
+    }
 
     #[test]
     fn an_incompatible_share_says_what_to_do() {
         let ours = JampartyVersion::current();
-        // The joiner is behind: install the share's version.
         let behind = Incompatible {
-            share: Some(version(AHEAD)),
-            protocol: ProtocolVersion(2),
+            share: Some(version("999.0.0")),
         };
         assert_eq!(
             behind.to_string(),
             format!(
-                "the share runs jamparty {AHEAD} (protocol 2); this is jamparty {ours} (protocol 1). \
-                 Install the share's version: cargo install --locked jamparty@{AHEAD}"
+                "the share runs jamparty 999.0.0; this is jamparty {ours}. Install the share's version: cargo install --locked jamparty@999.0.0"
             )
         );
-        // Ahead: the share is to update.
         let ahead = Incompatible {
-            share: Some(version(BEHIND)),
-            protocol: ProtocolVersion(0),
+            share: Some(version("0.0.1")),
         };
         assert_eq!(
             ahead.to_string(),
             format!(
-                "the share runs jamparty {BEHIND} (protocol 0); this is jamparty {ours} (protocol 1). \
-                 Ask the person sharing to update jamparty."
+                "the share runs jamparty 0.0.1; this is jamparty {ours}. Ask the person sharing to update jamparty."
             )
         );
-        // Unknown, or not semver: no advice either way.
-        let unknown = Incompatible {
-            share: None,
-            protocol: ProtocolVersion(2),
-        };
-        assert_eq!(
-            unknown.to_string(),
-            format!(
-                "the share runs another jamparty (protocol 2); this is jamparty {ours} (protocol 1)."
-            )
-        );
-        let odd = Incompatible {
-            share: Some(version("nightly")),
-            protocol: ProtocolVersion(2),
-        };
-        assert!(odd.to_string().ends_with("(protocol 1)."), "{odd}");
-    }
-
-    #[test]
-    fn another_version_of_the_same_protocol_is_a_note() {
-        let ours = JampartyVersion::current();
-        assert_eq!(mismatch_note(&ours), None);
-        assert_eq!(
-            mismatch_note(&version(AHEAD)).unwrap(),
-            format!(
-                "the share runs jamparty {AHEAD}; this is {ours}; consider updating: \
-                 cargo install --locked jamparty@{AHEAD}"
-            )
-        );
-        assert_eq!(
-            mismatch_note(&version(BEHIND)).unwrap(),
-            format!("the share runs jamparty {BEHIND}; this is {ours}")
-        );
-        assert_eq!(
-            mismatch_note(&version("nightly")).unwrap(),
-            format!("the share runs jamparty nightly; this is {ours}")
-        );
+        for share in [None, Some(version("nightly"))] {
+            let message = Incompatible { share }.to_string();
+            assert!(!message.contains("cargo install"), "{message}");
+        }
     }
 
     #[test]

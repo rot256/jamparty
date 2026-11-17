@@ -48,12 +48,8 @@ use crate::{
         settings,
     },
     core::{
-        name::JoinerName,
-        port::Port,
-        request::LocalOrigin,
-        settings::SettingsOverride,
-        token::PartyToken,
-        version::{Incompatible, JampartyVersion, mismatch_note},
+        name::JoinerName, port::Port, request::LocalOrigin, settings::SettingsOverride,
+        token::PartyToken, version::Incompatible,
     },
     join::{
         connection::{Dial, Final, Welcome},
@@ -107,7 +103,7 @@ impl fmt::Display for Refused {
                  version (compare `jamparty --version` on both sides), or the token is wrong"
             }
             RefusedReason::Full => "it has as many joiners as it takes",
-            RefusedReason::Incompatible => "it speaks another protocol version",
+            RefusedReason::Incompatible => "it runs an incompatible jamparty release line",
         };
         write!(f, "the share refused this joiner ({}): {why}", self.0)
     }
@@ -316,8 +312,6 @@ fn with_ipv6(v4: TcpListener) -> io::Result<Vec<TcpListener>> {
 pub(crate) struct Joiner {
     endpoint: Endpoint,
     session: Arc<Session>,
-    /// The share's jamparty, as it said on admission.
-    share_version: JampartyVersion,
     origin: Arc<LocalOrigin>,
     #[cfg(test)]
     proxy: Arc<Proxy>,
@@ -365,7 +359,7 @@ impl Joiner {
         let (first, admitted) = oneshot::channel();
         tasks.spawn(connection::run(dial, Arc::clone(&session), first));
         tasks.spawn(uplink::run(Arc::clone(&session)));
-        let Welcome { site, jamparty } = match admitted.await {
+        let Welcome { site } = match admitted.await {
             Ok(Ok(welcome)) => welcome,
             Ok(Err(ended)) => {
                 endpoint.close().await;
@@ -398,7 +392,6 @@ impl Joiner {
         Ok(Self {
             endpoint,
             session,
-            share_version: jamparty,
             origin,
             #[cfg(test)]
             proxy,
@@ -407,13 +400,6 @@ impl Joiner {
             fallback,
             tasks,
         })
-    }
-
-    /// A line to say when the share runs another jamparty of the same
-    /// protocol.
-    #[must_use]
-    pub(crate) fn version_note(&self) -> Option<String> {
-        mismatch_note(&self.share_version)
     }
 
     /// Why the share's protocol turned out not to be this joiner's, after

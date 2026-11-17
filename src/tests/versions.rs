@@ -1,6 +1,5 @@
-//! A share and a joiner of different jamparty versions: the joiner says
-//! which run where, gives up when the protocols differ, and goes on with
-//! a note when only the versions do.
+//! A share and a joiner of different release lines: incompatible peers refuse
+//! before parsing the rest of the first message.
 
 use std::sync::atomic::Ordering;
 
@@ -30,7 +29,17 @@ async fn refusal(line: &str) -> String {
 const AHEAD: &str = "999.0.0";
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_share_of_a_newer_protocol_says_which_jamparty_to_install() {
+async fn an_older_share_asks_the_sharer_to_update() {
+    let said = refusal(r#"{"version":1,"message":{"type":"welcome","jamparty":"0.0.1"}}"#).await;
+    assert!(
+        said.ends_with("Ask the person sharing to update jamparty."),
+        "{said}"
+    );
+    assert!(!said.contains("cargo install"), "{said}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_share_of_a_newer_line_says_which_jamparty_to_install() {
     let ours = JampartyVersion::current();
     // Protocol 2, with whatever else a newer share sends.
     let said = refusal(&format!(
@@ -40,32 +49,20 @@ async fn a_share_of_a_newer_protocol_says_which_jamparty_to_install() {
     assert_eq!(
         said,
         format!(
-            "the share runs jamparty {AHEAD} (protocol 2); this is jamparty {ours} (protocol 1). \
+            "the share runs jamparty {AHEAD}; this is jamparty {ours}. \
              Install the share's version: cargo install --locked jamparty@{AHEAD}"
         )
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_share_of_another_protocol_without_a_version_is_named_so() {
-    let ours = JampartyVersion::current();
-    let said = refusal(r#"{"version":2,"message":{"type":"welcome"}}"#).await;
-    assert_eq!(
-        said,
-        format!(
-            "the share runs another jamparty (protocol 2); this is jamparty {ours} (protocol 1)."
-        )
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_share_that_refuses_this_protocol_names_its_version() {
+async fn a_share_that_refuses_this_line_names_its_version() {
     let said = refusal(&format!(
         r#"{{"version":1,"message":{{"type":"refused","reason":"incompatible","jamparty":"{AHEAD}"}}}}"#
     ))
     .await;
     assert!(
-        said.starts_with(&format!("the share runs jamparty {AHEAD} (protocol 1)")),
+        said.starts_with(&format!("the share runs jamparty {AHEAD}")),
         "{said}"
     );
     assert!(
@@ -75,10 +72,12 @@ async fn a_share_that_refuses_this_protocol_names_its_version() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn another_version_of_the_same_protocol_goes_on_with_a_note() {
+async fn another_patch_of_the_same_line_is_admitted() {
     let key = "ab".repeat(32);
+    let mut patch = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    patch.patch += 1;
     let share = fake_share(vec![format!(
-        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"{AHEAD}"}}}}"#
+        r#"{{"version":1,"message":{{"type":"admitted","you":{{"name":"alice","fingerprint":"ababababab","key":"{key}"}},"undelivered":[],"presence":"supported","site":{{"kind":"files"}},"jamparty":"{patch}"}}}}"#
     )])
     .await;
     let joiner = within(
@@ -87,18 +86,11 @@ async fn another_version_of_the_same_protocol_goes_on_with_a_note() {
     )
     .await
     .unwrap();
-    let ours = JampartyVersion::current();
-    assert_eq!(
-        joiner.version_note().unwrap(),
-        format!(
-            "the share runs jamparty {AHEAD}; this is {ours}; consider updating: \
-             cargo install --locked jamparty@{AHEAD}"
-        )
-    );
+    drop(joiner);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_joiner_of_another_protocol_is_told_the_shares_version() {
+async fn a_joiner_of_another_line_is_told_the_shares_version() {
     let dir = fixture_dir();
     let share = share_files(&dir).await;
     let (_endpoint, connection) = raw_connection(&share).await;

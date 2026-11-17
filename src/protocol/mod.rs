@@ -23,9 +23,8 @@ use std::{
 use serde::{Serialize, de::DeserializeOwned};
 use zeroize::Zeroizing;
 
-/// The iroh ALPN. It stays the same across protocol versions (each line
-/// carries its own), so a share and a joiner of different ones still
-/// connect and can tell each other which jamparty they run.
+/// The iroh ALPN stays stable across release lines so incompatible peers
+/// can connect and explain which jamparty versions they run.
 pub(crate) const ALPN: &[u8] = b"jamparty/1";
 
 /// Maximum length of one control line, newline included, in either

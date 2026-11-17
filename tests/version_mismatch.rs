@@ -1,6 +1,6 @@
-//! `jamparty join` against a share of another protocol, as a person runs
+//! `jamparty join` against a share of another release line, as a person runs
 //! it: it exits with an error on stderr naming both versions and what to
-//! install. The share here is a stand-in that greets with protocol 2.
+//! install. The share here is a stand-in that greets with an incompatible release line.
 
 use std::{
     io::Write,
@@ -10,8 +10,7 @@ use std::{
 
 use iroh::{Endpoint, RelayMode, SecretKey, endpoint::presets};
 
-/// What jamparty's connections are made with (the protocol version is in
-/// each line, not here).
+/// Stable transport framing lets incompatible release lines explain themselves.
 const ALPN: &[u8] = b"jamparty/1";
 
 #[tokio::test(flavor = "multi_thread")]
@@ -81,8 +80,7 @@ async fn join_names_both_versions_and_exits() {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            "jamparty: error: the share runs jamparty 999.0.0 (protocol 2); this is jamparty {ours} \
-             (protocol 1). Install the share's version: cargo install --locked jamparty@999.0.0"
+            "jamparty: error: the share runs jamparty 999.0.0; this is jamparty {ours}. Install the share's version: cargo install --locked jamparty@999.0.0"
         )),
         "{stderr}"
     );
