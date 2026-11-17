@@ -207,10 +207,6 @@ text. Rows:
   joiner both enforce the caps; labels render as text, never HTML.
 - Audience rules are the same as other answers: without an explicit `--to`,
   an anchor addresses its author; without an anchor it addresses everyone.
-- Targeted questions to connected recipients without choices support are refused;
-  send them without `--choice`. Disconnected anchor authors have unknown support:
-  sending is allowed, and supporting joiners receive catch-up. Older joiners
-  never see these questions. Broadcast questions remain allowed.
 - One click submits an ordinary comment with selector
   `jamparty-agent:<answer id>`; `comment` and optional `choice` both hold the
   selected label. The share sets the author and checks the audience and label.
@@ -230,9 +226,12 @@ text. Rows:
 
 All of this is part of the version-1 wire format.
 
-- Joiner hello advertises `choices: true`; missing means unsupported. A share
-  sends neither choice questions nor `answer_resolved` to older joiners,
-  including during catch-up. Ordinary answers still reach them.
+Peers must share a release line: `0.x` before 1.0, the major version
+thereafter. Prereleases belong to the same line. Every peer supports
+choice questions; there is no capability negotiation. The first control
+line carries the sender’s jamparty version so a different line can be
+refused before parsing the rest. The NDJSON `version` remains 1.
+
 - Agent socket `send` and control `answer` gain optional `choices` labels.
   Control comment drafts and page submissions gain optional `choice`;
   the version-1 comment NDJSON gains only that optional field.

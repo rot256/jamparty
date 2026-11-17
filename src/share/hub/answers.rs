@@ -48,21 +48,6 @@ impl Hub {
                 (Some(Addressee::Everyone), _) | (None, None) => None,
                 (None, Some((_, author))) => Some(author.clone()),
             };
-            if !choices.is_empty()
-                && let Some(author) = &recipient
-            {
-                let seats: Vec<_> = inner
-                    .joiners
-                    .iter()
-                    .filter(|seat| seat.author.key == author.key)
-                    .collect();
-                if !seats.is_empty() && seats.iter().all(|seat| !seat.choices) {
-                    return Err(Invalid::new(format!(
-                        "{} runs an older jamparty that cannot show choices; send it without --choice",
-                        author.name
-                    )));
-                }
-            }
             let message = ShareMessage::Answer {
                 id: CommentId::generate(self.rng.as_ref()),
                 message,

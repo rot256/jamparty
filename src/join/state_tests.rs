@@ -302,7 +302,7 @@ async fn an_ack_ahead_of_a_delivery_at_a_full_queue_is_taken() {
     let hub = Hub::new(Arc::clone(&clock) as _, Arc::new(SeededRng::new(7)));
     let alice = author(1);
     let broadcasts = hub.subscribe();
-    let (presence, inbox) = hub.join(alice.clone(), true).unwrap();
+    let (presence, inbox) = hub.join(alice.clone()).unwrap();
     let mut outbox = Outbox::new(&presence, alice.key, inbox, broadcasts);
     let draft = || -> Draft {
         serde_json::from_str(r#"{"page":"/","selector":"h1","comment":"hi"}"#).unwrap()
@@ -349,7 +349,7 @@ async fn a_comment_queued_as_a_batch_finishes_is_acked_after_it() {
     let hub = Hub::new(Arc::clone(&clock) as _, Arc::new(SeededRng::new(7)));
     let alice = author(1);
     let broadcasts = hub.subscribe();
-    let (presence, inbox) = hub.join(alice.clone(), true).unwrap();
+    let (presence, inbox) = hub.join(alice.clone()).unwrap();
     let presence = Arc::new(presence);
     let mut outbox = Outbox::new(&presence, alice.key, inbox, broadcasts);
     let draft = || -> Draft {

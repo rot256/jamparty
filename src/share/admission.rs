@@ -22,7 +22,6 @@ pub(crate) fn admit(first: FirstLine, secret: &PartySecret) -> Result<JoinerName
                     secret: presented,
                     name,
                     jamparty: _,
-                    choices: _,
                 }),
         })) => {
             if secret.matches(&presented) {
@@ -61,7 +60,6 @@ mod tests {
 
     fn hello(secret: &PartySecret) -> Envelope<JoinerMessage> {
         JoinerMessage::Hello(Hello {
-            choices: false,
             secret: secret.clone(),
             name: "alice".parse().unwrap(),
             jamparty: JampartyVersion::current(),

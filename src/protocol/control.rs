@@ -91,9 +91,6 @@ pub(crate) enum JoinerMessage {
 /// its jamparty. Unknown fields are ignored (see the module).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Hello {
-    /// Understands choice questions and their resolution messages.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) choices: bool,
     pub(crate) secret: PartySecret,
     pub(crate) name: JoinerName,
     pub(crate) jamparty: JampartyVersion,

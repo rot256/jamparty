@@ -48,7 +48,6 @@ fn joiner_messages_round_trip() {
     }
     let hello = joiner(lines.first().unwrap()).unwrap();
     let JoinerMessage::Hello(Hello {
-        choices: false,
         secret: presented,
         name,
         jamparty,

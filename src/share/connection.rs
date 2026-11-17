@@ -76,17 +76,12 @@ pub(crate) async fn handle(
     let admission = admission(&connection, deadline, &shared).await;
     drop(unadmitted);
     match admission {
-        Ok(Admission::Admitted {
-            send,
-            recv,
-            name,
-            choices,
-        }) => {
+        Ok(Admission::Admitted { send, recv, name }) => {
             let author = Author::new(name, key);
             // Subscribed before joining, so this joiner hears its own
             // presence too.
             let broadcasts = shared.hub.subscribe();
-            let Some(seated) = shared.hub.join(author.clone(), choices) else {
+            let Some(seated) = shared.hub.join(author.clone()) else {
                 tracing::info!(name = %author.name, fingerprint = %author.fingerprint, "joiner refused: the share is full");
                 refuse(&connection, send, RefusedReason::Full).await;
                 return;
@@ -130,7 +125,6 @@ enum Admission {
         send: SendStream,
         recv: ControlReader,
         name: JoinerName,
-        choices: bool,
     },
     Refused {
         send: SendStream,
@@ -180,13 +174,11 @@ async fn admission(
     if let Err(error) = &first {
         tracing::debug!(error = %OneLineReport(error), "no usable hello");
     }
-    let choices = matches!(&first, Ok(Some(Envelope { message: JoinerMessage::Hello(hello), .. })) if hello.choices);
     Ok(match admit(first, &shared.token.secret) {
         Ok(name) => Admission::Admitted {
             send,
             recv: BufReader::new(Cursor::new(leftover).chain(recv)),
             name,
-            choices,
         },
         Err(reason) => Admission::Refused { send, reason },
     })
@@ -277,10 +269,7 @@ async fn joined(
         });
     }
     greeting.extend(shared.hub.catch_up(author.key));
-    for message in greeting
-        .into_iter()
-        .filter(|message| presence.supports(message))
-    {
+    for message in greeting {
         if lines::write(&mut send, &Envelope::from(message))
             .await
             .is_err()

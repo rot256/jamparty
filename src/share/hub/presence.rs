@@ -83,7 +83,6 @@ impl ConnectionId {
 /// One admitted connection.
 pub(super) struct Seat {
     pub(super) connection: ConnectionId,
-    pub(super) choices: bool,
     pub(super) author: Author,
     pub(super) url: Option<PagePath>,
     pub(super) cursor: Switch,
@@ -132,43 +131,11 @@ impl Ignored {
 
 /// A joiner's place in presence; leaving is announced on drop.
 pub(crate) struct Presence {
-    pub(crate) choices: bool,
     pub(super) hub: Arc<Hub>,
     pub(super) connection: ConnectionId,
 }
 
 impl Presence {
-    #[cfg(test)]
-    pub(crate) fn set_choices(&mut self, choices: bool) {
-        self.choices = choices;
-        if let Some(seat) = self
-            .hub
-            .lock()
-            .joiners
-            .iter_mut()
-            .find(|seat| seat.connection == self.connection)
-        {
-            seat.choices = choices;
-        }
-    }
-
-    /// Old joiners cannot resolve questions, even after reconnecting.
-    pub(crate) fn supports(&self, message: &ShareMessage) -> bool {
-        self.choices
-            || match message {
-                ShareMessage::AnswerResolved { .. } => false,
-                ShareMessage::Answer { choices, .. } => choices.is_empty(),
-                ShareMessage::Admitted { .. }
-                | ShareMessage::Refused { .. }
-                | ShareMessage::CommentAck { .. }
-                | ShareMessage::Delivered { .. }
-                | ShareMessage::Reload { .. }
-                | ShareMessage::Status { .. }
-                | ShareMessage::Presence { .. }
-                | ShareMessage::Cursor { .. } => true,
-            }
-    }
-
     /// Records where the joiner is now and what it is called, always (the
     /// state is small; the last update wins); everyone hears of it shortly
     /// (see [`flush_presence`]). Returns how its comments are signed from
