@@ -275,7 +275,8 @@ async fn the_share_forwards_no_cursor_while_the_switch_is_off() {
     let mut recv = BufReader::new(recv);
     let line = |message: String| format!("{{\"version\":1,\"message\":{message}}}\n").into_bytes();
     send.write_all(&line(format!(
-        r#"{{"type":"hello","secret":"{secret}","name":"mallory","jamparty":"0.1.0"}}"#
+        r#"{{"type":"hello","secret":"{secret}","name":"mallory","jamparty":"{}"}}"#,
+        env!("CARGO_PKG_VERSION")
     )))
     .await
     .unwrap();
