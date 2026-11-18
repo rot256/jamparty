@@ -12,6 +12,7 @@
 // may send one again by hand), and their delivery is not followed: the
 // share speaks of this key's comments only.
 
+import { parseAttachments } from "./attachments";
 import { JOINER_KEY, MAX_OUTBOX, OUTBOX_KEY } from "./config";
 import type { CommentOutcome, Submission } from "./generated/api";
 import { isRecord } from "./json";
@@ -22,7 +23,7 @@ export type Draft = Omit<Submission, "ref" | "n">;
 /** Hands a comment to the joiner; what became of it. */
 export type Send = (submission: Omit<Submission, "n">) => Promise<CommentOutcome>;
 
-type OutboxState = "queued" | "delivered" | "unsent" | "sending";
+type OutboxState = "queued" | "delivered" | "unsent" | "sending" | "failed";
 
 /** How an entry is shown: its state, or `earlier` for one queued under another joiner key. */
 export type ShownState = OutboxState | "earlier";
@@ -31,6 +32,7 @@ export interface OutboxEntry {
   draft: Draft;
   /** The page's id for the comment; sending it again never queues it twice. */
   ref: string;
+  error?: string;
   id: string | null;
   state: OutboxState;
   /** The joiner key it was made under; null if not known. */
@@ -45,11 +47,14 @@ function parseDraft(value: unknown): Draft | null {
   if (typeof page !== "string" || typeof selector !== "string" || typeof comment !== "string") {
     return null;
   }
+  const attachments = value.attachments === undefined ? [] : parseAttachments(value.attachments);
+  if (attachments === null) return null;
   return {
     page,
     selector,
     selectedText: typeof selectedText === "string" ? selectedText : null,
     comment,
+    ...(attachments.length > 0 ? { attachments } : {}),
     ...(typeof choice === "string" ? { choice } : {}),
   };
 }
@@ -58,6 +63,7 @@ function parseState(value: unknown): OutboxState {
   switch (value) {
     case "queued":
     case "delivered":
+    case "failed":
       return value;
     default:
       // A page that reloaded mid-send does not know whether it arrived;
@@ -76,6 +82,7 @@ function parseEntry(value: unknown): OutboxEntry | null {
     id: typeof value.id === "string" ? value.id : null,
     state: parseState(value.state),
     key: typeof value.key === "string" ? value.key : null,
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
     at: typeof value.at === "number" ? value.at : Date.now(),
   };
 }
@@ -103,6 +110,7 @@ export class Outbox {
   readonly entries: OutboxEntry[] = load();
   /** Called after every change, to redraw. */
   onChange: () => void = () => undefined;
+  onAttachmentUnavailable: (error: string) => void = () => undefined;
   /**
    * The ids of this joiner's comments the share holds, as the joiner last
    * said; null while it does not know (a restarted joiner before the
@@ -170,7 +178,9 @@ export class Outbox {
   private droppable(): number {
     const delivered = this.entries.findIndex((entry) => entry.state === "delivered");
     if (delivered !== -1) return delivered;
-    return this.entries.findIndex((entry) => entry.state === "queued");
+    const queued = this.entries.findIndex((entry) => entry.state === "queued");
+    if (queued !== -1) return queued;
+    return this.entries.findIndex((entry) => entry.state === "failed");
   }
 
   /** Whether the outbox holds as many comments still to send as it keeps. */
@@ -241,6 +251,10 @@ export class Outbox {
       outcome.refused.choiceRefused === true) {
       const index = this.entries.indexOf(entry);
       if (index !== -1) this.entries.splice(index, 1);
+    } else if ("refused" in outcome && outcome.refused.attachmentUnavailable === true) {
+      entry.state = "failed";
+      entry.error = outcome.refused.error;
+      this.onAttachmentUnavailable(entry.error);
     } else if ("commented" in outcome) {
       entry.id = outcome.commented.id;
       entry.state = "queued";

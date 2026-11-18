@@ -3,6 +3,7 @@
 import json
 import shutil
 from collections.abc import Callable
+from hashlib import sha3_256
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
@@ -613,3 +614,66 @@ def test_a_nudge_never_delivers_comments(tmp_path: Path, page: Page) -> None:
         expect(overlay(page, "#outbox-list li")).to_have_attribute(
             "data-state", "delivered"
         )
+
+
+def test_file_attachments_survive_a_reload_after_sending(
+    tmp_path: Path, page: Page
+) -> None:
+    data = b"\x00\xfetext\n"
+    path = tmp_path / "report.bin"
+    _ = path.write_bytes(data)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        page.locator("#intro").click(button="right")
+        with page.expect_file_chooser() as chooser:
+            overlay(page, "#attach").click()
+        chooser.value.set_files(path)
+        expect(overlay(page, "#attachments .attachment-name")).to_have_text(
+            "report.bin"
+        )
+        expect(overlay(page, "#attachments .attachment-size")).to_have_text("7 B")
+
+        # Paste and drop use the same chips. Remove those files before sending.
+        _ = overlay(page, "#jamparty-dialog").evaluate(
+            """dialog => {
+                const paste = new DataTransfer();
+                paste.items.add(new File(["paste"], "paste.txt"));
+                const event = new ClipboardEvent("paste", { cancelable: true });
+                Object.defineProperty(event, "clipboardData", { value: paste });
+                dialog.dispatchEvent(event);
+                const drop = new DataTransfer();
+                drop.items.add(new File(["drop"], "drop.txt"));
+                dialog.dispatchEvent(new DragEvent("drop", { dataTransfer: drop }));
+            }"""
+        )
+        expect(overlay(page, "#attachments li")).to_have_count(3)
+        page.get_by_role("button", name="Remove paste.txt").click()
+        page.get_by_role("button", name="Remove drop.txt").click()
+        expect(overlay(page, "#attachments li")).to_have_count(1)
+
+        tap.hold.add("comment_reply")
+        overlay(page, "#send").click()
+        waiting(page, "the queued reply", lambda: len(tap.held) > 0)
+        tap.held.clear()
+        tap.hold.clear()
+        _ = page.reload()
+        expect(overlay(page, "#outbox-list li")).to_have_attribute(
+            "data-state", "queued"
+        )
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+
+        [record] = recv_all(tmp_path)
+        resource = f"sha3:{sha3_256(data).hexdigest()}"
+        assert record["comment"] == ""
+        assert record["selector"] == "#intro"
+        assert record["attachments"] == [
+            {"type": "file", "file": resource, "name": "report.bin"}
+        ]
+        fetched = tmp_path / "fetched"
+        _ = jamparty(tmp_path, "fetch", resource, "-o", str(fetched))
+        assert fetched.read_bytes() == data

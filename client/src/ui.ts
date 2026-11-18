@@ -11,6 +11,8 @@ const GEAR_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 2
 
 const PEN_ICON = `<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5M3 21l5-1L21 7a2.1 2.1 0 0 0-5-5L3 15z"></path></svg>`;
 
+const PAPERCLIP_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-9 9a5 5 0 0 1-7-7l10-10a3.5 3.5 0 0 1 5 5L10 18a1.5 1.5 0 0 1-2-2l9-9"></path></svg>`;
+
 const MARKUP = `
   <style>${styles}</style>
   <div id="cursors" aria-hidden="true"></div>
@@ -88,11 +90,18 @@ const MARKUP = `
         <blockquote id="selection-text"></blockquote>
       </div>
       <textarea id="comment" name="comment" maxlength="${MAX_COMMENT}" required></textarea>
+      <ul id="attachments" aria-label="Attachments" hidden></ul>
+      <input id="attachment-input" type="file" multiple hidden>
+      <div id="missing-attachments" hidden>
+        Files from before the reload need to be attached again.
+        <button id="discard-missing" type="button">Continue without missing files</button>
+      </div>
       <div id="status" role="alert"></div>
       <div id="reload-notice" role="status" hidden>
         Files changed. Reloading when this edit closes.
       </div>
       <div class="actions">
+        <button id="attach" type="button" aria-label="Attach files" title="Attach files">${PAPERCLIP_ICON}</button>
         <button id="cancel" type="button">Cancel</button>
         <button id="send" type="submit">Queue comment</button>
       </div>
@@ -158,6 +167,11 @@ export class Ui {
   readonly selectionPreview: HTMLDivElement;
   readonly selectionText: HTMLQuoteElement;
   readonly textarea: HTMLTextAreaElement;
+  readonly attachments: HTMLUListElement;
+  readonly attachmentInput: HTMLInputElement;
+  readonly attach: HTMLButtonElement;
+  readonly missingAttachments: HTMLDivElement;
+  readonly discardMissing: HTMLButtonElement;
   readonly status: HTMLDivElement;
   readonly reloadNotice: HTMLDivElement;
   readonly cancel: HTMLButtonElement;
@@ -229,6 +243,11 @@ export class Ui {
     this.selectionPreview = find("#selection-preview", HTMLDivElement);
     this.selectionText = find("#selection-text", HTMLQuoteElement);
     this.textarea = find("textarea", HTMLTextAreaElement);
+    this.attachments = find("#attachments", HTMLUListElement);
+    this.attachmentInput = find("#attachment-input", HTMLInputElement);
+    this.attach = find("#attach", HTMLButtonElement);
+    this.missingAttachments = find("#missing-attachments", HTMLDivElement);
+    this.discardMissing = find("#discard-missing", HTMLButtonElement);
     this.status = find("#status", HTMLDivElement);
     this.reloadNotice = find("#reload-notice", HTMLDivElement);
     this.cancel = find("#cancel", HTMLButtonElement);

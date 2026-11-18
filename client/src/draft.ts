@@ -24,6 +24,8 @@ export interface SavedDraft {
   unavailable: boolean;
   selectedText: string | null;
   comment: string;
+  /** File contents only live in the open dialog. */
+  fileCount: number;
 }
 
 function parseKind(value: unknown): DraftKind | null {
@@ -56,6 +58,7 @@ function parse(value: unknown): SavedDraft | null {
     unavailable: unavailable === true,
     selectedText: typeof selectedText === "string" ? selectedText : null,
     comment,
+    fileCount: typeof value.fileCount === "number" && value.fileCount > 0 ? value.fileCount : 0,
   };
 }
 

@@ -78,6 +78,7 @@ function install(): void {
   list.onOpen = () => { panel.close(); };
   panel.onOpen = () => { list.close(); };
   outbox.onChange = () => { list.render(); };
+  outbox.onAttachmentUnavailable = (error) => { ui.showToast(error); };
 
   const prompt = new NamePrompt(ui, changeSettings);
   panel.onSettings = (settings: PageSettings): void => {
