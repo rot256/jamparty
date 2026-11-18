@@ -8,6 +8,7 @@ mod admission;
 mod admission_hello;
 mod agent;
 mod amplification;
+mod attachments;
 mod delivery;
 mod fake_share;
 mod harness;

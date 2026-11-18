@@ -51,7 +51,7 @@ use crate::{
         token::{PartyToken, TokenError},
     },
     join::{JoinConfig, Joiner, ProxyLimits, Refused},
-    protocol::{agent::Addressee, control::AnswerText},
+    protocol::{agent::Addressee, control::AnswerText, resource::ResourceId},
     share::{
         Share, ShareConfig, Source,
         delivery::{CommandTarget, Target},
@@ -152,6 +152,15 @@ enum Command {
     Recv {
         #[command(flatten)]
         which: Which,
+    },
+
+    /// Fetch a comment attachment by its SHA3-256 id.
+    #[command(hide = true)]
+    Fetch {
+        id: ResourceId,
+        /// Create this file, or write to standard output with `-o -`.
+        #[arg(short, long, value_name = "PATH")]
+        output: PathBuf,
     },
 
     /// Answer on the page (Markdown; read from stdin when not given).
@@ -319,6 +328,10 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
             let stream = runtime::connect(&runtime::default_dir()?, which.share.as_ref()).await?;
             agent::recv(stream, &mut io::stdout().lock()).await?;
             Ok(())
+        }
+        Command::Fetch { id, output } => {
+            let bytes = agent::fetch::resource(&runtime::default_dir()?, id).await?;
+            agent::fetch::write_verified(id, &bytes, &output, &mut io::stdout().lock())
         }
         Command::Send {
             choices,

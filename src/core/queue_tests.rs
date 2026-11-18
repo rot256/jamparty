@@ -218,6 +218,7 @@ fn maximal_comments_fit_in_bounded_recv_batches() {
     // U+0000 takes the longest JSON escape (six bytes) and is valid
     // in every free-text field, including a nonblank comment.
     let draft = Draft::try_from(DraftFields {
+        attachments: Vec::new(),
         page: "\0".repeat(MAX_PAGE).try_into().unwrap(),
         selector: "\0".repeat(MAX_SELECTOR).try_into().unwrap(),
         choice: None,

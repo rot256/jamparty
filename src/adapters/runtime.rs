@@ -114,29 +114,65 @@ pub(crate) fn listen(dir: &Path, id: &Sid) -> Result<(UnixListener, SocketFile),
 /// start removes them), and one that is there but cannot be reached is
 /// an error.
 pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, Report> {
-    if fs::metadata(dir).is_err_and(|error| error.kind() == ErrorKind::NotFound) {
-        bail!("{NO_SHARE}");
-    }
-    check_dir(dir)?;
     if let Some(id) = id {
+        check_runtime(dir)?;
         let stream = UnixStream::connect(socket_path(dir, id))
             .await
             .context_with(|| format!("no running share with id {id}"))?;
         check_peer(&stream)?;
         return Ok(stream);
     }
-    let mut running = Vec::new();
+    let mut running = connected_shares(dir).await?.into_iter();
+    match (running.next(), running.next()) {
+        (None, _) => bail!("{NO_SHARE}"),
+        (Some((_, stream)), None) => Ok(stream),
+        (Some(first), Some(second)) => {
+            let mut ids: Vec<String> = [first, second]
+                .into_iter()
+                .chain(running)
+                .map(|(id, _)| id.to_string())
+                .collect();
+            ids.sort();
+            bail!(
+                "several shares are running ({}); pass --share <id>",
+                ids.join(", ")
+            )
+        }
+    }
+}
+
+fn check_runtime(dir: &Path) -> Result<(), Report> {
+    if fs::metadata(dir).is_err_and(|error| error.kind() == ErrorKind::NotFound) {
+        bail!("{NO_SHARE}");
+    }
+    check_dir(dir)
+}
+
+/// Candidate sockets, including any stale or unreachable ones.
+pub(crate) fn share_ids(dir: &Path) -> Result<Vec<Sid>, Report> {
+    if fs::metadata(dir).is_err_and(|error| error.kind() == ErrorKind::NotFound) {
+        return Ok(Vec::new());
+    }
+    check_dir(dir)?;
+    let mut ids = Vec::new();
     let entries = fs::read_dir(dir).context_with(|| format!("could not read {}", dir.display()))?;
     for entry in entries {
-        let path = entry?.path();
-        let Some(id) = path
-            .file_name()
-            .and_then(|name| name.to_str())
+        let name = entry?.file_name();
+        if let Some(id) = name
+            .to_str()
             .and_then(|name| name.strip_suffix(".sock"))
             .and_then(|id| id.parse::<Sid>().ok())
-        else {
-            continue;
-        };
+        {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+async fn connected_shares(dir: &Path) -> Result<Vec<(Sid, UnixStream)>, Report> {
+    let mut running = Vec::new();
+    for id in share_ids(dir)? {
+        let path = socket_path(dir, &id);
         let stream = match UnixStream::connect(&path).await {
             Ok(stream) => stream,
             // Its share died, or stopped since the directory was read. (On
@@ -156,23 +192,7 @@ pub(crate) async fn connect(dir: &Path, id: Option<&Sid>) -> Result<UnixStream, 
         check_peer(&stream)?;
         running.push((id, stream));
     }
-    let mut running = running.into_iter();
-    match (running.next(), running.next()) {
-        (None, _) => bail!("{NO_SHARE}"),
-        (Some((_, stream)), None) => Ok(stream),
-        (Some(first), Some(second)) => {
-            let mut ids: Vec<String> = [first, second]
-                .into_iter()
-                .chain(running)
-                .map(|(id, _)| id.to_string())
-                .collect();
-            ids.sort();
-            bail!(
-                "several shares are running ({}); pass --share <id>",
-                ids.join(", ")
-            )
-        }
-    }
+    Ok(running)
 }
 
 const NO_SHARE: &str = "no share is running (start one with jamparty serve or jamparty proxy)";

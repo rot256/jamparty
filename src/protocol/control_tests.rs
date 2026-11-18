@@ -137,6 +137,7 @@ fn a_maximal_draft_fits_in_a_line() {
     // Control characters are escaped as \u00XX: the worst case per char.
     let escaped = |n: usize| "\u{1}".repeat(n);
     let draft = DraftFields {
+        attachments: Vec::new(),
         page: escaped(MAX_PAGE).try_into().unwrap(),
         selector: escaped(MAX_SELECTOR).try_into().unwrap(),
         choice: None,

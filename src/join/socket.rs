@@ -218,6 +218,7 @@ async fn handle(
                         let outcome = CommentOutcome::Refused {
                             error,
                             choice_refused: None,
+                            attachment_unavailable: None,
                             retry_after: None,
                         };
                         session.reply_comment(page, n, outcome);
@@ -241,6 +242,7 @@ async fn handle(
                 let outcome = CommentOutcome::Refused {
                     error: "too many comments on their way; try again shortly".to_owned(),
                     choice_refused: None,
+                    attachment_unavailable: None,
                     retry_after: None,
                 };
                 session.reply_comment(page, submission.n, outcome);

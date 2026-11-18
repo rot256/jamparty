@@ -772,3 +772,39 @@ async fn each_confirmed_batch_rearms_the_remaining_backlog() {
     assert!(hub.queued().is_empty());
     assert!(hub.next_nudge().now_or_never().is_none());
 }
+
+#[tokio::test]
+async fn attachment_metadata_counts_toward_recv_batch_size() {
+    use crate::{
+        protocol::{
+            line_size,
+            resource::{Attachment, MAX_ATTACHMENTS},
+        },
+        share::delivery::MAX_BATCH_BYTES,
+    };
+
+    let (hub, _) = hub();
+    let alice = author("alice", 1);
+    let file = hub
+        .store_resource(bytes::Bytes::from_static(b"data"))
+        .unwrap();
+    let fields = DraftFields {
+        comment: "\0".repeat(9500),
+        attachments: vec![
+            Attachment::File {
+                file,
+                name: "x".repeat(160).into()
+            };
+            MAX_ATTACHMENTS
+        ],
+        ..draft().into()
+    };
+    let draft = Draft::try_from(fields).unwrap();
+    assert!(queued(hub.comment(&alice, fresh(), draft.clone())));
+    assert!(queued(hub.comment(&alice, fresh(), draft)));
+    let combined: usize = hub.queued().iter().map(|c| line_size(c).unwrap()).sum();
+    assert!(combined > MAX_BATCH_BYTES);
+    assert_eq!(hub.next_batch().await.len(), 1);
+    hub.finish(DeliveryResult::Ok);
+    assert_eq!(hub.next_batch().await.len(), 1);
+}

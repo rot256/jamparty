@@ -11,6 +11,7 @@ pub(crate) mod hub;
 mod inject;
 mod live;
 pub(crate) mod proxy;
+mod resources;
 mod socket;
 
 #[cfg(test)]

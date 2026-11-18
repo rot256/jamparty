@@ -22,6 +22,7 @@ use crate::{
     protocol::{
         comment::{Author, Comment},
         control::{AnswerText, Choices},
+        resource::ResourceId,
     },
 };
 
@@ -113,6 +114,8 @@ pub(crate) enum AgentRequest {
     Recv,
     /// The comments of this `recv` are printed.
     Printed,
+    /// Fetch one attachment by its content address.
+    Fetch { id: ResourceId },
     /// Answer on the page, next to comment `anchor` if given; only to
     /// `to` (by default the anchor's author, else everyone).
     Send {
@@ -136,6 +139,10 @@ pub(crate) enum AgentReply {
     End,
     /// The answer went out.
     Sent,
+    /// The rest of the stream is the exact attachment bytes.
+    Resource,
+    /// This share does not hold the requested resource.
+    ResourceMissing,
     Error {
         error: String,
     },
