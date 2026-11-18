@@ -1,6 +1,6 @@
 [package]
 name = "jamparty"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Share a site under development with a few people, peer to peer, and route their browser comments to a coding agent"
 license = "MIT"
