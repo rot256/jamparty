@@ -1,5 +1,5 @@
 //! The runtime directory and the per-share Unix sockets in it, which
-//! `jamparty recv` and `jamparty send` use to reach a running share.
+//! the agent commands use to reach running shares.
 //!
 //! The directory is `$XDG_RUNTIME_DIR/jamparty/` or `~/.cache/jamparty/run/`,
 //! mode 0700 and owned by the user; each share's socket is `<id>.sock`

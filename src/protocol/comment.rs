@@ -1,7 +1,6 @@
 //! Comments: the draft a joiner sends, and the comment the share queues and
-//! delivers (`id`, `author`, `page`, `selector`, `selectedText`,
-//! `comment`), with length caps. Text from browsers is data in JSON fields,
-//! never formatted into prose.
+//! delivers, with length caps. Attachment bytes travel separately. Text
+//! from browsers is kept in JSON fields.
 
 use serde::{Deserialize, Serialize};
 
