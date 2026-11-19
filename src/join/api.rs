@@ -15,7 +15,7 @@ use crate::{
         state::{Answer, Link, Snapshot},
     },
     protocol::{
-        comment::{CommentPage, CommentSelector},
+        comment::{CommentPage, CommentSelector, PdfAnchor},
         control::{CommentRef, Revision},
         presence::{PagePath, Person, Position},
         resource::Attachment,
@@ -135,6 +135,12 @@ pub(crate) struct Submission {
     pub(crate) page: CommentPage,
     pub(crate) selector: CommentSelector,
     #[serde(default)]
+    #[cfg_attr(
+        test,
+        ts(optional, as = "Option<crate::protocol::comment::PdfAnchorFields>")
+    )]
+    pub(crate) pdf: Option<PdfAnchor>,
+    #[serde(default)]
     pub(crate) selected_text: Option<String>,
     #[serde(default)]
     #[cfg_attr(test, ts(optional))]
@@ -203,7 +209,10 @@ mod bindings {
             state::{Answer, Link, MAX_ANSWERS, Snapshot},
         },
         protocol::{
-            comment::{Author, CommentPage, CommentSelector, MAX_COMMENT, MAX_SELECTED_TEXT},
+            comment::{
+                Author, CommentPage, CommentSelector, MAX_COMMENT, MAX_SELECTED_TEXT,
+                PdfAnchorFields, PdfBox,
+            },
             control::{
                 Choices, CommentRef, MAX_CHOICE, MAX_CHOICES, RefusedReason, Revision, StatusLine,
             },
@@ -225,6 +234,8 @@ mod bindings {
             CommentRef::decl(&cfg),
             CommentPage::decl(&cfg),
             CommentSelector::decl(&cfg),
+            PdfBox::decl(&cfg),
+            PdfAnchorFields::decl(&cfg),
             Revision::decl(&cfg),
             EndpointKey::decl(&cfg),
             Fingerprint::decl(&cfg),

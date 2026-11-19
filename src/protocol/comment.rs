@@ -101,12 +101,75 @@ impl AsRef<str> for CommentSelector {
     }
 }
 
+/// A page-relative rectangle in PDF points, measured from the top left.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct PdfBox {
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct PdfAnchorFields {
+    page: u32,
+    #[serde(rename = "box")]
+    bounds: PdfBox,
+}
+
+/// Validated at both the browser-facing socket and the peer boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "PdfAnchorFields", into = "PdfAnchorFields")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(as = "PdfAnchorFields"))]
+pub(crate) struct PdfAnchor(PdfAnchorFields);
+
+// Validation excludes NaN, so equality is reflexive.
+impl Eq for PdfAnchor {}
+
+impl TryFrom<PdfAnchorFields> for PdfAnchor {
+    type Error = Invalid;
+
+    fn try_from(fields: PdfAnchorFields) -> Result<Self, Self::Error> {
+        let PdfAnchorFields {
+            page,
+            bounds: PdfBox { x0, y0, x1, y1 },
+        } = fields;
+        const MAX_POINTS: f64 = 14_400.0;
+        if page == 0 {
+            return Err(Invalid::new("PDF page must be at least 1"));
+        }
+        if ![x0, y0, x1, y1]
+            .into_iter()
+            .all(|n| (0.0..=MAX_POINTS).contains(&n))
+            || x0 >= x1
+            || y0 >= y1
+        {
+            return Err(Invalid::new(
+                "PDF box must be ordered and within 0–14400 points",
+            ));
+        }
+        Ok(Self(fields))
+    }
+}
+
+impl From<PdfAnchor> for PdfAnchorFields {
+    fn from(anchor: PdfAnchor) -> Self {
+        anchor.0
+    }
+}
+
 /// The fields of a draft; only reachable through a validated [`Draft`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DraftFields {
     pub(crate) page: CommentPage,
     pub(crate) selector: CommentSelector,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pdf: Option<PdfAnchor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,6 +224,8 @@ pub(crate) struct Comment {
     pub(crate) page: CommentPage,
     pub(crate) selector: CommentSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pdf: Option<PdfAnchor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) choice: Option<String>,
@@ -175,6 +240,7 @@ impl Comment {
         let DraftFields {
             page,
             selector,
+            pdf,
             selected_text,
             choice,
             comment,
@@ -185,6 +251,7 @@ impl Comment {
             author,
             page,
             selector,
+            pdf,
             selected_text,
             choice,
             comment,
@@ -201,7 +268,10 @@ mod tests {
             rng::SeededRng,
         },
         protocol::{
-            comment::{Author, Comment, Draft, DraftFields, MAX_COMMENT},
+            comment::{
+                Author, Comment, Draft, DraftFields, MAX_COMMENT, PdfAnchor, PdfAnchorFields,
+                PdfBox,
+            },
             resource::{Attachment, MAX_ATTACHMENTS, ResourceId},
         },
     };
@@ -214,6 +284,7 @@ mod tests {
                 .unwrap(),
             selector: "main > h1".to_owned().try_into().unwrap(),
             choice: None,
+            pdf: None,
             selected_text: None,
             comment: comment.to_owned(),
             attachments: Vec::new(),
@@ -223,6 +294,12 @@ mod tests {
     #[test]
     fn json_shape() {
         let draft = Draft::try_from(DraftFields {
+            pdf: Some(
+                serde_json::from_value(serde_json::json!({
+                    "page": 2, "box": {"x0": 10.5, "y0": 20, "x1": 30, "y1": 40}
+                }))
+                .unwrap(),
+            ),
             selected_text: Some("Hello".to_owned()),
             ..fields("Bigger, please")
         })
@@ -247,6 +324,7 @@ mod tests {
                 "comment",
                 "id",
                 "page",
+                "pdf",
                 "selectedText",
                 "selector"
             ]
@@ -260,9 +338,63 @@ mod tests {
             }))
         );
         assert_eq!(
+            value.pointer("/pdf"),
+            Some(&serde_json::json!({
+                "page": 2, "box": {"x0": 10.5, "y0": 20.0, "x1": 30.0, "y1": 40.0}
+            }))
+        );
+        assert_eq!(
             value.pointer("/selectedText"),
             Some(&serde_json::json!("Hello"))
         );
+    }
+
+    #[test]
+    fn pdf_coordinates_are_validated_at_deserialization() {
+        let bounds = PdfBox {
+            x0: 0.0,
+            y0: 1.0,
+            x1: 2.0,
+            y1: 3.0,
+        };
+        assert!(PdfAnchor::try_from(PdfAnchorFields { page: 1, bounds }).is_ok());
+        for invalid in [
+            PdfBox {
+                x0: f64::NAN,
+                ..bounds
+            },
+            PdfBox {
+                x1: f64::INFINITY,
+                ..bounds
+            },
+            PdfBox {
+                y0: -0.01,
+                ..bounds
+            },
+            PdfBox {
+                x1: 14_401.0,
+                ..bounds
+            },
+            PdfBox { x0: 2.0, ..bounds },
+            PdfBox { y0: 4.0, ..bounds },
+        ] {
+            assert!(
+                PdfAnchor::try_from(PdfAnchorFields {
+                    page: 1,
+                    bounds: invalid
+                })
+                .is_err()
+            );
+        }
+        for invalid in [
+            serde_json::json!({"page": 0, "box": bounds}),
+            serde_json::json!({"page": 1, "box": bounds, "rotate": 90}),
+            serde_json::json!({"page": 1, "box": {"x0": 0, "y0": 1, "x1": 2, "y1": 3, "unit": "pt"}}),
+        ] {
+            let mut draft = serde_json::to_value(fields("PDF comment")).unwrap();
+            draft.as_object_mut().unwrap().insert("pdf".into(), invalid);
+            assert!(serde_json::from_value::<Draft>(draft).is_err());
+        }
     }
 
     #[test]
