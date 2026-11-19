@@ -326,6 +326,8 @@ pub(crate) enum AckOutcome {
     QueueFull,
     /// Not an offered choice, outside the audience, or already answered.
     ChoiceRefused,
+    /// An attachment was never uploaded or has since been evicted.
+    AttachmentUnavailable,
 }
 
 pub(crate) const MAX_COMMENT_REF: usize = 64;

@@ -4,7 +4,7 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio::{
-    io::BufReader,
+    io::{AsyncWriteExt, BufReader},
     net::{
         UnixListener, UnixStream,
         unix::{OwnedReadHalf, OwnedWriteHalf},
@@ -24,6 +24,8 @@ use crate::{
     share::{delivery::RecvRequest, hub::Hub},
 };
 
+/// How long a local client has to read an attachment.
+const RESOURCE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long `jamparty recv` has to confirm it printed a batch; after that
 /// the batch goes back to the queue.
 const PRINTED_TIMEOUT: Duration = Duration::from_secs(30);
@@ -86,6 +88,18 @@ async fn handle(stream: UnixStream, hub: Arc<Hub>, recv: mpsc::Sender<RecvReques
                 error: error.to_string(),
             },
         },
+        AgentRequest::Fetch { id } => {
+            if let Some(bytes) = hub.resource(id) {
+                let _ = time::timeout(RESOURCE_TIMEOUT, async {
+                    lines::write(&mut write, &Envelope::from(AgentReply::Resource)).await?;
+                    write.write_all(&bytes).await?;
+                    Ok::<_, crate::Report>(())
+                })
+                .await;
+                return;
+            }
+            AgentReply::ResourceMissing
+        }
         AgentRequest::Printed => AgentReply::Error {
             error: "printed without recv".to_owned(),
         },

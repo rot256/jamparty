@@ -13,9 +13,10 @@ use std::{
 };
 
 use bytes::Bytes;
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
-    Request, Response, StatusCode,
-    body::Incoming,
+    Method as HttpMethod, Request, Response, StatusCode,
+    body::{Body, Incoming},
     client::conn::http1 as client_http1,
     header::{self, HeaderMap, HeaderValue},
     server::conn::http1,
@@ -34,8 +35,8 @@ use tokio::{
 use crate::{
     Report,
     adapters::http::{
-        AppBody, HEADER_READ_TIMEOUT, RequestError, full_body, javascript_response,
-        map_incoming_response,
+        AppBody, BodyError, HEADER_READ_TIMEOUT, RequestError, full_body, javascript_response,
+        json_response, map_incoming_response, read_upload,
     },
     core::{
         request::{
@@ -45,6 +46,7 @@ use crate::{
         text::{OneLineReport, Untrusted},
     },
     join::{control::Control, session::Session, socket},
+    protocol::resource::{MAX_UPLOAD_REPLY_BYTES, ResourceId, UPLOAD_PATH, Uploaded},
 };
 
 /// The browser client the share's pages load: this joiner's own, so it
@@ -55,6 +57,7 @@ const CLIENT_JS: &str = include_str!("../../assets/client.js");
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 /// What an upgraded tunnel copies at a time, each way.
 const TUNNEL_BUFFER: usize = 16 * 1024;
+const MAX_ACTIVE_UPLOADS: usize = 2;
 
 /// What the joiner allows the requests it forwards to the share.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +92,7 @@ impl ProxyLimits {
 pub(crate) struct Proxy {
     limits: ProxyLimits,
     permits: Arc<Semaphore>,
+    uploads: Semaphore,
 }
 
 impl Proxy {
@@ -97,6 +101,7 @@ impl Proxy {
         Self {
             limits,
             permits: Arc::new(Semaphore::new(limits.concurrent)),
+            uploads: Semaphore::new(MAX_ACTIVE_UPLOADS),
         }
     }
 
@@ -179,11 +184,14 @@ async fn handle(
     let mut response = match decision {
         Ok(Route::Client) => javascript_response(CLIENT_JS),
         Ok(Route::Socket) => socket::open(request, session),
+        Ok(Route::Upload) => upload(request, session, proxy, connect_wait)
+            .await
+            .unwrap_or_else(Response::from),
         Ok(Route::Unknown) => {
             RequestError::new(StatusCode::NOT_FOUND, "no such jamparty path").into()
         }
         Ok(Route::Proxy) => match forward(request, session, proxy, connect_wait).await {
-            Ok(response) => response,
+            Ok(response) => map_incoming_response(response),
             Err(error) if page_load && error.status == StatusCode::BAD_GATEWAY => {
                 unreachable_page()
             }
@@ -234,12 +242,16 @@ fn refused(refusal: Refusal) -> Response<AppBody> {
 /// Sends the request to the share on a fresh stream and streams the
 /// response back; an upgrade keeps both ends open, as a tunnel. Each holds
 /// a permit of `proxy` until its stream is done.
-async fn forward(
-    mut request: Request<Incoming>,
+async fn forward<B>(
+    mut request: Request<B>,
     session: &Session,
     proxy: &Proxy,
     connect_wait: Duration,
-) -> Result<Response<AppBody>, RequestError> {
+) -> Result<Response<Incoming>, RequestError>
+where
+    B: Body<Data = Bytes> + Send + Unpin + 'static,
+    B::Error: Into<BodyError>,
+{
     let Ok(permit) = Arc::clone(&proxy.permits).try_acquire_owned() else {
         tracing::debug!("too many requests to the share at once");
         return Err(RequestError::new(
@@ -260,10 +272,16 @@ async fn forward(
         .headers()
         .contains_key(header::UPGRADE)
         .then(|| upgrade::on(&mut request));
-    let (send, recv) = control
-        .connection
-        .open_bi()
+    // A share can keep the connection alive yet withhold stream credit.
+    let (send, recv) = time::timeout(connect_wait, control.connection.open_bi())
         .await
+        .map_err(|_| {
+            tracing::debug!("the share did not open a stream in time");
+            RequestError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "the share did not answer in time",
+            )
+        })?
         .map_err(|error| unreachable(error.into()))?;
     let io = TokioIo::new(io::join(recv, send));
     let (mut sender, connection) = client_http1::handshake(io)
@@ -315,7 +333,7 @@ async fn forward(
             }
         });
     }
-    Ok(map_incoming_response(response))
+    Ok(response)
 }
 
 /// Carries an upgraded connection between the browser and the share until
@@ -411,4 +429,69 @@ fn unreachable_page() -> Response<AppBody> {
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
     response
+}
+
+/// Rebuilds the peer request and response. Browser request headers and
+/// share response headers have no role in the attachment API.
+async fn upload(
+    request: Request<Incoming>,
+    session: &Session,
+    proxy: &Proxy,
+    connect_wait: Duration,
+) -> Result<Response<AppBody>, RequestError> {
+    let _permit = proxy.uploads.try_acquire().map_err(|_| {
+        RequestError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the joiner is busy uploading attachments",
+        )
+    })?;
+    let bytes = read_upload(request.into_body()).await?;
+    let expected = ResourceId::digest(&bytes);
+    let mut request = Request::new(Full::new(bytes));
+    *request.method_mut() = HttpMethod::POST;
+    *request.uri_mut() = hyper::Uri::from_static(UPLOAD_PATH);
+    request
+        .headers_mut()
+        .insert(header::HOST, HeaderValue::from_static("jamparty"));
+    let response = forward(request, session, proxy, connect_wait).await?;
+    let status = response.status();
+    let invalid = || {
+        RequestError::new(
+            StatusCode::BAD_GATEWAY,
+            "the share returned an invalid attachment reply",
+        )
+    };
+    match status {
+        StatusCode::CREATED => {
+            let collected = time::timeout(
+                connect_wait,
+                Limited::new(response.into_body(), MAX_UPLOAD_REPLY_BYTES).collect(),
+            )
+            .await
+            .map_err(|_| invalid())?
+            .map_err(|_| invalid())?;
+            let uploaded: Uploaded =
+                serde_json::from_slice(&collected.to_bytes()).map_err(|_| invalid())?;
+            if uploaded.id != expected {
+                return Err(invalid());
+            }
+            Ok(json_response(status, &uploaded))
+        }
+        StatusCode::INSUFFICIENT_STORAGE => Err(RequestError::new(
+            status,
+            "the share's attachment storage is full",
+        )),
+        StatusCode::SERVICE_UNAVAILABLE => Err(RequestError::new(
+            status,
+            "the share is busy receiving attachments",
+        )),
+        StatusCode::PAYLOAD_TOO_LARGE => Err(RequestError::new(
+            status,
+            "an attachment can be at most 8 MiB",
+        )),
+        StatusCode::REQUEST_TIMEOUT => {
+            Err(RequestError::new(status, "attachment upload timed out"))
+        }
+        _ => Err(invalid()),
+    }
 }

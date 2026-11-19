@@ -15,7 +15,7 @@ use iroh::endpoint::{Connection, Incoming, RecvStream, SendStream, VarInt};
 use rootcause::prelude::report;
 use tokio::{
     io::{AsyncReadExt, BufReader, Chain},
-    sync::{OwnedSemaphorePermit, broadcast},
+    sync::{OwnedSemaphorePermit, Semaphore, broadcast},
     task::JoinSet,
     time::{Instant, timeout, timeout_at},
 };
@@ -276,9 +276,15 @@ async fn joined(
     }
 
     let mut requests = JoinSet::new();
+    let upload_slot = Arc::new(Semaphore::new(1));
     let accept = async {
         while let Ok((send, recv)) = connection.accept_bi().await {
-            requests.spawn(serve_stream(send, recv, shared.site.clone()));
+            requests.spawn(serve_stream(
+                send,
+                recv,
+                Arc::clone(shared),
+                Arc::clone(&upload_slot),
+            ));
             // Reap finished requests so the set does not grow.
             while requests.try_join_next().is_some() {}
         }

@@ -7,6 +7,8 @@ export const DEFAULT_ANSWER_TIMEOUT = 30;
 export const MAX_CHOICES = 6;
 export const MAX_CHOICE = 80;
 export const MAX_COMMENT = 10000;
+export const MAX_FILE_BYTES = 8388608;
+export const MAX_ATTACHMENTS = 4;
 export const MAX_SELECTED_TEXT = 2000;
 export const MAX_PAGE_PATH = 512;
 export const MAX_CURSOR_SELECTOR = 512;
@@ -145,13 +147,19 @@ revision: Revision | null, };
 
 export type RequestNumber = number;
 
-export type CommentOutcome = { "commented": { id: CommentId, } } | { "unsent": { error: string, } } | { "refused": { error: string, choiceRefused?: boolean, retryAfterSecs?: number, } };
+export type CommentOutcome = { "commented": { id: CommentId, } } | { "unsent": { error: string, } } | { "refused": { error: string, choiceRefused?: boolean, attachmentUnavailable?: boolean, retryAfterSecs?: number, } };
 
 export type SettingsOutcome = "saved" | { "refused": { error: string, } };
 
 export type ToPage = { "type": "hello" } & Snapshot | { "type": "link" } & Link | { "type": "people", here: Array<Person>, } | { "type": "mine", undelivered: Array<CommentId> | null, } | { "type": "settings" } & PageSettings | { "type": "reload", revision: Revision, } | { "type": "answer" } & Answer | { "type": "answer_resolved", id: CommentId, } | { "type": "cursor", key: EndpointKey, url: PagePath, position: Position | null, } | { "type": "comment_reply", to: RequestNumber, outcome: CommentOutcome, } | { "type": "settings_reply", to: RequestNumber, outcome: SettingsOutcome, } | { "type": "ping" };
 
-export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage, selector: CommentSelector, selectedText: string | null, choice?: string, comment: string, };
+export type ResourceId = string;
+
+export type AttachmentName = string;
+
+export type Attachment = { "type": "file", file: ResourceId, name: AttachmentName, };
+
+export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage, selector: CommentSelector, selectedText: string | null, choice?: string, comment: string, attachments?: Array<Attachment>, };
 
 export type Change = { n: RequestNumber, change: SettingsChange, };
 

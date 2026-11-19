@@ -238,6 +238,7 @@ impl Session {
             selected_text,
             choice,
             comment,
+            attachments,
         } = submission;
         let draft = match Draft::try_from(DraftFields {
             page: on,
@@ -245,12 +246,14 @@ impl Session {
             selected_text,
             choice,
             comment,
+            attachments: attachments.unwrap_or_default(),
         }) {
             Ok(draft) => draft,
             Err(error) => {
                 let outcome = CommentOutcome::Refused {
                     error: error.to_string(),
                     choice_refused: None,
+                    attachment_unavailable: None,
                     retry_after: None,
                 };
                 self.reply_comment(page, n, outcome);
@@ -275,11 +278,19 @@ impl Session {
             AckOutcome::RateLimited { retry_after } => CommentOutcome::Refused {
                 error: "too many comments; try again shortly".to_owned(),
                 choice_refused: None,
+                attachment_unavailable: None,
                 retry_after: Some(retry_after),
             },
             AckOutcome::ChoiceRefused => CommentOutcome::Refused {
                 error: "question is no longer available".to_owned(),
                 choice_refused: Some(true),
+                attachment_unavailable: None,
+                retry_after: None,
+            },
+            AckOutcome::AttachmentUnavailable => CommentOutcome::Refused {
+                error: "an attachment is no longer available; attach the file again".to_owned(),
+                choice_refused: None,
+                attachment_unavailable: Some(true),
                 retry_after: None,
             },
             // Kept in the page and sent again later, as when unreachable.

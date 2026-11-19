@@ -1,6 +1,7 @@
 //! The agent's side: `jamparty recv` and `jamparty send` over the runtime
 //! socket, and the fixed texts (`jamparty`, `jamparty agent`).
 
+pub(crate) mod fetch;
 pub(crate) mod guides;
 
 use std::io::Write;
@@ -33,7 +34,9 @@ pub(crate) async fn recv(stream: UnixStream, out: &mut impl Write) -> Result<usi
             AgentReply::Comment { comment } => comments.push(comment),
             AgentReply::End => break,
             AgentReply::Error { error } => bail!("{error}"),
-            AgentReply::Sent => bail!("unexpected reply from the share"),
+            AgentReply::Sent | AgentReply::Resource | AgentReply::ResourceMissing => {
+                bail!("unexpected reply from the share")
+            }
         }
     }
     for comment in &comments {
@@ -72,6 +75,9 @@ pub(crate) async fn send(
     match reply.message {
         AgentReply::Sent => Ok(()),
         AgentReply::Error { error } => bail!("{error}"),
-        AgentReply::Comment { .. } | AgentReply::End => bail!("unexpected reply from the share"),
+        AgentReply::Comment { .. }
+        | AgentReply::End
+        | AgentReply::Resource
+        | AgentReply::ResourceMissing => bail!("unexpected reply from the share"),
     }
 }

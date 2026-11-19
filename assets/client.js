@@ -5,6 +5,8 @@ var MAX_NAME = 40;
 var MAX_ANSWER_TIMEOUT = 3600;
 var DEFAULT_ANSWER_TIMEOUT = 30;
 var MAX_COMMENT = 1e4;
+var MAX_FILE_BYTES = 8388608;
+var MAX_ATTACHMENTS = 4;
 var MAX_SELECTED_TEXT = 2e3;
 var MAX_PAGE_PATH = 512;
 var MAX_CURSOR_SELECTOR = 512;
@@ -102,6 +104,7 @@ var LIVE_REVISION = (() => {
   const revision = Number(live);
   return Number.isSafeInteger(revision) ? revision : null;
 })();
+var UPLOAD_URL = new URL("api/attachments", BASE);
 var HOST_ID = "jamparty";
 var DISMISSED_KEY = "jamparty-dismissed-v1";
 var OUTBOX_KEY = "jamparty-outbox-v1";
@@ -1046,6 +1049,38 @@ function isRecord(value) {
   return typeof value === "object" && value !== null;
 }
 
+// client/src/attachments.ts
+function parseAttachments(value) {
+  if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS) return null;
+  const files = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || entry.type !== "file" || !isResourceId(entry.file) || typeof entry.name !== "string") return null;
+    files.push({ type: "file", file: entry.file, name: entry.name });
+  }
+  return files;
+}
+function isResourceId(value) {
+  return typeof value === "string" && value.length === 69 && /^sha3:[0-9a-f]{64}$/.test(value);
+}
+async function upload(file) {
+  const reply = await fetch(UPLOAD_URL, {
+    method: "POST",
+    mode: "same-origin",
+    redirect: "error",
+    body: file
+  }).catch(() => null);
+  if (reply !== null) {
+    const result = await reply.json().catch(() => null);
+    if (reply.status === 201 && isRecord(result) && isResourceId(result.id)) {
+      return { type: "file", file: result.id, name: file.name };
+    }
+    if (!reply.ok && isRecord(result) && typeof result.error === "string") {
+      throw new Error(result.error);
+    }
+  }
+  throw new Error("Could not upload the attachment. Try again.");
+}
+
 // client/src/draft.ts
 function parseKind(value) {
   switch (value) {
@@ -1074,7 +1109,8 @@ function parse(value) {
     target,
     unavailable: unavailable === true,
     selectedText: typeof selectedText === "string" ? selectedText : null,
-    comment
+    comment,
+    fileCount: typeof value.fileCount === "number" && value.fileCount > 0 ? value.fileCount : 0
   };
 }
 function saveDraft(draft) {
@@ -1128,7 +1164,7 @@ var CommentDialog = class {
     const { dialog, form, textarea, cancel } = ui;
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      this.submit();
+      void this.submit();
     });
     textarea.addEventListener("input", () => {
       this.keep();
@@ -1139,10 +1175,38 @@ var CommentDialog = class {
         form.requestSubmit();
       }
     });
+    ui.attach.addEventListener("click", () => {
+      ui.attachmentInput.click();
+    });
+    ui.attachmentInput.addEventListener("change", () => {
+      this.addFiles(Array.from(ui.attachmentInput.files ?? []));
+      ui.attachmentInput.value = "";
+    });
+    dialog.addEventListener("paste", (event) => {
+      const files = Array.from(event.clipboardData?.files ?? []);
+      if (files.length === 0) return;
+      event.preventDefault();
+      this.addFiles(files);
+    });
+    dialog.addEventListener("dragover", (event) => {
+      if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+    });
+    dialog.addEventListener("drop", (event) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length === 0) return;
+      event.preventDefault();
+      this.addFiles(files);
+    });
+    ui.discardMissing.addEventListener("click", () => {
+      this.missingFiles = 0;
+      this.showFiles();
+      this.keep();
+    });
     cancel.addEventListener("click", () => {
       this.dismiss();
     });
     dialog.addEventListener("cancel", (event) => {
+      if (event.target !== dialog) return;
       event.preventDefault();
       this.dismiss();
     });
@@ -1159,6 +1223,9 @@ var CommentDialog = class {
   ui;
   outbox;
   pending;
+  files = [];
+  missingFiles = 0;
+  position = { x: 0, y: 0 };
   captured = null;
   /** What the dialog was opened on, which a draft keeps. */
   target = { kind: "page", selector: "" };
@@ -1168,6 +1235,54 @@ var CommentDialog = class {
   sending = false;
   /** A live reload waiting for the dialog to close. */
   pendingReload = false;
+  addFiles(files) {
+    if (!this.open || this.sending || files.length === 0) return;
+    const { status } = this.ui;
+    if (this.files.length + files.length > MAX_ATTACHMENTS) {
+      status.textContent = `Attach at most ${MAX_ATTACHMENTS} files per comment.`;
+      return;
+    }
+    const oversized = files.find((file) => file.size > MAX_FILE_BYTES);
+    if (oversized) {
+      status.textContent = `${oversized.name} exceeds 8 MiB.`;
+      return;
+    }
+    this.files.push(...files);
+    this.missingFiles = Math.max(0, this.missingFiles - files.length);
+    status.textContent = this.unavailable ? GONE : "";
+    this.showFiles();
+    this.keep();
+  }
+  showFiles() {
+    const ui = this.ui;
+    ui.textarea.required = this.files.length === 0;
+    ui.attachments.hidden = this.files.length === 0;
+    ui.missingAttachments.hidden = this.missingFiles === 0;
+    ui.attachments.replaceChildren(...this.files.map((file, index) => {
+      const item = document.createElement("li");
+      const name = document.createElement("span");
+      name.className = "attachment-name";
+      name.textContent = file.name;
+      name.title = file.name;
+      const size = document.createElement("span");
+      size.className = "attachment-size";
+      size.textContent = file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KiB`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `Remove ${file.name}`);
+      remove.disabled = this.sending;
+      remove.addEventListener("click", () => {
+        this.files.splice(index, 1);
+        this.showFiles();
+        this.keep();
+        ui.attach.focus();
+      });
+      item.append(name, size, remove);
+      return item;
+    }));
+    if (this.open) this.place();
+  }
   get open() {
     return this.ui.dialog.open;
   }
@@ -1228,6 +1343,8 @@ var CommentDialog = class {
     this.show(captured, x, y, target);
     this.unavailable = target.kind !== "page" && element === null;
     this.ui.textarea.value = draft.comment;
+    this.missingFiles = draft.fileCount;
+    this.showFiles();
     if (this.unavailable) this.ui.status.textContent = GONE;
     this.keep();
   }
@@ -1240,7 +1357,8 @@ var CommentDialog = class {
       target: this.target,
       unavailable: this.unavailable,
       selectedText: captured.selectedText,
-      comment: this.ui.textarea.value
+      comment: this.ui.textarea.value,
+      fileCount: this.files.length + this.missingFiles
     });
   }
   updateHighlight = () => {
@@ -1261,8 +1379,9 @@ var CommentDialog = class {
     window.removeEventListener("resize", this.updateHighlight);
     window.removeEventListener("scroll", this.updateHighlight, true);
   }
-  place(x, y) {
+  place() {
     const { dialog } = this.ui;
+    const { x, y } = this.position;
     const gap = 12;
     const width = dialog.offsetWidth;
     const height = dialog.offsetHeight;
@@ -1284,8 +1403,9 @@ var CommentDialog = class {
     ui.status.textContent = "";
     ui.reloadNotice.hidden = !this.pendingReload;
     ui.textarea.value = "";
+    this.position = { x, y };
     ui.dialog.showModal();
-    this.place(x, y);
+    this.place();
     this.updateHighlight();
     window.addEventListener("resize", this.updateHighlight);
     window.addEventListener("scroll", this.updateHighlight, true);
@@ -1301,50 +1421,74 @@ var CommentDialog = class {
     this.captured = null;
     this.unavailable = false;
     clearDraft();
+    this.files = [];
+    this.missingFiles = 0;
+    this.showFiles();
     ui.selectionPreview.hidden = true;
     ui.selectionText.textContent = "";
     ui.status.textContent = "";
     ui.textarea.value = "";
     if (this.pendingReload) window.location.reload();
   }
-  submit() {
+  setSending(sending) {
+    this.sending = sending;
+    const { send, cancel, attach, discardMissing, textarea, attachments } = this.ui;
+    send.disabled = sending;
+    cancel.disabled = sending;
+    attach.disabled = sending;
+    discardMissing.disabled = sending;
+    textarea.readOnly = sending;
+    for (const button of attachments.querySelectorAll("button")) button.disabled = sending;
+  }
+  async submit() {
     const ui = this.ui;
     const captured = this.captured;
     if (!captured || this.sending) return;
+    if (this.missingFiles !== 0) {
+      ui.status.textContent = "Attach the missing files again or choose to continue without them.";
+      return;
+    }
     const comment = ui.textarea.value.trim();
-    if (!comment) {
+    if (!comment && this.files.length === 0) {
       ui.status.textContent = "Enter a comment before queueing it.";
       ui.textarea.focus();
       return;
     }
-    ui.send.disabled = true;
-    ui.cancel.disabled = true;
+    this.setSending(true);
+    const attachments = [];
+    try {
+      for (const file of this.files) {
+        ui.status.textContent = `Uploading ${file.name}…`;
+        attachments.push(await upload(file));
+      }
+    } catch (error) {
+      this.setSending(false);
+      ui.status.textContent = error instanceof Error ? error.message : "Could not upload the attachment.";
+      return;
+    }
     ui.status.textContent = "Queueing…";
     const draft = {
       page: captured.page,
       selector: captured.selector,
       selectedText: captured.selectedText,
-      comment
+      comment,
+      ...attachments.length > 0 ? { attachments } : {}
     };
     const ref = crypto.randomUUID();
-    this.sending = true;
     clearDraft();
-    void this.outbox.submit(draft, ref).then((outcome) => {
-      this.sending = false;
-      ui.send.disabled = false;
-      ui.cancel.disabled = false;
-      if ("commented" in outcome) {
-        this.close();
-        ui.showToast(`Comment queued · ${this.pending()} pending`);
-      } else if ("unsent" in outcome) {
-        this.close();
-        ui.showToast("Not sent: kept in the page, sent when the connection is back");
-      } else {
-        this.keep();
-        ui.status.textContent = outcome.refused.error;
-        ui.textarea.focus();
-      }
-    });
+    const outcome = await this.outbox.submit(draft, ref);
+    this.setSending(false);
+    if ("commented" in outcome) {
+      this.close();
+      ui.showToast(`Comment queued · ${this.pending()} pending`);
+    } else if ("unsent" in outcome) {
+      this.close();
+      ui.showToast("Not sent: kept in the page, sent when the connection is back");
+    } else {
+      this.keep();
+      ui.status.textContent = outcome.refused.error;
+      ui.textarea.focus();
+    }
   }
 };
 
@@ -1464,6 +1608,7 @@ function relativeTime(at, now = Date.now()) {
 }
 function stateText(state) {
   switch (state) {
+    case "failed":
     case "unsent":
       return "not sent";
     case "sending":
@@ -1553,6 +1698,18 @@ var CommentList = class {
       text.className = "text";
       text.textContent = entry.draft.comment;
       item.append(row, text);
+      for (const attachment of entry.draft.attachments ?? []) {
+        const file = document.createElement("p");
+        file.className = "text";
+        file.textContent = attachment.name;
+        item.append(file);
+      }
+      if (entry.error !== void 0) {
+        const error = document.createElement("p");
+        error.className = "state";
+        error.textContent = entry.error;
+        item.append(error);
+      }
       if (entry.state === "unsent") {
         const again = document.createElement("button");
         again.type = "button";
@@ -1642,11 +1799,14 @@ function parseDraft(value) {
   if (typeof page !== "string" || typeof selector !== "string" || typeof comment !== "string") {
     return null;
   }
+  const attachments = value.attachments === void 0 ? [] : parseAttachments(value.attachments);
+  if (attachments === null) return null;
   return {
     page,
     selector,
     selectedText: typeof selectedText === "string" ? selectedText : null,
     comment,
+    ...attachments.length > 0 ? { attachments } : {},
     ...typeof choice === "string" ? { choice } : {}
   };
 }
@@ -1654,6 +1814,7 @@ function parseState(value) {
   switch (value) {
     case "queued":
     case "delivered":
+    case "failed":
       return value;
     default:
       return "unsent";
@@ -1669,6 +1830,7 @@ function parseEntry(value) {
     id: typeof value.id === "string" ? value.id : null,
     state: parseState(value.state),
     key: typeof value.key === "string" ? value.key : null,
+    ...typeof value.error === "string" ? { error: value.error } : {},
     at: typeof value.at === "number" ? value.at : Date.now()
   };
 }
@@ -1696,6 +1858,7 @@ var Outbox = class {
   entries = load();
   /** Called after every change, to redraw. */
   onChange = () => void 0;
+  onAttachmentUnavailable = () => void 0;
   /**
    * The ids of this joiner's comments the share holds, as the joiner last
    * said; null while it does not know (a restarted joiner before the
@@ -1752,7 +1915,9 @@ var Outbox = class {
   droppable() {
     const delivered = this.entries.findIndex((entry) => entry.state === "delivered");
     if (delivered !== -1) return delivered;
-    return this.entries.findIndex((entry) => entry.state === "queued");
+    const queued = this.entries.findIndex((entry) => entry.state === "queued");
+    if (queued !== -1) return queued;
+    return this.entries.findIndex((entry) => entry.state === "failed");
   }
   /** Whether the outbox holds as many comments still to send as it keeps. */
   get full() {
@@ -1816,6 +1981,10 @@ var Outbox = class {
     if (entry.draft.choice !== void 0 && "refused" in outcome && outcome.refused.choiceRefused === true) {
       const index = this.entries.indexOf(entry);
       if (index !== -1) this.entries.splice(index, 1);
+    } else if ("refused" in outcome && outcome.refused.attachmentUnavailable === true) {
+      entry.state = "failed";
+      entry.error = outcome.refused.error;
+      this.onAttachmentUnavailable(entry.error);
     } else if ("commented" in outcome) {
       entry.id = outcome.commented.id;
       entry.state = "queued";
@@ -2261,7 +2430,7 @@ var styles = `
   #outbox-list .where, #outbox-list .state { color: #b8b2a9; }
   #outbox-list .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #outbox-list li[data-state="delivered"] .state { color: #8ce99a; }
-  #outbox-list li[data-state="unsent"] .state { color: #ffa8a8; }
+  #outbox-list li:is([data-state="unsent"], [data-state="failed"]) .state { color: #ffa8a8; }
   #outbox-list li[data-state="delivered"] .text,
   #outbox-list li[data-state="unsent"] .text { color: #d8d4cd; }
   #outbox-list .text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -2677,6 +2846,59 @@ var styles = `
 
   textarea:focus { outline: 2px solid #287088; outline-offset: 1px; }
 
+  #jamparty-dialog { max-height: calc(100dvh - 24px); overflow: auto; }
+
+  #attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0;
+    margin: 8px 0 0;
+    list-style: none;
+  }
+
+  #attachments[hidden], #missing-attachments[hidden] { display: none; }
+
+  #attachments li {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 2px 4px 2px 8px;
+    background: #eeeae2;
+    border-radius: 5px;
+    font-size: 12px;
+  }
+
+  #attachments .attachment-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #attachments .attachment-size { white-space: nowrap; }
+
+  #attachments button, #discard-missing {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  #attachments button:hover, #discard-missing:hover { border-color: #888; }
+
+  #missing-attachments {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #a12c10;
+  }
+
+  #discard-missing { text-decoration: underline; }
+  #attach { margin-right: auto; }
+  #attach svg { display: block; }
+
   #status {
     min-height: 18px;
     margin-top: 7px;
@@ -2733,6 +2955,7 @@ var styles = `
 // client/src/ui.ts
 var GEAR_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>`;
 var PEN_ICON = `<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5M3 21l5-1L21 7a2.1 2.1 0 0 0-5-5L3 15z"></path></svg>`;
+var PAPERCLIP_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-9 9a5 5 0 0 1-7-7l10-10a3.5 3.5 0 0 1 5 5L10 18a1.5 1.5 0 0 1-2-2l9-9"></path></svg>`;
 var MARKUP = `
   <style>${styles}</style>
   <div id="cursors" aria-hidden="true"></div>
@@ -2810,11 +3033,18 @@ var MARKUP = `
         <blockquote id="selection-text"></blockquote>
       </div>
       <textarea id="comment" name="comment" maxlength="${MAX_COMMENT}" required></textarea>
+      <ul id="attachments" aria-label="Attachments" hidden></ul>
+      <input id="attachment-input" type="file" multiple hidden>
+      <div id="missing-attachments" hidden>
+        Files from before the reload need to be attached again.
+        <button id="discard-missing" type="button">Continue without missing files</button>
+      </div>
       <div id="status" role="alert"></div>
       <div id="reload-notice" role="status" hidden>
         Files changed. Reloading when this edit closes.
       </div>
       <div class="actions">
+        <button id="attach" type="button" aria-label="Attach files" title="Attach files">${PAPERCLIP_ICON}</button>
         <button id="cancel" type="button">Cancel</button>
         <button id="send" type="submit">Queue comment</button>
       </div>
@@ -2879,6 +3109,11 @@ var Ui = class _Ui {
   selectionPreview;
   selectionText;
   textarea;
+  attachments;
+  attachmentInput;
+  attach;
+  missingAttachments;
+  discardMissing;
   status;
   reloadNotice;
   cancel;
@@ -2948,6 +3183,11 @@ var Ui = class _Ui {
     this.selectionPreview = find("#selection-preview", HTMLDivElement);
     this.selectionText = find("#selection-text", HTMLQuoteElement);
     this.textarea = find("textarea", HTMLTextAreaElement);
+    this.attachments = find("#attachments", HTMLUListElement);
+    this.attachmentInput = find("#attachment-input", HTMLInputElement);
+    this.attach = find("#attach", HTMLButtonElement);
+    this.missingAttachments = find("#missing-attachments", HTMLDivElement);
+    this.discardMissing = find("#discard-missing", HTMLButtonElement);
     this.status = find("#status", HTMLDivElement);
     this.reloadNotice = find("#reload-notice", HTMLDivElement);
     this.cancel = find("#cancel", HTMLButtonElement);
@@ -3035,6 +3275,9 @@ function install() {
   };
   outbox.onChange = () => {
     list.render();
+  };
+  outbox.onAttachmentUnavailable = (error) => {
+    ui.showToast(error);
   };
   const prompt = new NamePrompt(ui, changeSettings);
   panel.onSettings = (settings) => {

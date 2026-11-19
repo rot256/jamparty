@@ -18,6 +18,8 @@ export const LIVE_REVISION = ((): number | null => {
   return Number.isSafeInteger(revision) ? revision : null;
 })();
 
+export const UPLOAD_URL = new URL("api/attachments", BASE);
+
 export const HOST_ID = "jamparty";
 export const DISMISSED_KEY = "jamparty-dismissed-v1";
 export const OUTBOX_KEY = "jamparty-outbox-v1";

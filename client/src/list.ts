@@ -26,6 +26,7 @@ function relativeTime(at: number, now = Date.now()): string {
 
 function stateText(state: ShownState): string {
   switch (state) {
+    case "failed":
     case "unsent":
       return "not sent";
     case "sending":
@@ -120,6 +121,18 @@ export class CommentList {
       text.className = "text";
       text.textContent = entry.draft.comment;
       item.append(row, text);
+      for (const attachment of entry.draft.attachments ?? []) {
+        const file = document.createElement("p");
+        file.className = "text";
+        file.textContent = attachment.name;
+        item.append(file);
+      }
+      if (entry.error !== undefined) {
+        const error = document.createElement("p");
+        error.className = "state";
+        error.textContent = entry.error;
+        item.append(error);
+      }
       if (entry.state === "unsent") {
         const again = document.createElement("button");
         again.type = "button";

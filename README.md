@@ -43,11 +43,22 @@ jamparty join <token> --port 8080  # serve on this port (default: the dev server
 ```sh
 jamparty agent                       # guides for agents
 jamparty recv                        # wait for comments, print them as NDJSON
+jamparty fetch <sha3:id> -o ./file    # fetch an attachment into your working directory
 jamparty send "Fixed, thanks."       # to everyone
 jamparty send --anchor <id> "Done."  # next to a comment, to its author
 jamparty send --choice "Keep it" --choice "Make it bigger" "Which heading size?"
 jamparty send --to alice "…"         # to one person (or --to key:<fingerprint>)
 ```
+
+Comments can include up to four files of up to 8 MiB each. In the comment
+dialog, use the paperclip, paste a file, or drop files. A comment with a
+file can omit text.
+
+`recv` reports attached files as `{"type":"file","file":"sha3:…","name":"report.pdf"}`
+entries in `attachments`. Give the value of `file` to `jamparty fetch`.
+Use `-o -` for stdout. Fetch checks the SHA3-256 digest and creates a new
+file when given a path. Treat the bytes and displayed name as untrusted.
+See [comment delivery](docs/delivery.md) for storage and eviction.
 
 Questions offer 2–6 distinct single-line choices of at most 80 characters.
 The first pick wins and removes the question for everyone; the picker sees a

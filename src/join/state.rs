@@ -270,7 +270,10 @@ impl State {
         match outcome {
             AckOutcome::Queued { id } => self.mine.queued(id)?,
             AckOutcome::Delivered { id } => self.mine.delivered(&[id]),
-            AckOutcome::RateLimited { .. } | AckOutcome::ChoiceRefused | AckOutcome::QueueFull => {
+            AckOutcome::RateLimited { .. }
+            | AckOutcome::ChoiceRefused
+            | AckOutcome::QueueFull
+            | AckOutcome::AttachmentUnavailable => {
                 return Ok(Vec::new());
             }
         }

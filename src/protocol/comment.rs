@@ -1,7 +1,6 @@
 //! Comments: the draft a joiner sends, and the comment the share queues and
-//! delivers (`id`, `author`, `page`, `selector`, `selectedText`,
-//! `comment`), with length caps. Text from browsers is data in JSON fields,
-//! never formatted into prose.
+//! delivers, with length caps. Attachment bytes travel separately. Text
+//! from browsers is kept in JSON fields.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +11,10 @@ use crate::{
         name::JoinerName,
         text::{check_len, check_line, check_text},
     },
-    protocol::control::MAX_CHOICE,
+    protocol::{
+        control::MAX_CHOICE,
+        resource::{Attachment, MAX_ATTACHMENTS},
+    },
 };
 
 pub(crate) const MAX_PAGE: usize = 4096;
@@ -110,6 +112,8 @@ pub(crate) struct DraftFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) choice: Option<String>,
     pub(crate) comment: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) attachments: Vec<Attachment>,
 }
 
 /// What a joiner sends: a comment without id or author, within the caps.
@@ -127,7 +131,16 @@ impl TryFrom<DraftFields> for Draft {
         if let Some(choice) = &fields.choice {
             check_line(choice, "choice", MAX_CHOICE)?;
         }
-        check_text(&fields.comment, "comment", MAX_COMMENT)?;
+        if fields.attachments.len() > MAX_ATTACHMENTS {
+            return Err(Invalid::new(format!(
+                "a comment can have at most {MAX_ATTACHMENTS} attachments"
+            )));
+        }
+        if fields.attachments.is_empty() || fields.choice.is_some() {
+            check_text(&fields.comment, "comment", MAX_COMMENT)?;
+        } else {
+            check_len(&fields.comment, "comment", MAX_COMMENT)?;
+        }
         Ok(Self(fields))
     }
 }
@@ -152,6 +165,8 @@ pub(crate) struct Comment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) choice: Option<String>,
     pub(crate) comment: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) attachments: Vec<Attachment>,
 }
 
 impl Comment {
@@ -163,6 +178,7 @@ impl Comment {
             selected_text,
             choice,
             comment,
+            attachments,
         } = draft.0;
         Self {
             id,
@@ -172,6 +188,7 @@ impl Comment {
             selected_text,
             choice,
             comment,
+            attachments,
         }
     }
 }
@@ -183,7 +200,10 @@ mod tests {
             ids::{CommentId, EndpointKey},
             rng::SeededRng,
         },
-        protocol::comment::{Author, Comment, Draft, DraftFields, MAX_COMMENT},
+        protocol::{
+            comment::{Author, Comment, Draft, DraftFields, MAX_COMMENT},
+            resource::{Attachment, MAX_ATTACHMENTS, ResourceId},
+        },
     };
 
     fn fields(comment: &str) -> DraftFields {
@@ -196,6 +216,7 @@ mod tests {
             choice: None,
             selected_text: None,
             comment: comment.to_owned(),
+            attachments: Vec::new(),
         }
     }
 
@@ -242,6 +263,25 @@ mod tests {
             value.pointer("/selectedText"),
             Some(&serde_json::json!("Hello"))
         );
+    }
+
+    #[test]
+    fn attachments_allow_empty_text_and_have_a_count_cap() {
+        let file = Attachment::File {
+            file: ResourceId::digest(b"data"),
+            name: "report.pdf".to_owned().into(),
+        };
+        for (count, valid) in [
+            (0, false),
+            (MAX_ATTACHMENTS, true),
+            (MAX_ATTACHMENTS + 1, false),
+        ] {
+            let draft = DraftFields {
+                attachments: vec![file.clone(); count],
+                ..fields("")
+            };
+            assert_eq!(Draft::try_from(draft).is_ok(), valid, "{count} attachments");
+        }
     }
 
     #[test]

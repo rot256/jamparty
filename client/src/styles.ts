@@ -170,7 +170,7 @@ export const styles = `
   #outbox-list .where, #outbox-list .state { color: #b8b2a9; }
   #outbox-list .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #outbox-list li[data-state="delivered"] .state { color: #8ce99a; }
-  #outbox-list li[data-state="unsent"] .state { color: #ffa8a8; }
+  #outbox-list li:is([data-state="unsent"], [data-state="failed"]) .state { color: #ffa8a8; }
   #outbox-list li[data-state="delivered"] .text,
   #outbox-list li[data-state="unsent"] .text { color: #d8d4cd; }
   #outbox-list .text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -585,6 +585,59 @@ export const styles = `
   }
 
   textarea:focus { outline: 2px solid #287088; outline-offset: 1px; }
+
+  #jamparty-dialog { max-height: calc(100dvh - 24px); overflow: auto; }
+
+  #attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0;
+    margin: 8px 0 0;
+    list-style: none;
+  }
+
+  #attachments[hidden], #missing-attachments[hidden] { display: none; }
+
+  #attachments li {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 2px 4px 2px 8px;
+    background: #eeeae2;
+    border-radius: 5px;
+    font-size: 12px;
+  }
+
+  #attachments .attachment-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #attachments .attachment-size { white-space: nowrap; }
+
+  #attachments button, #discard-missing {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  #attachments button:hover, #discard-missing:hover { border-color: #888; }
+
+  #missing-attachments {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #a12c10;
+  }
+
+  #discard-missing { text-decoration: underline; }
+  #attach { margin-right: auto; }
+  #attach svg { display: block; }
 
   #status {
     min-height: 18px;

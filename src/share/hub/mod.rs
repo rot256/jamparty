@@ -18,9 +18,10 @@ use std::{
     time::Duration,
 };
 
+use bytes::Bytes;
 #[cfg(test)]
 use jiff::Timestamp;
-use tokio::sync::{Notify, broadcast, mpsc};
+use tokio::sync::{Notify, Semaphore, broadcast, mpsc};
 
 #[cfg(test)]
 use crate::core::queue::DeliveryState;
@@ -36,8 +37,12 @@ use crate::{
     protocol::{
         comment::{Author, Comment},
         control::{Anchor, CommentRef, ShareMessage, StatusLine},
+        resource::{Attachment, ResourceId},
     },
-    share::hub::presence::{ConnectionId, Seat},
+    share::{
+        hub::presence::{ConnectionId, Seat},
+        resources::{Resources, StoreError},
+    },
 };
 
 #[cfg(test)]
@@ -67,6 +72,8 @@ const CURSOR_QUEUE: usize = 32;
 /// that sends comments faster than it reads their acknowledgements is
 /// flooding, and is disconnected.
 pub(crate) const ACK_QUEUE: usize = 64;
+/// Bounds temporary upload buffers across all admitted joiners.
+const MAX_ACTIVE_UPLOADS: usize = 4;
 /// Presence changes reach joiners at most this often, together.
 const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -77,6 +84,7 @@ const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
 /// Nothing takes `inner` while holding `order`.
 pub(crate) struct Hub {
     inner: Mutex<Inner>,
+    pub(crate) uploads: Semaphore,
     /// The next stamp for a broadcast or an acknowledgement: taken and the
     /// message sent under this lock, together, so a connection's writer
     /// can tell what was sent before what (see [`Outbox`]).
@@ -100,6 +108,7 @@ pub(crate) struct Hub {
 
 struct Inner {
     queue: DeliveryQueue<Comment>,
+    resources: Resources,
     listeners: usize,
     generation: u64,
     nudge: nudge::Nudge,
@@ -126,6 +135,7 @@ impl Hub {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 queue: DeliveryQueue::new(),
+                resources: Resources::default(),
                 listeners: 0,
                 generation: 0,
                 nudge: nudge::Nudge::default(),
@@ -139,6 +149,7 @@ impl Hub {
                 anchors: VecDeque::new(),
                 answers: VecDeque::new(),
             }),
+            uploads: Semaphore::new(MAX_ACTIVE_UPLOADS),
             order: Mutex::new(Order(0)),
             broadcast: broadcast::channel(BROADCAST_CAPACITY).0,
             wakeup: Notify::new(),
@@ -161,6 +172,25 @@ impl Hub {
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn store_resource(&self, bytes: Bytes) -> Result<ResourceId, StoreError> {
+        let id = ResourceId::digest(&bytes);
+        let mut inner = self.lock();
+        let Inner {
+            queue, resources, ..
+        } = &mut *inner;
+        resources.add(id, bytes, || {
+            queue
+                .iter()
+                .flat_map(|comment| comment.attachments.iter().map(Attachment::id))
+                .collect()
+        })?;
+        Ok(id)
+    }
+
+    pub(crate) fn resource(&self, id: ResourceId) -> Option<Bytes> {
+        self.lock().resources.get(id)
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Outgoing> {

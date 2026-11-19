@@ -3,9 +3,11 @@
 // written is kept as a draft (see draft.ts) and comes back after a reload;
 // once sent, it is the outbox's (sent again under its ref if need be).
 
+import { upload } from "./attachments";
 import { type Captured, captureTarget, capturePageTarget } from "./capture";
 import { AGENT_TARGET_PREFIX } from "./config";
 import { type DraftKind, type DraftTarget, clearDraft, loadDraft, saveDraft } from "./draft";
+import { type Attachment, MAX_ATTACHMENTS, MAX_FILE_BYTES } from "./generated/api";
 import type { Outbox } from "./outbox";
 import type { Ui } from "./ui";
 
@@ -24,6 +26,9 @@ function labelFor(kind: DraftKind): string {
 }
 
 export class CommentDialog {
+  private files: File[] = [];
+  private missingFiles = 0;
+  private position = { x: 0, y: 0 };
   private captured: Captured | null = null;
   /** What the dialog was opened on, which a draft keeps. */
   private target: DraftTarget = { kind: "page", selector: "" };
@@ -43,7 +48,7 @@ export class CommentDialog {
     const { dialog, form, textarea, cancel } = ui;
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      this.submit();
+      void this.submit();
     });
     textarea.addEventListener("input", () => { this.keep(); });
     textarea.addEventListener("keydown", (event) => {
@@ -52,8 +57,35 @@ export class CommentDialog {
         form.requestSubmit();
       }
     });
+    ui.attach.addEventListener("click", () => { ui.attachmentInput.click(); });
+    ui.attachmentInput.addEventListener("change", () => {
+      this.addFiles(Array.from(ui.attachmentInput.files ?? []));
+      ui.attachmentInput.value = "";
+    });
+    dialog.addEventListener("paste", (event) => {
+      const files = Array.from(event.clipboardData?.files ?? []);
+      if (files.length === 0) return;
+      event.preventDefault();
+      this.addFiles(files);
+    });
+    dialog.addEventListener("dragover", (event) => {
+      if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+    });
+    dialog.addEventListener("drop", (event) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length === 0) return;
+      event.preventDefault();
+      this.addFiles(files);
+    });
+    ui.discardMissing.addEventListener("click", () => {
+      this.missingFiles = 0;
+      this.showFiles();
+      this.keep();
+    });
     cancel.addEventListener("click", () => { this.dismiss(); });
     dialog.addEventListener("cancel", (event) => {
+      // A file input's picker can dispatch a bubbling cancel event too.
+      if (event.target !== dialog) return;
       event.preventDefault();
       this.dismiss();
     });
@@ -69,6 +101,56 @@ export class CommentDialog {
       this.stopTracking();
       ui.highlight.style.display = "none";
     });
+  }
+
+  private addFiles(files: File[]): void {
+    if (!this.open || this.sending || files.length === 0) return;
+    const { status } = this.ui;
+    if (this.files.length + files.length > MAX_ATTACHMENTS) {
+      status.textContent = `Attach at most ${MAX_ATTACHMENTS} files per comment.`;
+      return;
+    }
+    const oversized = files.find((file) => file.size > MAX_FILE_BYTES);
+    if (oversized) {
+      status.textContent = `${oversized.name} exceeds 8 MiB.`;
+      return;
+    }
+    this.files.push(...files);
+    this.missingFiles = Math.max(0, this.missingFiles - files.length);
+    status.textContent = this.unavailable ? GONE : "";
+    this.showFiles();
+    this.keep();
+  }
+
+  private showFiles(): void {
+    const ui = this.ui;
+    ui.textarea.required = this.files.length === 0;
+    ui.attachments.hidden = this.files.length === 0;
+    ui.missingAttachments.hidden = this.missingFiles === 0;
+    ui.attachments.replaceChildren(...this.files.map((file, index) => {
+      const item = document.createElement("li");
+      const name = document.createElement("span");
+      name.className = "attachment-name";
+      name.textContent = file.name;
+      name.title = file.name;
+      const size = document.createElement("span");
+      size.className = "attachment-size";
+      size.textContent = file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KiB`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `Remove ${file.name}`);
+      remove.disabled = this.sending;
+      remove.addEventListener("click", () => {
+        this.files.splice(index, 1);
+        this.showFiles();
+        this.keep();
+        ui.attach.focus();
+      });
+      item.append(name, size, remove);
+      return item;
+    }));
+    if (this.open) this.place();
   }
 
   get open(): boolean {
@@ -138,6 +220,8 @@ export class CommentDialog {
     this.show(captured, x, y, target);
     this.unavailable = target.kind !== "page" && element === null;
     this.ui.textarea.value = draft.comment;
+    this.missingFiles = draft.fileCount;
+    this.showFiles();
     if (this.unavailable) this.ui.status.textContent = GONE;
     this.keep();
   }
@@ -152,6 +236,7 @@ export class CommentDialog {
       unavailable: this.unavailable,
       selectedText: captured.selectedText,
       comment: this.ui.textarea.value,
+      fileCount: this.files.length + this.missingFiles,
     });
   }
 
@@ -175,8 +260,9 @@ export class CommentDialog {
     window.removeEventListener("scroll", this.updateHighlight, true);
   }
 
-  private place(x: number, y: number): void {
+  private place(): void {
     const { dialog } = this.ui;
+    const { x, y } = this.position;
     const gap = 12;
     const width = dialog.offsetWidth;
     const height = dialog.offsetHeight;
@@ -199,8 +285,9 @@ export class CommentDialog {
     ui.status.textContent = "";
     ui.reloadNotice.hidden = !this.pendingReload;
     ui.textarea.value = "";
+    this.position = { x, y };
     ui.dialog.showModal();
-    this.place(x, y);
+    this.place();
     this.updateHighlight();
     window.addEventListener("resize", this.updateHighlight);
     window.addEventListener("scroll", this.updateHighlight, true);
@@ -219,6 +306,9 @@ export class CommentDialog {
     this.captured = null;
     this.unavailable = false;
     clearDraft();
+    this.files = [];
+    this.missingFiles = 0;
+    this.showFiles();
     ui.selectionPreview.hidden = true;
     ui.selectionText.textContent = "";
     ui.status.textContent = "";
@@ -226,47 +316,68 @@ export class CommentDialog {
     if (this.pendingReload) window.location.reload();
   }
 
-  private submit(): void {
+  private setSending(sending: boolean): void {
+    this.sending = sending;
+    const { send, cancel, attach, discardMissing, textarea, attachments } = this.ui;
+    send.disabled = sending;
+    cancel.disabled = sending;
+    attach.disabled = sending;
+    discardMissing.disabled = sending;
+    textarea.readOnly = sending;
+    for (const button of attachments.querySelectorAll("button")) button.disabled = sending;
+  }
+
+  private async submit(): Promise<void> {
     const ui = this.ui;
     const captured = this.captured;
     // Enter submits even with the button disabled: one at a time.
     if (!captured || this.sending) return;
+    if (this.missingFiles !== 0) {
+      ui.status.textContent = "Attach the missing files again or choose to continue without them.";
+      return;
+    }
     const comment = ui.textarea.value.trim();
-    if (!comment) {
+    if (!comment && this.files.length === 0) {
       ui.status.textContent = "Enter a comment before queueing it.";
       ui.textarea.focus();
       return;
     }
-    ui.send.disabled = true;
-    ui.cancel.disabled = true;
+    this.setSending(true);
+    const attachments: Attachment[] = [];
+    try {
+      for (const file of this.files) {
+        ui.status.textContent = `Uploading ${file.name}…`;
+        attachments.push(await upload(file));
+      }
+    } catch (error) {
+      this.setSending(false);
+      ui.status.textContent = error instanceof Error ? error.message : "Could not upload the attachment.";
+      return;
+    }
     ui.status.textContent = "Queueing…";
     const draft = {
       page: captured.page,
       selector: captured.selector,
       selectedText: captured.selectedText,
       comment,
+      ...(attachments.length > 0 ? { attachments } : {}),
     };
     const ref = crypto.randomUUID();
-    // The outbox has it (and its ref) before it goes: a reload before the
-    // answer sends it again rather than bringing back a draft to send anew.
-    this.sending = true;
+    // The outbox has the uploaded attachments and ref before the socket
+    // sends the comment, so it can retry across reconnects and reloads.
     clearDraft();
-    void this.outbox.submit(draft, ref).then((outcome) => {
-      this.sending = false;
-      ui.send.disabled = false;
-      ui.cancel.disabled = false;
-      if ("commented" in outcome) {
-        this.close();
-        ui.showToast(`Comment queued · ${this.pending()} pending`);
-      } else if ("unsent" in outcome) {
-        this.close();
-        ui.showToast("Not sent: kept in the page, sent when the connection is back");
-      } else {
-        // Refused (too many, invalid): the dialog's again, and a draft.
-        this.keep();
-        ui.status.textContent = outcome.refused.error;
-        ui.textarea.focus();
-      }
-    });
+    const outcome = await this.outbox.submit(draft, ref);
+    this.setSending(false);
+    if ("commented" in outcome) {
+      this.close();
+      ui.showToast(`Comment queued · ${this.pending()} pending`);
+    } else if ("unsent" in outcome) {
+      this.close();
+      ui.showToast("Not sent: kept in the page, sent when the connection is back");
+    } else {
+      this.keep();
+      ui.status.textContent = outcome.refused.error;
+      ui.textarea.focus();
+    }
   }
 }

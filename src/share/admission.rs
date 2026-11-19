@@ -80,6 +80,7 @@ mod tests {
             Err(RefusedReason::WrongSecret)
         );
         let draft = Draft::try_from(DraftFields {
+            attachments: Vec::new(),
             page: "/".to_owned().try_into().unwrap(),
             selector: "body".to_owned().try_into().unwrap(),
             choice: None,

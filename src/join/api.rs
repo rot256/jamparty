@@ -18,6 +18,7 @@ use crate::{
         comment::{CommentPage, CommentSelector},
         control::{CommentRef, Revision},
         presence::{PagePath, Person, Position},
+        resource::Attachment,
     },
 };
 
@@ -48,6 +49,12 @@ pub(crate) enum CommentOutcome {
         #[serde(rename = "choiceRefused", skip_serializing_if = "Option::is_none")]
         #[cfg_attr(test, ts(rename = "choiceRefused", optional))]
         choice_refused: Option<bool>,
+        #[serde(
+            rename = "attachmentUnavailable",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(test, ts(rename = "attachmentUnavailable", optional))]
+        attachment_unavailable: Option<bool>,
         #[serde(
             rename = "retryAfterSecs",
             with = "crate::core::secs::optional",
@@ -133,6 +140,9 @@ pub(crate) struct Submission {
     #[cfg_attr(test, ts(optional))]
     pub(crate) choice: Option<String>,
     pub(crate) comment: String,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) attachments: Option<Vec<Attachment>>,
 }
 
 /// A change to the settings, from a page.
@@ -201,6 +211,7 @@ mod bindings {
                 Colour, CursorSelector, FRACTION_ONE, Fraction, MAX_CURSOR_SELECTOR, MAX_PAGE_PATH,
                 PagePath, Person, Position,
             },
+            resource::{Attachment, AttachmentName, MAX_ATTACHMENTS, MAX_FILE_BYTES, ResourceId},
         },
         share::hub::MAX_JOINERS,
     };
@@ -243,6 +254,9 @@ mod bindings {
             CommentOutcome::decl(&cfg),
             SettingsOutcome::decl(&cfg),
             ToPage::decl(&cfg),
+            ResourceId::decl(&cfg),
+            AttachmentName::decl(&cfg),
+            Attachment::decl(&cfg),
             Submission::decl(&cfg),
             Change::decl(&cfg),
             FromPage::decl(&cfg),
@@ -262,6 +276,8 @@ mod bindings {
             ("MAX_CHOICES", MAX_CHOICES),
             ("MAX_CHOICE", MAX_CHOICE),
             ("MAX_COMMENT", MAX_COMMENT),
+            ("MAX_FILE_BYTES", MAX_FILE_BYTES),
+            ("MAX_ATTACHMENTS", MAX_ATTACHMENTS),
             ("MAX_SELECTED_TEXT", MAX_SELECTED_TEXT),
             ("MAX_PAGE_PATH", MAX_PAGE_PATH),
             ("MAX_CURSOR_SELECTOR", MAX_CURSOR_SELECTOR),

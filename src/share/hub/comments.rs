@@ -49,6 +49,7 @@ impl Hub {
             }
             AckOutcome::Delivered { .. }
             | AckOutcome::RateLimited { .. }
+            | AckOutcome::AttachmentUnavailable
             | AckOutcome::ChoiceRefused
             | AckOutcome::QueueFull => {}
         }
@@ -81,6 +82,13 @@ impl Hub {
         }
         // Refs are checked first: retrying the winning pick gets its original id.
         let fields = DraftFields::from(draft.clone());
+        if fields
+            .attachments
+            .iter()
+            .any(|attachment| !inner.resources.contains(attachment.id()))
+        {
+            return (AckOutcome::AttachmentUnavailable, None);
+        }
         let question = if let Some(choice) = &fields.choice {
             let id = fields
                 .selector

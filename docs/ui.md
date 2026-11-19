@@ -64,6 +64,16 @@ command only reminds the agent and never changes delivery status.
   on its way the dialog stays (Escape and outside clicks wait for the
   joiner's answer); refused, it is the dialog's again, and a draft.
 
+- Use the paperclip, paste files, or drop them into the dialog to attach up
+  to four files of up to 8 MiB each. Each chip shows the name and size and
+  has a remove button. Comment text is optional while a file is attached.
+- Files upload when the comment is submitted. An upload error leaves the
+  dialog open with the selected files. After upload, the outbox keeps the
+  attachment references with the comment across reconnects and reloads.
+  If an attachment is evicted before the comment queues, the page reports
+  the failure. Reloading a draft before upload completes asks you to
+  reselect the files or explicitly continue without them.
+
 ## Edit mode
 
 - An edit button (pen icon) sits between the pill and the gear. Clicking

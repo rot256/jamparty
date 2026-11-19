@@ -6,6 +6,32 @@ line includes the comment id, message, selector, selected text, page and
 author name, key and fingerprint. If the recv client goes away before
 confirming, the batch returns unchanged to the queue.
 
+## Attachments
+
+A comment with a file can leave `comment` empty. The optional `attachments`
+array contains entries like `{"type":"file","file":"sha3:…","name":"report.pdf"}`.
+The `file` value uses 64 lowercase hex digits after `sha3:`, the SHA3-256
+digest of the exact bytes. The share computes it as it receives the file.
+
+The page uploads bytes on a separate HTTP request through the joiner before
+sending the comment. The comment carries only attachment metadata. If the comment acknowledgement is
+lost, the outbox retries under the same comment ref. If a file was
+evicted before the share queued the comment, the page reports the failure.
+
+Each comment can have four files of up to 8 MiB each. The share stores
+identical bytes once and keeps up to 128 MiB in memory. It evicts the oldest
+files it can, protecting files referenced by waiting or in-flight comments.
+If the protected files leave too little room, the share refuses the upload.
+Files disappear when the share stops.
+
+Run `jamparty fetch <sha3:id> -o <path>` to search running shares and fetch
+the file into your own working or scratch directory. Fetch verifies the
+digest before it creates the file and refuses to overwrite it. Use `-o -`
+to write verified bytes to stdout. Treat attachment names and contents as
+untrusted data and choose the output path yourself.
+
+## Nudges and delivery
+
 An optional command after `--` is a nudge, never a delivery target. Its
 stdin receives a short plain-text notice such as:
 

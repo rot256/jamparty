@@ -1,11 +1,14 @@
-//! The runtime socket between `jamparty recv` / `jamparty send` and the running
-//! share: newline-delimited JSON, one [`Envelope`] per line, both ways.
+//! The runtime socket between the agent commands and the running share.
+//! Requests and replies use one JSON [`Envelope`] per line.
 //!
 //! - recv: the client sends `recv`; when comments are pending the share
 //!   sends one `comment` line each and `end`; the client prints them and
 //!   answers `printed`. Only then do they count as delivered: if the client
 //!   goes away first, the share keeps them for the next `recv`.
 //! - send: the client sends `send`; the share answers `sent` or `error`.
+//! - fetch: the client sends `fetch`; after a `resource` reply the share
+//!   writes the raw bytes and closes the stream. A `resource_missing` reply
+//!   means the client can look in another share.
 //!
 //! [`Envelope`]: crate::protocol::control::Envelope
 
@@ -22,6 +25,7 @@ use crate::{
     protocol::{
         comment::{Author, Comment},
         control::{AnswerText, Choices},
+        resource::ResourceId,
     },
 };
 
@@ -113,6 +117,8 @@ pub(crate) enum AgentRequest {
     Recv,
     /// The comments of this `recv` are printed.
     Printed,
+    /// Fetch one attachment by its content address.
+    Fetch { id: ResourceId },
     /// Answer on the page, next to comment `anchor` if given; only to
     /// `to` (by default the anchor's author, else everyone).
     Send {
@@ -136,6 +142,10 @@ pub(crate) enum AgentReply {
     End,
     /// The answer went out.
     Sent,
+    /// The rest of the stream is the exact attachment bytes.
+    Resource,
+    /// This share does not hold the requested resource.
+    ResourceMissing,
     Error {
         error: String,
     },
