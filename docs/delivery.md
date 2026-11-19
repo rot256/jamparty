@@ -74,3 +74,23 @@ Each batch is at most about 100 KB of NDJSON (115,000 bytes). Large backlogs
 need several recv calls. With multiple shares, pass `--share <id>` to recv
 and send. If printing completes but confirmation is lost, comments can
 arrive twice; use comment ids to skip duplicates.
+
+## PDF anchors
+
+A PDF text or box comment adds a field alongside `page` and `selector`:
+
+```json
+{"pdf":{"page":2,"box":{"x0":72,"y0":108,"x1":216,"y1":144}}}
+```
+
+The outer `page` is the PDF URL. The inner `pdf.page` is a 1-based PDF
+page number. Coordinates are in PDF points (1/72 inch), from the top left
+of the unrotated MediaBox (the full sheet), with y increasing downward.
+A CropBox clips the selectable area without changing that origin. Both axes
+are limited to 0–14,400 points and must have positive extent. A text
+selection carries its quote in `selectedText` and uses its bounding box on its first page.
+For these comments `selector` is the CSS ID selector of the reviewer's
+outline (`#jamparty-pdf-anchor-<uuid>`). Use `pdf` for source lookup, for
+example by passing the box's center to
+`synctex edit -o '<page>:<x>:<y>:<path/to/paper.pdf>'` against the matching
+LaTeX build. jamparty does not run SyncTeX.

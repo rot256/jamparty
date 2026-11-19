@@ -313,3 +313,26 @@ refused before parsing the rest. The NDJSON `version` remains 1.
 
 - Comment mode default: on (current behaviour) or off (opt in). Keep on
   until decided.
+
+## PDF viewer
+
+Opening a `.pdf` URL in the main browser tab opens the joiner's PDF viewer.
+Use the page field to jump to a page and the zoom menu to change its scale.
+As with other pages from a share, a complex or hostile PDF can slow down
+or crash the viewer tab.
+Select text and right-click the selection or press `/` to comment on it.
+The pen switches to box drawing. Drag across the part of one page you want
+to comment on. The pen stays active until clicked again or you press Escape
+with the dialog closed. You can still use `/` for a document comment when
+there is no selection.
+
+Your comments in the outbox have blue outlines at their PDF anchors, and
+the list labels them by PDF page number. When the PDF changes in a live
+share, the viewer keeps the current page, scroll position and zoom. The
+outbox and any open dialog stay in place. Box positions refer to the layout
+at the time of review and may point to different content after a rebuild.
+
+The usual presence controls apply. In the viewer, cursor positions are
+fractions of the PDF page under the pointer, so they follow the content
+when other reviewers use a different zoom. Moving outside a page clears
+the cursor.
