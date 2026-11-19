@@ -6,12 +6,14 @@ import type { CommentDialog } from "./dialog";
 import type { OutboxEntry } from "./outbox";
 import type { PdfAnchor } from "./pdf-anchor";
 import { PdfPage, placeRectangle, rectangle } from "./pdf-page";
+import { findReadingPosition } from "./pdf-reading-position";
 import type { Ui } from "./ui";
 
 interface ViewPosition {
   page: number;
   y: number;
   x: number;
+  offset?: number;
 }
 
 interface Drag {
@@ -100,6 +102,7 @@ export class PdfViewer {
   private hoverRequest: Promise<void> | undefined;
   private gesture = 0;
   private draftMarker: { anchor: PdfAnchor; node: HTMLDivElement } | null = null;
+  private readingRestore: { position: ViewPosition; x: number; y: number } | undefined;
   private scrollFrame: number | undefined;
 
   constructor() {
@@ -114,13 +117,16 @@ export class PdfViewer {
     this.zoomInput?.addEventListener("change", () => {
       const value = this.zoomInput?.value;
       const position = this.position();
+      this.readingRestore = undefined;
       this.zoom = value === "fit" ? value : Number(value);
       this.resize(position);
     });
     window.addEventListener("resize", () => {
+      this.readingRestore = undefined;
       if (this.zoom === "fit") this.resize(this.position());
     });
     window.addEventListener("scroll", () => {
+      this.activeReadingRestore();
       this.scrollFrame ??= requestAnimationFrame(() => {
         this.scrollFrame = undefined;
         if (this.pageInput !== null && document.activeElement !== this.pageInput) {
@@ -187,7 +193,7 @@ export class PdfViewer {
         return new PdfPage(number, first, () => pdf.getPage(number), () => {
           const page = this.byNumber.get(number);
           if (page === undefined || this.document !== loading) return;
-          const position = this.position();
+          const position = this.activeReadingRestore() ?? this.position();
           page.resize(this.zoom, this.availableWidth());
           this.drawComments();
           page.render();
@@ -196,7 +202,9 @@ export class PdfViewer {
           if (this.hoverPoint?.page.number === number && this.document === loading) this.updateHover();
         });
       });
-      const position = this.position();
+      const position = this.document === null ? this.position()
+        : await this.rebuildPosition(pages, request.signal);
+      request.signal.throwIfAborted();
       const previous = this.document;
       this.loading = null;
       this.document = loading;
@@ -217,6 +225,25 @@ export class PdfViewer {
     }
   }
 
+  private async rebuildPosition(pages: PdfPage[], signal: AbortSignal): Promise<ViewPosition> {
+    const position = this.position();
+    const page = this.byNumber.get(position.page);
+    if (page === undefined) return position;
+
+    const scroll = new AbortController();
+    const x = window.scrollX;
+    const y = window.scrollY;
+    const moved = (): boolean => window.scrollX !== x || window.scrollY !== y;
+    const onScroll = (): void => { if (moved()) scroll.abort(); };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    const match = await findReadingPosition(page, this.scrollEdge(), pages,
+      AbortSignal.any([signal, scroll.signal]))
+      .catch(() => undefined)
+      .finally(() => { window.removeEventListener("scroll", onScroll); });
+    if (scroll.signal.aborted || moved()) return this.position();
+    return match === undefined ? position : { ...match, x: position.x };
+  }
+
   private replacePages(pages: PdfPage[], position: ViewPosition): void {
     this.cancelDrag();
     this.clearHover();
@@ -231,6 +258,7 @@ export class PdfViewer {
       this.pages.set(page.element, page);
       this.byNumber.set(page.number, page);
     }
+    this.readingRestore = undefined;
     this.container?.replaceChildren(...this.pages.keys());
     this.resize(position);
     for (const page of this.pages.keys()) this.observer.observe(page);
@@ -280,12 +308,26 @@ export class PdfViewer {
     this.restorePosition(position);
   }
 
+  private activeReadingRestore(): ViewPosition | undefined {
+    const restore = this.readingRestore;
+    if (restore?.x !== window.scrollX || restore.y !== window.scrollY) {
+      this.readingRestore = undefined;
+      return undefined;
+    }
+    return restore.position;
+  }
+
   private restorePosition(position: ViewPosition): void {
     const rect = this.byNumber.get(Math.min(position.page, this.pages.size))
       ?.element.getBoundingClientRect();
     if (rect !== undefined) {
       window.scrollBy(position.x === 0 ? -window.scrollX : rect.left + position.x * rect.width,
-        rect.top + position.y * rect.height - this.scrollEdge());
+        rect.top + position.y * rect.height - this.scrollEdge() - (position.offset ?? 0));
+      if (position.offset !== undefined) {
+        // Unmeasured pages can resize above the matched line after the swap.
+        // Keep targeting that line until the reader moves.
+        this.readingRestore = { position, x: window.scrollX, y: window.scrollY };
+      }
     }
   }
 

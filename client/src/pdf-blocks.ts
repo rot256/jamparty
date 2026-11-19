@@ -17,7 +17,7 @@ const MAX_OPERATORS = 24000;
 const MAX_IMAGES = 512;
 const MAX_DEPTH = 64;
 
-function nextTask(): Promise<void> {
+export function nextTask(): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, 0); });
 }
 
@@ -63,7 +63,7 @@ function textRun(item: TextItem, style: TextStyle | undefined): Run | undefined 
   };
 }
 
-async function readRuns(page: PDFPageProxy, signal: AbortSignal): Promise<Run[]> {
+export async function readRuns(page: PDFPageProxy, signal: AbortSignal): Promise<Run[]> {
   const stream = page.streamTextContent() as ReadableStream<TextContent>;
   const reader = stream.getReader();
   const cancel = (): void => { void reader.cancel().catch(() => {}); };
@@ -171,8 +171,9 @@ async function imageBounds(ops: PDFOperatorList, signal: AbortSignal): Promise<B
 
 export async function detectPdfBlocks(
   page: PDFPageProxy, ops: PDFOperatorList | undefined, signal: AbortSignal,
+  runsRequest: Promise<Run[]>,
 ): Promise<PdfBlock[]> {
-  const runs = await readRuns(page, signal).catch(() => []);
+  const runs = await runsRequest.catch(() => []);
   signal.throwIfAborted();
   const images = ops === undefined ? [] : await imageBounds(ops, signal);
   const lines = linesFor(runs.filter((run) => run.horizontal));

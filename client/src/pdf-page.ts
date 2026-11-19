@@ -3,8 +3,8 @@ import type { PDFPageProxy, PageViewport, RenderTask } from "pdfjs-dist";
 import type { PDFOperatorList } from "pdfjs-dist/types/src/display/api";
 
 import { parsePdfAnchor, type PdfAnchor } from "./pdf-anchor";
-import { detectPdfBlocks, type PdfBlock } from "./pdf-blocks";
-import type { Bounds } from "./pdf-layout";
+import { detectPdfBlocks, readRuns, type PdfBlock } from "./pdf-blocks";
+import { linesFor, type Bounds, type Run } from "./pdf-layout";
 
 interface Rectangle {
   left: number;
@@ -46,6 +46,7 @@ export class PdfPage {
   private renderTask: RenderTask | null = null;
   private textLayer: TextLayer | null = null;
   private operators: PDFOperatorList | undefined;
+  private runs: Run[] | undefined;
   private blocks: PdfBlock[] | undefined;
   private blockRequest: { controller: AbortController; promise: Promise<void> } | undefined;
 
@@ -82,6 +83,7 @@ export class PdfPage {
     else {
       this.blockRequest?.controller.abort();
       this.blockRequest = undefined;
+      this.runs = undefined;
       this.blocks = undefined;
       this.clear();
       // Cancel drawing first. PDF.js defers cleanup if the operator stream is still active.
@@ -160,12 +162,42 @@ export class PdfPage {
     });
   }
 
+  private async textRuns(page: PDFPageProxy, signal: AbortSignal): Promise<Run[]> {
+    signal.throwIfAborted();
+    if (this.runs !== undefined) return this.runs;
+    const runs = await readRuns(page, signal);
+    signal.throwIfAborted();
+    if (this.visible) this.runs = runs;
+    return runs;
+  }
+
+  async readingLines(signal: AbortSignal): Promise<{ text: string; top: number; bottom: number }[]> {
+    signal.throwIfAborted();
+    if (this.page === null && this.element.isConnected) return [];
+    // Search pages are detached. Load their actual dimensions before insertion.
+    const page = this.page ?? await this.getPage();
+    if (this.page === null) this.setPage(page);
+    const runs = await this.textRuns(page, signal);
+    const lines = linesFor(runs.filter((run) => run.horizontal));
+    lines.push(...runs.filter((run) => !run.horizontal));
+    return lines.map(({ bounds: [left, bottom, right, top], text }) => {
+      const [, y1] = this.natural.convertToViewportPoint(left, bottom) as [number, number];
+      const [, y2] = this.natural.convertToViewportPoint(right, top) as [number, number];
+      return {
+        text, top: Math.min(y1, y2) / this.natural.height,
+        bottom: Math.max(y1, y2) / this.natural.height,
+      };
+    }).filter(({ top, bottom }) => top >= 0 && bottom <= 1)
+      .sort((a, b) => a.top - b.top);
+  }
+
   prepareBlocks(): Promise<void> | undefined {
     const page = this.page;
     if (this.blocks !== undefined || !this.visible || this.element.dataset.rendered !== "true" || page === null) return;
     if (this.blockRequest !== undefined) return this.blockRequest.promise;
     const controller = new AbortController();
-    const promise = detectPdfBlocks(page, this.operators, controller.signal).then((blocks) => {
+    const runs = this.textRuns(page, controller.signal);
+    const promise = detectPdfBlocks(page, this.operators, controller.signal, runs).then((blocks) => {
       if (!controller.signal.aborted) this.blocks = blocks;
     }).catch(() => {
       if (!controller.signal.aborted) this.blocks = [];

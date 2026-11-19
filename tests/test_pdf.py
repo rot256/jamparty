@@ -1,6 +1,7 @@
 """The joiner's PDF viewer, anchors and live rebuilds."""
 
 from base64 import b64decode
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -709,3 +710,115 @@ def test_pdf_block_selection(tmp_path: Path, page: Page, tagged: bool) -> None:
         page.keyboard.press("Escape")
         expect(hover).to_have_count(0)
         assert page.locator("html").get_attribute("data-pdf-requested-tree") is None
+
+
+def reading_pdf(pages: Sequence[tuple[int, int, list[str]]]) -> bytes:
+    children = " ".join(f"{4 + 2 * i} 0 R" for i in range(len(pages)))
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{children}] /Count {len(pages)} >>".encode(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for i, (height, top, lines) in enumerate(pages):
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 {height}] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {5 + 2 * i} 0 R >>".encode()
+        )
+        commands = [
+            f"BT /F1 18 Tf 72 {height - top - 30 * row} Td ({line}) Tj ET"
+            for row, line in enumerate(lines)
+        ]
+        objects.append(pdf_stream(b"", "\n".join(commands).encode()))
+    return make_pdf(objects)
+
+
+@pytest.mark.parametrize("change", ["paragraph", "page", "delete", "scroll", "shrink"])
+def test_pdf_rebuild_reading_position(tmp_path: Path, page: Page, change: str) -> None:
+    site = tmp_path / "build"
+    site.mkdir()
+    pdf = site / "reading.pdf"
+    title = "The telescope captured a remarkable image."
+    chapter = ["Notes from a clear winter night.", title, "Several stars were visible."]
+    cover = (792, 140, ["Cover sheet"])
+    old_page = 20 if change == "shrink" else 2
+    _ = pdf.write_bytes(reading_pdf([cover] * (old_page - 1) + [(792, 300, chapter)]))
+    if change == "scroll":
+        page.add_init_script("""(() => {
+          const send = Worker.prototype.postMessage;
+          Worker.prototype.postMessage = function (message, ...args) {
+            if (message.action === "GetTextContent" &&
+                document.documentElement.dataset.scrollOnSearch === "yes") {
+              delete document.documentElement.dataset.scrollOnSearch;
+              window.scrollBy(0, 120);
+              document.documentElement.dataset.scrolledTo = String(window.scrollY);
+            }
+            return send.call(this, message, ...args);
+          };
+        })();""")
+
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(f"{joined.url.rstrip('/')}/reading.pdf")
+        page.locator("#pdf-zoom").select_option("1")
+        jump = page.locator("#pdf-page")
+        jump.fill(str(old_page))
+        jump.press("Tab")
+        sheet = page.locator(f"#jamparty-pdf-page-{old_page}")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        line = sheet.get_by_text(title, exact=True)
+        _ = line.evaluate(
+            "line => window.scrollBy(0, line.getBoundingClientRect().top - 68)"
+        )
+        before = line.bounding_box()
+        assert before is not None
+        scroll = float(page.evaluate("window.scrollY"))
+
+        inserted = (930, 180, ["A new prefix changes the pagination.", title])
+        revised_title = "The tele-scope captured a remarkable image."
+        shifted = (960, 480, [chapter[0], revised_title, chapter[2]])
+        updated = site / "reading.tmp"
+        if change == "shrink":
+            pages = [cover] * 5 + [(792, 300, chapter)] + [cover] * 4
+        elif change == "delete":
+            pages = [cover, (792, 450, [chapter[0], "The original line was removed."])]
+        elif change == "paragraph":
+            pages = [cover, (792, 360, ["An extra paragraph.", *chapter])]
+        elif change == "page":
+            pages = [cover, inserted, shifted]
+        else:
+            pages = [cover, (792, 480, ["An extra paragraph.", *chapter])]
+            _ = page.evaluate("document.documentElement.dataset.scrollOnSearch = 'yes'")
+        _ = updated.write_bytes(reading_pdf(pages))
+        _ = updated.replace(pdf)
+
+        if change in ("paragraph", "page"):
+            destination = "3" if change == "page" else "2"
+            moved = page.locator(f"#jamparty-pdf-page-{destination}").get_by_text(
+                revised_title if change == "page" else title, exact=True
+            )
+            expect(moved).to_be_visible()
+            expect(jump).to_have_value(destination)
+            after = moved.bounding_box()
+            assert after is not None
+            assert after["y"] == pytest.approx(before["y"], abs=2)
+        elif change == "shrink":
+            expect(page.locator("#pdf-count")).to_have_text("of 10")
+            expect(page.locator("#jamparty-pdf-page-10")).to_have_attribute(
+                "data-rendered", "true"
+            )
+            expect(jump).to_have_value("10")
+        elif change == "delete":
+            expect(sheet.get_by_text("The original line was removed.")).to_be_visible()
+            assert float(page.evaluate("window.scrollY")) == pytest.approx(
+                scroll, abs=2
+            )
+        else:
+            expect(sheet.get_by_text("An extra paragraph.")).to_be_visible()
+            scrolled_to = page.locator("html").get_attribute("data-scrolled-to")
+            assert scrolled_to is not None
+            assert float(scrolled_to) == pytest.approx(scroll + 120, abs=2)
+            assert float(page.evaluate("window.scrollY")) == pytest.approx(
+                float(scrolled_to), abs=2
+            )

@@ -334,9 +334,12 @@ comment when there is no selection.
 
 Your comments in the outbox have blue outlines at their PDF anchors, and
 the list labels them by PDF page number. When the PDF changes in a live
-share, the viewer keeps the current page, scroll position and zoom. The
-outbox and any open dialog stay in place. Box positions refer to the layout
-at the time of review and may point to different content after a rebuild.
+share, the viewer keeps the same text at the same height when it finds a
+clear match nearby, even if the text moves to another page. Otherwise it
+restores the page and scroll position. Zoom stays in place, and scrolling
+during the search takes precedence. The outbox and any open dialog stay
+in place. Box positions refer to the layout at the time of review and may
+point to different content after a rebuild.
 
 The usual presence controls apply. In the viewer, cursor positions are
 fractions of the PDF page under the pointer, so they follow the content
