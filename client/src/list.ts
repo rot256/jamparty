@@ -111,8 +111,10 @@ export class CommentList {
       row.className = "row";
       const where = document.createElement("span");
       where.className = "where";
-      where.textContent = `${shortSelector(entry.draft.selector)} · ${relativeTime(entry.at, now)}`;
-      where.title = entry.draft.selector || "the whole page";
+      const target = entry.draft.pdf === undefined
+        ? shortSelector(entry.draft.selector) : `PDF page ${entry.draft.pdf.page}`;
+      where.textContent = `${target} · ${relativeTime(entry.at, now)}`;
+      where.title = entry.draft.pdf === undefined ? entry.draft.selector || "the whole page" : target;
       const state = document.createElement("span");
       state.className = "state";
       state.textContent = stateText(shown);

@@ -15,6 +15,7 @@
 import { parseAttachments } from "./attachments";
 import { JOINER_KEY, MAX_OUTBOX, OUTBOX_KEY } from "./config";
 import type { CommentOutcome, Submission } from "./generated/api";
+import { parsePdfAnchor } from "./pdf-anchor";
 import { isRecord } from "./json";
 
 /** A comment as the page hands it to the joiner, without its ref. */
@@ -49,8 +50,10 @@ function parseDraft(value: unknown): Draft | null {
   }
   const attachments = value.attachments === undefined ? [] : parseAttachments(value.attachments);
   if (attachments === null) return null;
+  const pdf = parsePdfAnchor(value.pdf);
   return {
     page,
+    ...(pdf === undefined ? {} : { pdf }),
     selector,
     selectedText: typeof selectedText === "string" ? selectedText : null,
     comment,

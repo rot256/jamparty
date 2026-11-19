@@ -16,7 +16,7 @@ cargo deny check
 npm ci
 npm run lint
 npm run typecheck
-npm run build && git diff --exit-code -- assets/client.js
+npm run build && git diff --exit-code -- assets
 uv run ruff format --check .
 uv run ruff check .
 uv run basedpyright

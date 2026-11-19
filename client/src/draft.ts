@@ -4,10 +4,11 @@
 // dialog closes.
 
 import { DRAFT_KEY } from "./config";
+import { parsePdfAnchor, type PdfAnchor } from "./pdf-anchor";
 import { isRecord } from "./json";
 
 /** What the dialog was opened on. */
-export type DraftKind = "element" | "page" | "answer";
+export type DraftKind = "element" | "page" | "answer" | "pdf";
 
 /** What the dialog was opened on, as it was opened. */
 export interface DraftTarget {
@@ -23,6 +24,7 @@ export interface SavedDraft {
   /** The target was gone after a reload: it goes to the page, and stays so. */
   unavailable: boolean;
   selectedText: string | null;
+  pdf?: PdfAnchor;
   comment: string;
   /** File contents only live in the open dialog. */
   fileCount: number;
@@ -33,6 +35,7 @@ function parseKind(value: unknown): DraftKind | null {
     case "element":
     case "page":
     case "answer":
+    case "pdf":
       return value;
     default:
       return null;
@@ -52,8 +55,10 @@ function parse(value: unknown): SavedDraft | null {
   const { page, unavailable, selectedText, comment } = value;
   const target = parseTarget(value.target);
   if (typeof page !== "string" || typeof comment !== "string" || target === null) return null;
+  const pdf = parsePdfAnchor(value.pdf);
   return {
     page,
+    ...(pdf === undefined ? {} : { pdf }),
     target,
     unavailable: unavailable === true,
     selectedText: typeof selectedText === "string" ? selectedText : null,

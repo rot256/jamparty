@@ -24,7 +24,7 @@ on:
       - src/core/port.rs
       - src/protocol/**
       - client/**
-      - assets/client.js
+      - "assets/**"
       - Cargo.toml
       - Cargo.lock
       # The tests, their harness, fixtures and Python dependencies.

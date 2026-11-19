@@ -107,7 +107,10 @@ export class CursorSender {
     this.latest = null;
     if (latest === null || !this.active) return;
     const position = this.position(latest.x, latest.y);
-    if (position === null) return;
+    if (position === null) {
+      this.left();
+      return;
+    }
     this.lastSent = performance.now();
     this.present = this.send(position);
   }
@@ -128,9 +131,12 @@ export class CursorSender {
       .elementsFromPoint(x, y)
       .find((candidate) => candidate !== this.ui.host && !this.ui.host.contains(candidate));
     if (element === undefined) return null;
-    const selector = cssSelector(element);
+    const pdf = document.documentElement.hasAttribute("data-jamparty-pdf");
+    const target = pdf ? element.closest(".pdf-page") : element;
+    if (target === null) return null;
+    const selector = cssSelector(target);
     if (selector.length > MAX_CURSOR_SELECTOR) return null;
-    const rect = element.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
     return {
       selector,
       x: fraction(x - rect.left, rect.width),

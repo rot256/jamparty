@@ -511,6 +511,9 @@ var Connection = class {
   link = null;
   /** The share is reachable through the joiner, status line or not. */
   reachable = false;
+  get isReachable() {
+    return this.reachable;
+  }
   get view() {
     let colour = "green";
     let text = "connected";
@@ -879,7 +882,10 @@ var CursorSender = class {
     this.latest = null;
     if (latest === null || !this.active) return;
     const position = this.position(latest.x, latest.y);
-    if (position === null) return;
+    if (position === null) {
+      this.left();
+      return;
+    }
     this.lastSent = performance.now();
     this.present = this.send(position);
   }
@@ -896,9 +902,12 @@ var CursorSender = class {
   position(x, y) {
     const element = document.elementsFromPoint(x, y).find((candidate) => candidate !== this.ui.host && !this.ui.host.contains(candidate));
     if (element === void 0) return null;
-    const selector = cssSelector(element);
+    const pdf = document.documentElement.hasAttribute("data-jamparty-pdf");
+    const target = pdf ? element.closest(".pdf-page") : element;
+    if (target === null) return null;
+    const selector = cssSelector(target);
     if (selector.length > MAX_CURSOR_SELECTOR) return null;
-    const rect = element.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
     return {
       selector,
       x: fraction(x - rect.left, rect.width),
@@ -1081,12 +1090,23 @@ async function upload(file) {
   throw new Error("Could not upload the attachment. Try again.");
 }
 
+// client/src/pdf-anchor.ts
+function parsePdfAnchor(value) {
+  if (!isRecord(value) || typeof value.page !== "number" || !Number.isInteger(value.page) || value.page < 1 || value.page > 4294967295 || !isRecord(value.box)) return void 0;
+  const { x0, y0, x1, y1 } = value.box;
+  if (typeof x0 !== "number" || typeof y0 !== "number" || typeof x1 !== "number" || typeof y1 !== "number" || !(0 <= x0 && x0 < x1 && x1 <= 14400 && 0 <= y0 && y0 < y1 && y1 <= 14400)) {
+    return void 0;
+  }
+  return { page: value.page, box: { x0, y0, x1, y1 } };
+}
+
 // client/src/draft.ts
 function parseKind(value) {
   switch (value) {
     case "element":
     case "page":
     case "answer":
+    case "pdf":
       return value;
     default:
       return null;
@@ -1104,8 +1124,10 @@ function parse(value) {
   const { page, unavailable, selectedText, comment } = value;
   const target = parseTarget(value.target);
   if (typeof page !== "string" || typeof comment !== "string" || target === null) return null;
+  const pdf = parsePdfAnchor(value.pdf);
   return {
     page,
+    ...pdf === void 0 ? {} : { pdf },
     target,
     unavailable: unavailable === true,
     selectedText: typeof selectedText === "string" ? selectedText : null,
@@ -1151,6 +1173,7 @@ function labelFor(kind) {
   switch (kind) {
     case "element":
     case "page":
+    case "pdf":
       return ELEMENT_LABEL;
     case "answer":
       return ANSWER_LABEL;
@@ -1309,6 +1332,9 @@ var CommentDialog = class {
     const captured = captureTarget(target, selector);
     this.show(captured, x, y, { kind, selector: captured.selector });
   }
+  openPdf(captured, x, y) {
+    this.show(captured, x, y, { kind: "pdf", selector: captured.selector });
+  }
   openPage() {
     const x = window.innerWidth / 2;
     const y = window.innerHeight / 3;
@@ -1324,7 +1350,7 @@ var CommentDialog = class {
     if (draft === null || this.ui.dialog.open) return;
     const { target, selectedText } = draft;
     let element = null;
-    if (target.kind !== "page" && !draft.unavailable) {
+    if (target.kind !== "page" && target.kind !== "pdf" && !draft.unavailable) {
       try {
         element = find(target.selector);
       } catch {
@@ -1340,8 +1366,11 @@ var CommentDialog = class {
       x = rect.left;
       y = rect.bottom;
     }
+    if (target.kind === "pdf" && draft.pdf !== void 0) {
+      captured = { ...captured, selector: target.selector, pdf: draft.pdf };
+    }
     this.show(captured, x, y, target);
-    this.unavailable = target.kind !== "page" && element === null;
+    this.unavailable = target.kind !== "page" && target.kind !== "pdf" && element === null;
     this.ui.textarea.value = draft.comment;
     this.missingFiles = draft.fileCount;
     this.showFiles();
@@ -1357,6 +1386,7 @@ var CommentDialog = class {
       target: this.target,
       unavailable: this.unavailable,
       selectedText: captured.selectedText,
+      ...captured.pdf === void 0 ? {} : { pdf: captured.pdf },
       comment: this.ui.textarea.value,
       fileCount: this.files.length + this.missingFiles
     });
@@ -1471,6 +1501,7 @@ var CommentDialog = class {
       page: captured.page,
       selector: captured.selector,
       selectedText: captured.selectedText,
+      ...captured.pdf === void 0 ? {} : { pdf: captured.pdf },
       comment,
       ...attachments.length > 0 ? { attachments } : {}
     };
@@ -1688,8 +1719,9 @@ var CommentList = class {
       row.className = "row";
       const where = document.createElement("span");
       where.className = "where";
-      where.textContent = `${shortSelector(entry.draft.selector)} · ${relativeTime(entry.at, now)}`;
-      where.title = entry.draft.selector || "the whole page";
+      const target = entry.draft.pdf === void 0 ? shortSelector(entry.draft.selector) : `PDF page ${entry.draft.pdf.page}`;
+      where.textContent = `${target} · ${relativeTime(entry.at, now)}`;
+      where.title = entry.draft.pdf === void 0 ? entry.draft.selector || "the whole page" : target;
       const state = document.createElement("span");
       state.className = "state";
       state.textContent = stateText(shown);
@@ -1801,8 +1833,10 @@ function parseDraft(value) {
   }
   const attachments = value.attachments === void 0 ? [] : parseAttachments(value.attachments);
   if (attachments === null) return null;
+  const pdf = parsePdfAnchor(value.pdf);
   return {
     page,
+    ...pdf === void 0 ? {} : { pdf },
     selector,
     selectedText: typeof selectedText === "string" ? selectedText : null,
     comment,
@@ -3215,7 +3249,7 @@ var Ui = class _Ui {
 };
 
 // client/src/main.ts
-function install() {
+function install(pdf) {
   const ui = Ui.install();
   if (ui === null) return;
   let url = pageUrl();
@@ -3262,8 +3296,9 @@ function install() {
     (position) => socket.send({ type: "cursor", position })
   );
   const layer = new CursorLayer(ui);
-  const editMode = new EditMode(ui, dialog);
-  editMode.onPagePress = () => {
+  const editMode = pdf === void 0 ? new EditMode(ui, dialog) : null;
+  pdf?.bind(ui, dialog);
+  if (editMode !== null) editMode.onPagePress = () => {
     panel.close();
     list.close();
   };
@@ -3275,6 +3310,7 @@ function install() {
   };
   outbox.onChange = () => {
     list.render();
+    pdf?.showComments(outbox.entries);
   };
   outbox.onAttachmentUnavailable = (error) => {
     ui.showToast(error);
@@ -3288,7 +3324,11 @@ function install() {
   const connection = new Connection((view, reached) => {
     list.showState(view);
     if (view.colour !== "green") layer.clear();
-    if (reached) void outbox.resendAll();
+    if (!connection.isReachable) pdf?.suspend();
+    if (reached) {
+      void outbox.resendAll();
+      pdf?.ensureLoaded();
+    }
   });
   const showPeople = (people) => {
     here = people;
@@ -3302,7 +3342,13 @@ function install() {
     outbox.sync(undelivered);
   };
   const onRevision = (revision) => {
-    if (shownRevision === null || revision === null || revision <= shownRevision) return;
+    if (revision === null) return;
+    if (pdf !== void 0) {
+      pdf.requestRevision(revision);
+      if (connection.isReachable) pdf.ensureLoaded();
+      return;
+    }
+    if (shownRevision === null || revision <= shownRevision) return;
     shownRevision = revision;
     dialog.reloadWhenClosed();
   };
@@ -3388,6 +3434,10 @@ function install() {
     if (!commenting()) return;
     if (event.shiftKey || event.composedPath().includes(ui.host)) return;
     if (!(event.target instanceof Element)) return;
+    if (pdf !== void 0) {
+      if (pdf.commentOnSelection(event)) event.preventDefault();
+      return;
+    }
     event.preventDefault();
     dialog.openElement(event.target, event.clientX, event.clientY);
   }, true);
@@ -3412,14 +3462,18 @@ function install() {
     if (event.defaultPrevented || event.isComposing || event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
     if (isEditing(event)) return;
     event.preventDefault();
-    dialog.openPage();
+    if (!pdf?.commentOnSelection()) dialog.openPage();
   }, true);
-  list.render();
+  outbox.onChange();
   if (loadDraft()?.target.kind !== "answer") restoreDraft();
   socket.start();
 }
+
+// client/src/index.ts
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", install, { once: true });
+  document.addEventListener("DOMContentLoaded", () => {
+    install();
+  }, { once: true });
 } else {
   install();
 }

@@ -16,6 +16,7 @@
 //! page's client is always its joiner's. Everything under `/_jamparty/api/`
 //! is the joiner's own too: the page's socket (GET with an upgrade), the
 //! attachment upload (POST), and a 404 for any other path in the prefix.
+//! Top-level PDF navigations and the viewer's assets are local too.
 //! Everything else goes to the share.
 
 use crate::{
@@ -25,6 +26,13 @@ use crate::{
 
 /// Every response carries `Content-Security-Policy` with this value.
 pub(crate) const FRAME_ANCESTORS: &str = "frame-ancestors 'self'";
+
+/// The joiner’s PDF viewer assets.
+pub(crate) const PDF_VIEWER_PATH: &str = "/_jamparty/pdf.js";
+pub(crate) const PDF_WORKER_PATH: &str = "/_jamparty/pdf-worker.js";
+pub(crate) const PDF_STYLE_PATH: &str = "/_jamparty/pdf.css";
+
+pub(crate) const PDF_CMAP_PREFIX: &str = "/_jamparty/pdf-cmaps/";
 
 /// The browser client the share's pages load.
 pub(crate) const CLIENT_PATH: &str = "/_jamparty/client.js";
@@ -79,6 +87,11 @@ pub(crate) struct RequestFacts<'a> {
 pub(crate) enum Route {
     /// GET or HEAD the browser client.
     Client,
+    PdfViewer,
+    PdfScript,
+    PdfWorker,
+    PdfStyle,
+    PdfCMap,
     /// GET with an upgrade: the page's WebSocket.
     Socket,
     /// POST the bytes of one comment attachment.
@@ -184,22 +197,42 @@ pub(crate) fn is_navigation(facts: &RequestFacts<'_>) -> bool {
         && facts.sec_fetch_dest == Some("document")
 }
 
+/// Whether the raw path has a PDF extension.
+pub(crate) fn is_pdf_path(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("pdf"))
+}
+
 fn route(facts: &RequestFacts<'_>) -> Result<Route, Refusal> {
     let (route, method, upgrade) = match facts.path {
-        CLIENT_PATH => {
+        CLIENT_PATH | PDF_VIEWER_PATH | PDF_WORKER_PATH | PDF_STYLE_PATH => {
             let read = match facts.method {
                 Method::Get | Method::Head => facts.upgrade == Upgrade::No,
                 Method::Post | Method::Other => false,
             };
             return if read {
-                Ok(Route::Client)
+                Ok(match facts.path {
+                    PDF_VIEWER_PATH => Route::PdfScript,
+                    PDF_WORKER_PATH => Route::PdfWorker,
+                    PDF_STYLE_PATH => Route::PdfStyle,
+                    _ => Route::Client,
+                })
             } else {
                 Err(Refusal::MethodNotAllowed)
+            };
+        }
+        path if path.starts_with(PDF_CMAP_PREFIX) => {
+            return match facts.method {
+                Method::Get | Method::Head if facts.upgrade == Upgrade::No => Ok(Route::PdfCMap),
+                Method::Get | Method::Head | Method::Post | Method::Other => {
+                    Err(Refusal::MethodNotAllowed)
+                }
             };
         }
         UPLOAD_PATH => (Route::Upload, Method::Post, Upgrade::No),
         SOCKET_PATH => (Route::Socket, Method::Get, Upgrade::Yes),
         path if path.starts_with(API_PREFIX) => return Ok(Route::Unknown),
+        path if is_navigation(facts) && is_pdf_path(path) => return Ok(Route::PdfViewer),
         _ => return Ok(Route::Proxy),
     };
     if facts.method == method && facts.upgrade == upgrade {

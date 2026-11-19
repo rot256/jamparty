@@ -5,7 +5,7 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   js.configs.recommended,
   {
-    files: ["eslint.config.js"],
+    files: ["eslint.config.js", "client/build/*.mjs"],
     languageOptions: { globals: globals.node },
   },
   {
