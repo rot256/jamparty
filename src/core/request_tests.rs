@@ -420,3 +420,29 @@ proptest! {
         prop_assert_eq!(accepted, allowed);
     }
 }
+
+#[test]
+fn only_top_level_pdf_navigations_open_the_viewer() {
+    let path = "/docs/Paper.PdF";
+    assert_eq!(
+        local().decide(&nav(path, "cross-site")),
+        Ok(Route::PdfViewer)
+    );
+    let fetch = fetch(Method::Get, path);
+    assert_eq!(local().decide(&fetch), Ok(Route::Proxy));
+    for dest in ["iframe", "embed", "object", "image", "script"] {
+        assert_eq!(
+            local().decide(&RequestFacts {
+                sec_fetch_dest: Some(dest),
+                ..fetch
+            }),
+            Ok(Route::Proxy),
+            "{dest}"
+        );
+    }
+    assert_eq!(local().decide(&bare(Method::Get, path)), Ok(Route::Proxy));
+    assert_eq!(
+        local().decide(&nav("/file.pdf/child", "none")),
+        Ok(Route::Proxy)
+    );
+}

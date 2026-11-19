@@ -222,6 +222,7 @@ fn maximal_comments_fit_in_bounded_recv_batches() {
         page: "\0".repeat(MAX_PAGE).try_into().unwrap(),
         selector: "\0".repeat(MAX_SELECTOR).try_into().unwrap(),
         choice: None,
+        pdf: None,
         selected_text: Some("\0".repeat(MAX_SELECTED_TEXT)),
         comment: "\0".repeat(MAX_COMMENT),
     })

@@ -40,8 +40,8 @@ use crate::{
     },
     core::{
         request::{
-            FRAME_ANCESTORS, LocalOrigin, Method, Refusal, RequestFacts, Route, Upgrade,
-            is_navigation,
+            FRAME_ANCESTORS, LocalOrigin, Method, PDF_CMAP_PREFIX, Refusal, RequestFacts, Route,
+            Upgrade, is_navigation, is_pdf_path,
         },
         text::{OneLineReport, Untrusted},
     },
@@ -180,9 +180,25 @@ async fn handle(
 ) -> Response<AppBody> {
     let request_facts = facts(&request);
     let page_load = is_navigation(&request_facts);
+    let pdf = is_pdf_path(request_facts.path);
     let decision = origin.decide(&request_facts);
     let mut response = match decision {
         Ok(Route::Client) => javascript_response(CLIENT_JS),
+        Ok(Route::PdfViewer) => pdf_viewer_response(origin),
+        Ok(Route::PdfScript) => javascript_response(include_str!("../../assets/pdf.js")),
+        Ok(Route::PdfWorker) => {
+            let mut response = javascript_response(include_str!("../../assets/pdf-worker.js"));
+            response.headers_mut().insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("default-src 'none'"),
+            );
+            response
+        }
+        Ok(Route::PdfStyle) => pdf_asset(
+            include_str!("../../assets/pdf.css"),
+            "text/css; charset=utf-8",
+        ),
+        Ok(Route::PdfCMap) => pdf_cmap_response(request_facts.path),
         Ok(Route::Socket) => socket::open(request, session),
         Ok(Route::Upload) => upload(request, session, proxy, connect_wait)
             .await
@@ -199,9 +215,73 @@ async fn handle(
         },
         Err(refusal) => refused(refusal),
     };
+    if pdf {
+        // A cached response for a fetch must not satisfy a navigation.
+        response.headers_mut().append(
+            header::VARY,
+            HeaderValue::from_static("Sec-Fetch-Dest, Sec-Fetch-Mode"),
+        );
+    }
     response.headers_mut().append(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(FRAME_ANCESTORS),
+    );
+    response
+}
+
+fn pdf_cmap_response(path: &str) -> Response<AppBody> {
+    fn cmap(name: &str) -> Option<&'static [u8]> {
+        let cmap_range = include!("../../assets/pdf-cmaps.rs");
+        let range = cmap_range(name)?;
+        include_bytes!("../../assets/pdf-cmaps.bin").get(range)
+    }
+
+    let Some(data) = path.strip_prefix(PDF_CMAP_PREFIX).and_then(cmap) else {
+        return RequestError::new(StatusCode::NOT_FOUND, "no such PDF CMap").into();
+    };
+    let mut response = Response::new(full_body(Bytes::from_static(data)));
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+fn pdf_viewer_response(origin: &LocalOrigin) -> Response<AppBody> {
+    let mut response = pdf_asset(
+        include_str!("../../assets/pdf.html"),
+        "text/html; charset=utf-8",
+    );
+    response.headers_mut().insert(
+        "cross-origin-opener-policy",
+        HeaderValue::from_static("noopener-allow-popups"),
+    );
+    let http = origin.origin();
+    let ws = http.replacen("http:", "ws:", 1);
+    let csp = format!(
+        "default-src 'none'; script-src {http}/_jamparty/pdf.js {http}/_jamparty/pdf-worker.js; \
+         worker-src {http}/_jamparty/pdf-worker.js; style-src 'self' 'unsafe-inline'; \
+         font-src blob:; img-src blob: data:; connect-src 'self' {ws}; \
+         base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    );
+    response.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_str(&csp)
+            .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'")),
+    );
+    response
+}
+
+fn pdf_asset(text: &'static str, content_type: &'static str) -> Response<AppBody> {
+    let mut response = javascript_response(text);
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
     );
     response
 }

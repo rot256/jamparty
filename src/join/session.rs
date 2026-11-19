@@ -235,6 +235,7 @@ impl Session {
             reference,
             page: on,
             selector,
+            pdf,
             selected_text,
             choice,
             comment,
@@ -243,6 +244,7 @@ impl Session {
         let draft = match Draft::try_from(DraftFields {
             page: on,
             selector,
+            pdf,
             selected_text,
             choice,
             comment,

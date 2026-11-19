@@ -30,6 +30,10 @@ export type CommentPage = string;
 
 export type CommentSelector = string;
 
+export type PdfBox = { x0: number, y0: number, x1: number, y1: number, };
+
+export type PdfAnchorFields = { page: number, box: PdfBox, };
+
 export type Revision = number;
 
 export type EndpointKey = string;
@@ -159,7 +163,7 @@ export type AttachmentName = string;
 
 export type Attachment = { "type": "file", file: ResourceId, name: AttachmentName, };
 
-export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage, selector: CommentSelector, selectedText: string | null, choice?: string, comment: string, attachments?: Array<Attachment>, };
+export type Submission = { n: RequestNumber, ref: CommentRef, page: CommentPage, selector: CommentSelector, pdf?: PdfAnchorFields, selectedText: string | null, choice?: string, comment: string, attachments?: Array<Attachment>, };
 
 export type Change = { n: RequestNumber, change: SettingsChange, };
 

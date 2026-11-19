@@ -19,6 +19,7 @@ function labelFor(kind: DraftKind): string {
   switch (kind) {
     case "element":
     case "page":
+    case "pdf":
       return ELEMENT_LABEL;
     case "answer":
       return ANSWER_LABEL;
@@ -183,6 +184,10 @@ export class CommentDialog {
     this.show(captured, x, y, { kind, selector: captured.selector });
   }
 
+  openPdf(captured: Captured, x: number, y: number): void {
+    this.show(captured, x, y, { kind: "pdf", selector: captured.selector });
+  }
+
   openPage(): void {
     const x = window.innerWidth / 2;
     const y = window.innerHeight / 3;
@@ -199,7 +204,7 @@ export class CommentDialog {
     if (draft === null || this.ui.dialog.open) return;
     const { target, selectedText } = draft;
     let element: Element | null = null;
-    if (target.kind !== "page" && !draft.unavailable) {
+    if (target.kind !== "page" && target.kind !== "pdf" && !draft.unavailable) {
       try {
         element = find(target.selector);
       } catch {
@@ -216,9 +221,12 @@ export class CommentDialog {
       x = rect.left;
       y = rect.bottom;
     }
+    if (target.kind === "pdf" && draft.pdf !== undefined) {
+      captured = { ...captured, selector: target.selector, pdf: draft.pdf };
+    }
     // Its title stays: a reply to an answer is one even if the answer is gone.
     this.show(captured, x, y, target);
-    this.unavailable = target.kind !== "page" && element === null;
+    this.unavailable = target.kind !== "page" && target.kind !== "pdf" && element === null;
     this.ui.textarea.value = draft.comment;
     this.missingFiles = draft.fileCount;
     this.showFiles();
@@ -235,6 +243,7 @@ export class CommentDialog {
       target: this.target,
       unavailable: this.unavailable,
       selectedText: captured.selectedText,
+      ...(captured.pdf === undefined ? {} : { pdf: captured.pdf }),
       comment: this.ui.textarea.value,
       fileCount: this.files.length + this.missingFiles,
     });
@@ -359,6 +368,7 @@ export class CommentDialog {
       page: captured.page,
       selector: captured.selector,
       selectedText: captured.selectedText,
+      ...(captured.pdf === undefined ? {} : { pdf: captured.pdf }),
       comment,
       ...(attachments.length > 0 ? { attachments } : {}),
     };

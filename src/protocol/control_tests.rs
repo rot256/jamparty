@@ -141,6 +141,7 @@ fn a_maximal_draft_fits_in_a_line() {
         page: escaped(MAX_PAGE).try_into().unwrap(),
         selector: escaped(MAX_SELECTOR).try_into().unwrap(),
         choice: None,
+        pdf: None,
         selected_text: Some(escaped(MAX_SELECTED_TEXT)),
         comment: format!("x{}", escaped(MAX_COMMENT - 1)),
     };

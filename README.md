@@ -38,6 +38,18 @@ jamparty join -          # read the token from stdin
 jamparty join <token> --port 8080  # serve on this port (default: the dev server's)
 ```
 
+## Review a PDF
+
+Open a shared `.pdf` URL in the joiner's browser. Select text and
+right-click it, or use the pen button to drag a box around a figure or
+equation. The comment reaches `jamparty recv` with its page number and
+coordinates. See [PDF anchors](docs/delivery.md#pdf-anchors).
+
+For LaTeX, run `latexmk -pdf -pvc -synctex=1 -outdir=build paper.tex` and
+`jamparty serve build`. Open `/paper.pdf` on the joiner URL. Rebuilds keep
+the reviewer's page, scroll position and zoom. The agent can use the
+matching SyncTeX output to look up the source.
+
 ## Answer (agent)
 
 ```sh

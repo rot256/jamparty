@@ -142,9 +142,14 @@ async fn serve_recv(
     };
     drop(listening);
     for comment in comments {
-        if lines::write(&mut write, &Envelope::from(AgentReply::Comment { comment }))
-            .await
-            .is_err()
+        if lines::write(
+            &mut write,
+            &Envelope::from(AgentReply::Comment {
+                comment: Box::new(comment),
+            }),
+        )
+        .await
+        .is_err()
         {
             return;
         }

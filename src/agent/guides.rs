@@ -43,6 +43,10 @@ const PREFER_SERVE: &str =
      hugo build --watch --destination <dir>
      vite build --watch --outDir <dir>
      npx @11ty/eleventy --watch --output=<dir>
+   For a LaTeX review, run `latexmk -pdf -pvc -synctex=1 -outdir=build paper.tex`
+   and share the build directory with `jamparty serve build`. Reviewers open
+   /paper.pdf in the joiner's browser. Keep the matching .synctex.gz for
+   source lookup when the PDF is regenerated.
    Proxy a dev server only when the site needs one (a backend, server-side
    rendering, or a tool that cannot build into a directory).
 ";
@@ -73,11 +77,19 @@ Comments are JSON, one object per comment:
                 use the path
   selector      CSS selector of the element; empty for a page comment;
                 `jamparty-agent:<id>` for a comment on one of your answers
+                PDF comments use a selector for the viewer's comment outline
+  pdf           optional: {page, box: {x0, y0, x1, y1}} in PDF points from
+                the top left. The PDF page number starts at 1.
   choice        optional: the chosen label of a multiple-choice question
   selectedText  the text they selected, if any
   comment       what they wrote, possibly empty with attachments
   attachments   omitted when empty; a file entry has this shape:
                 {"type":"file","file":"sha3:…","name":"report.pdf"}
+
+For a PDF anchor, use a point inside the box (for example its center):
+  synctex edit -o '<page>:<x>:<y>:<path/to/paper.pdf>'
+Look up the local PDF corresponding to the URL path and use the matching
+build's SyncTeX file. jamparty delivers coordinates and leaves SyncTeX to you.
 
 Fetch a file using the SHA3-256 id from its `file` field:
   jamparty fetch <sha3:id> -o <path>

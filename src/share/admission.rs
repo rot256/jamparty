@@ -84,6 +84,7 @@ mod tests {
             page: "/".to_owned().try_into().unwrap(),
             selector: "body".to_owned().try_into().unwrap(),
             choice: None,
+            pdf: None,
             selected_text: None,
             comment: "hi".to_owned(),
         })

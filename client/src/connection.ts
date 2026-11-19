@@ -25,6 +25,8 @@ export class Connection {
     private readonly changed: (view: ConnectionView, reached: boolean) => void,
   ) {}
 
+  get isReachable(): boolean { return this.reachable; }
+
   get view(): ConnectionView {
     let colour: Colour = "green";
     let text = "connected";

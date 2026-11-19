@@ -136,7 +136,7 @@ pub(crate) enum AgentRequest {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum AgentReply {
     Comment {
-        comment: Comment,
+        comment: Box<Comment>,
     },
     /// The batch is complete.
     End,

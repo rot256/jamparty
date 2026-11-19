@@ -17,9 +17,10 @@ import { Outbox } from "./outbox";
 import { type ChangeSettings, Panel, isEditing } from "./panel";
 import { forget, keep, missing, remember, remembered } from "./remembered";
 import { PageSocket, type Slice } from "./socket";
+import type { PdfViewer } from "./pdf-viewer";
 import { Ui } from "./ui";
 
-function install(): void {
+export function install(pdf?: PdfViewer): void {
   const ui = Ui.install();
   if (ui === null) return;
   let url = pageUrl();
@@ -69,15 +70,19 @@ function install(): void {
     (position) => socket.send({ type: "cursor", position }),
   );
   const layer = new CursorLayer(ui);
-  const editMode = new EditMode(ui, dialog);
-  editMode.onPagePress = () => {
+  const editMode = pdf === undefined ? new EditMode(ui, dialog) : null;
+  pdf?.bind(ui, dialog);
+  if (editMode !== null) editMode.onPagePress = () => {
     panel.close();
     list.close();
   };
 
   list.onOpen = () => { panel.close(); };
   panel.onOpen = () => { list.close(); };
-  outbox.onChange = () => { list.render(); };
+  outbox.onChange = () => {
+    list.render();
+    pdf?.showComments(outbox.entries);
+  };
   outbox.onAttachmentUnavailable = (error) => { ui.showToast(error); };
 
   const prompt = new NamePrompt(ui, changeSettings);
@@ -90,7 +95,11 @@ function install(): void {
   const connection = new Connection((view, reached) => {
     list.showState(view);
     if (view.colour !== "green") layer.clear();
-    if (reached) void outbox.resendAll();
+    if (!connection.isReachable) pdf?.suspend();
+    if (reached) {
+      void outbox.resendAll();
+      pdf?.ensureLoaded();
+    }
   });
 
   const showPeople = (people: Person[]): void => {
@@ -110,7 +119,13 @@ function install(): void {
   // Only a newer revision reloads: a hello from a socket that opened
   // again may carry the one this page already shows, or an older one.
   const onRevision = (revision: number | null): void => {
-    if (shownRevision === null || revision === null || revision <= shownRevision) return;
+    if (revision === null) return;
+    if (pdf !== undefined) {
+      pdf.requestRevision(revision);
+      if (connection.isReachable) pdf.ensureLoaded();
+      return;
+    }
+    if (shownRevision === null || revision <= shownRevision) return;
     shownRevision = revision;
     dialog.reloadWhenClosed();
   };
@@ -223,6 +238,10 @@ function install(): void {
     if (!commenting()) return;
     if (event.shiftKey || event.composedPath().includes(ui.host)) return;
     if (!(event.target instanceof Element)) return;
+    if (pdf !== undefined) {
+      if (pdf.commentOnSelection(event)) event.preventDefault();
+      return;
+    }
     event.preventDefault();
     dialog.openElement(event.target, event.clientX, event.clientY);
   }, true);
@@ -252,16 +271,10 @@ function install(): void {
     ) return;
     if (isEditing(event)) return;
     event.preventDefault();
-    dialog.openPage();
+    if (!pdf?.commentOnSelection()) dialog.openPage();
   }, true);
 
-  list.render();
+  outbox.onChange();
   if (loadDraft()?.target.kind !== "answer") restoreDraft();
   socket.start();
-}
-
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", install, { once: true });
-} else {
-  install();
 }

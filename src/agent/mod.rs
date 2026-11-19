@@ -31,7 +31,7 @@ pub(crate) async fn recv(stream: UnixStream, out: &mut impl Write) -> Result<usi
             .await?
             .context("the share stopped")?;
         match reply.message {
-            AgentReply::Comment { comment } => comments.push(comment),
+            AgentReply::Comment { comment } => comments.push(*comment),
             AgentReply::End => break,
             AgentReply::Error { error } => bail!("{error}"),
             AgentReply::Sent | AgentReply::Resource | AgentReply::ResourceMissing => {

@@ -1,6 +1,7 @@
 // What a comment is about: the element (or the whole page), its selector
 // and any selected text.
 
+import type { PdfAnchor } from "./pdf-anchor";
 import { MAX_SELECTED_TEXT } from "./generated/api";
 
 export interface Captured {
@@ -9,6 +10,7 @@ export interface Captured {
   page: string;
   selector: string;
   selectedText: string | null;
+  pdf?: PdfAnchor;
 }
 
 function truncate(value: string, length: number): string {
@@ -19,7 +21,12 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function selectedTextFor(target: Node): string | null {
+export function commentText(value: string): string | null {
+  const selected = normalizeText(value);
+  return selected ? truncate(selected, MAX_SELECTED_TEXT) : null;
+}
+
+export function selectedTextFor(target: Node): string | null {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
   try {
@@ -27,8 +34,7 @@ function selectedTextFor(target: Node): string | null {
   } catch {
     return null;
   }
-  const selected = normalizeText(selection.toString());
-  return selected ? truncate(selected, MAX_SELECTED_TEXT) : null;
+  return commentText(selection.toString());
 }
 
 function uniqueIdSelector(element: Element): string | null {

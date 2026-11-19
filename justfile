@@ -12,6 +12,9 @@ lint-js:
 typecheck-js:
     npm run typecheck
 
+test-js:
+    npm test
+
 bundle:
     npm run build
     git diff --exit-code -- assets/client.js
@@ -34,4 +37,4 @@ e2e:
 build:
     cargo build --release
 
-ci: fmt lint lint-js typecheck-js bundle fmt-python lint-python typecheck-python test e2e build
+ci: fmt lint lint-js typecheck-js test-js bundle fmt-python lint-python typecheck-python test e2e build
