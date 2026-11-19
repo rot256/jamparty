@@ -6,6 +6,7 @@
     "build": "esbuild client/src/index.ts --bundle --format=esm --target=es2022 --charset=utf8 --legal-comments=none --banner:js=\"// Generated from client/src by \\`npm run build\\`; do not edit.\" --outfile=assets/client.js && node client/build/pdf.mjs && esbuild client/src/pdf.css --minify --outfile=assets/pdf.css",
     "typecheck": "tsc --noEmit -p client",
     "lint": "eslint client eslint.config.js",
+    "test": "node --test client/tests/*.test.mjs",
     "check": "npm run typecheck && npm run lint && npm run build && git diff --exit-code -- assets"
   },
   "devDependencies": {

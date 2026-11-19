@@ -71,7 +71,7 @@ nav input, nav select {
   pointer-events: none;
 }
 
-.pdf-comment, .pdf-drag, .pdf-draft {
+.pdf-comment, .pdf-drag, .pdf-draft, .pdf-block-hover {
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;

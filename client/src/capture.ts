@@ -21,6 +21,11 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+export function commentText(value: string): string | null {
+  const selected = normalizeText(value);
+  return selected ? truncate(selected, MAX_SELECTED_TEXT) : null;
+}
+
 export function selectedTextFor(target: Node): string | null {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
@@ -29,8 +34,7 @@ export function selectedTextFor(target: Node): string | null {
   } catch {
     return null;
   }
-  const selected = normalizeText(selection.toString());
-  return selected ? truncate(selected, MAX_SELECTED_TEXT) : null;
+  return commentText(selection.toString());
 }
 
 function uniqueIdSelector(element: Element): string | null {

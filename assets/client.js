@@ -25,6 +25,10 @@ function truncate(value, length) {
 function normalizeText(value) {
   return value.replace(/\s+/g, " ").trim();
 }
+function commentText(value) {
+  const selected = normalizeText(value);
+  return selected ? truncate(selected, MAX_SELECTED_TEXT) : null;
+}
 function selectedTextFor(target) {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
@@ -33,8 +37,7 @@ function selectedTextFor(target) {
   } catch {
     return null;
   }
-  const selected = normalizeText(selection.toString());
-  return selected ? truncate(selected, MAX_SELECTED_TEXT) : null;
+  return commentText(selection.toString());
 }
 function uniqueIdSelector(element) {
   if (!element.id) return null;

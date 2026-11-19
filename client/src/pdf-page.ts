@@ -1,7 +1,10 @@
 import { AnnotationMode, TextLayer } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFPageProxy, PageViewport, RenderTask } from "pdfjs-dist";
+import type { PDFOperatorList } from "pdfjs-dist/types/src/display/api";
 
 import { parsePdfAnchor, type PdfAnchor } from "./pdf-anchor";
+import { detectPdfBlocks, type PdfBlock } from "./pdf-blocks";
+import type { Bounds } from "./pdf-layout";
 
 interface Rectangle {
   left: number;
@@ -42,12 +45,16 @@ export class PdfPage {
   private viewport: PageViewport;
   private renderTask: RenderTask | null = null;
   private textLayer: TextLayer | null = null;
+  private operators: PDFOperatorList | undefined;
+  private blocks: PdfBlock[] | undefined;
+  private blockRequest: { controller: AbortController; promise: Promise<void> } | undefined;
 
   constructor(
     readonly number: number,
     first: PDFPageProxy,
     private readonly getPage: () => Promise<PDFPageProxy>,
     private readonly pageReady: () => void,
+    private readonly rendered: () => void,
   ) {
     this.natural = first.getViewport({ scale: 1 });
     this.viewport = this.natural;
@@ -73,6 +80,9 @@ export class PdfPage {
     this.visible = visible;
     if (visible) this.render();
     else {
+      this.blockRequest?.controller.abort();
+      this.blockRequest = undefined;
+      this.blocks = undefined;
       this.clear();
       // Cancel drawing first. PDF.js defers cleanup if the operator stream is still active.
       this.page?.cleanup();
@@ -93,6 +103,7 @@ export class PdfPage {
     this.textLayer?.cancel();
     this.renderTask = null;
     this.textLayer = null;
+    this.operators = undefined;
     this.content.replaceChildren();
     delete this.element.dataset.rendered;
   }
@@ -131,39 +142,85 @@ export class PdfPage {
       canvas, viewport,
       transform: [canvas.width / viewport.width, 0, 0, canvas.height / viewport.height, 0, 0],
       annotationMode: AnnotationMode.DISABLE,
+      operationsFilter: (_index, operators) => {
+        // Reuse the display list instead of asking the worker to generate it again.
+        this.operators ??= operators;
+        return true;
+      },
     });
     this.renderTask = task;
     this.textLayer = layer;
     void Promise.all([task.promise, layer.render()]).then(() => {
-      if (this.renderTask === task) this.element.dataset.rendered = "true";
+      if (this.renderTask === task) {
+        this.element.dataset.rendered = "true";
+        this.rendered();
+      }
     }).catch(() => {
       if (this.renderTask === task) this.element.dataset.rendered = "error";
     });
   }
 
-  /** Clip to the visible page, then measure from the unrotated MediaBox. */
+  prepareBlocks(): Promise<void> | undefined {
+    const page = this.page;
+    if (this.blocks !== undefined || !this.visible || this.element.dataset.rendered !== "true" || page === null) return;
+    if (this.blockRequest !== undefined) return this.blockRequest.promise;
+    const controller = new AbortController();
+    const promise = detectPdfBlocks(page, this.operators, controller.signal).then((blocks) => {
+      if (!controller.signal.aborted) this.blocks = blocks;
+    }).catch(() => {
+      if (!controller.signal.aborted) this.blocks = [];
+    }).finally(() => {
+      if (this.blockRequest?.controller === controller) this.blockRequest = undefined;
+    });
+    this.blockRequest = { controller, promise };
+    return promise;
+  }
+
+  blockAt(x: number, y: number): { anchor: PdfAnchor; text: string | null } | undefined {
+    if (this.blocks === undefined || this.element.dataset.rendered !== "true") return;
+    const rect = this.element.getBoundingClientRect();
+    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return;
+    const [px, py] = this.viewport.convertToPdfPoint(x - rect.left, y - rect.top) as [number, number];
+    let best: PdfBlock | undefined;
+    let area = Infinity;
+    for (const block of this.blocks) {
+      const [left, bottom, right, top] = block.bounds;
+      if (px < left || px > right || py < bottom || py > top) continue;
+      const size = (right - left) * (top - bottom);
+      if (size >= area) continue;
+      area = size;
+      best = block;
+    }
+    if (best === undefined) return;
+    const anchor = this.pdfAnchor(best.bounds);
+    return anchor === undefined ? undefined : { anchor, text: best.text };
+  }
+
   anchor(rect: Rectangle): PdfAnchor | undefined {
-    const media = this.mediaBox;
-    if (media === null) return undefined;
-    const [mediaLeft, , , mediaTop] = media;
-    const { userUnit } = this.viewport;
     const page = this.element.getBoundingClientRect();
-    const point = (x: number, y: number): { x: number; y: number } => {
-      const [pdfX, pdfY] = this.viewport.convertToPdfPoint(
-        Math.max(0, Math.min(page.width, x - page.left)),
-        Math.max(0, Math.min(page.height, y - page.top)),
-      ) as [number, number];
-      return { x: roundPoint((pdfX - mediaLeft) * userUnit), y: roundPoint((mediaTop - pdfY) * userUnit) };
-    };
-    const a = point(rect.left, rect.top);
-    const b = point(rect.right, rect.bottom);
-    const box = rectangle(a.x, a.y, b.x, b.y);
+    const [ax, ay] = this.viewport.convertToPdfPoint(rect.left - page.left, rect.top - page.top) as [number, number];
+    const [bx, by] = this.viewport.convertToPdfPoint(rect.right - page.left, rect.bottom - page.top) as [number, number];
+    return this.pdfAnchor([Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)]);
+  }
+
+  /** Clip to the visible page, then measure from the unrotated MediaBox. */
+  private pdfAnchor([left, bottom, right, top]: Bounds): PdfAnchor | undefined {
+    const media = this.mediaBox;
+    if (media === null || this.page === null) return undefined;
+    const [cropLeft, cropBottom, cropRight, cropTop] = this.page.view as Bounds;
+    const { userUnit } = this.viewport;
     return parsePdfAnchor({
-      page: this.number, box: { x0: box.left, y0: box.top, x1: box.right, y1: box.bottom },
+      page: this.number,
+      box: {
+        x0: roundPoint((Math.max(left, cropLeft) - media[0]) * userUnit),
+        y0: roundPoint((media[3] - Math.min(top, cropTop)) * userUnit),
+        x1: roundPoint((Math.min(right, cropRight) - media[0]) * userUnit),
+        y1: roundPoint((media[3] - Math.max(bottom, cropBottom)) * userUnit),
+      },
     });
   }
 
-  mark(element: HTMLElement, anchor: PdfAnchor): void {
+  mark(element: HTMLElement, anchor: PdfAnchor, layer: HTMLElement = this.marks): void {
     const media = this.mediaBox;
     if (media === null) return;
     const [mediaLeft, , , mediaTop] = media;
@@ -177,7 +234,7 @@ export class PdfPage {
     const [left, top] = position(x0, y0);
     const [right, bottom] = position(x1, y1);
     placeRectangle(element, rectangle(left, top, right, bottom));
-    this.marks.append(element);
+    layer.append(element);
   }
 }
 

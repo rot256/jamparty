@@ -321,10 +321,16 @@ Use the page field to jump to a page and the zoom menu to change its scale.
 As with other pages from a share, a complex or hostile PDF can slow down
 or crash the viewer tab.
 Select text and right-click the selection or press `/` to comment on it.
-The pen switches to box drawing. Drag across the part of one page you want
-to comment on. The pen stays active until clicked again or you press Escape
-with the dialog closed. You can still use `/` for a document comment when
-there is no selection.
+The pen switches to block selection and box drawing. Hover over a block to
+outline it in blue, then click to comment on its bounds and quote its text.
+The viewer estimates paragraphs, headings, display lines and image bounds
+from the page layout. It skips PDF structure trees to avoid parsing and
+transferring an unbounded tree on hover.
+Drag across any part of a page to draw a box, including over blocks. Use
+a box for vector drawings the viewer cannot identify as a block. The pen
+stays active until clicked again or you press Escape with the dialog closed.
+Turn it off to select text directly. You can still use `/` for a document
+comment when there is no selection.
 
 Your comments in the outbox have blue outlines at their PDF anchors, and
 the list labels them by PDF page number. When the PDF changes in a live

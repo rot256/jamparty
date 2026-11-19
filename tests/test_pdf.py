@@ -94,6 +94,8 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         assert box is not None
         x, y = box["x"], box["y"]
         overlay(page, "#edit").click()
+        page.mouse.move(x + 110, y + 180)
+        expect(sheet.locator(".pdf-block-hover")).to_be_visible()
         page.mouse.move(x + 96, y + 256)
         page.mouse.down()
         page.mouse.move(x + 288, y + 384, steps=5)
@@ -145,6 +147,15 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         expect(page.locator("#pdf-zoom")).to_have_value("1")
         assert float(page.evaluate("window.scrollY")) == pytest.approx(scroll, abs=2)
         expect(sheet.locator(".pdf-comment")).to_have_count(2)
+        rebuilt = sheet.bounding_box()
+        assert rebuilt is not None
+        overlay(page, "#edit").click()
+        page.mouse.move(rebuilt["x"] + 110, rebuilt["y"] + 180)
+        expect(sheet.locator(".pdf-block-hover")).to_be_visible()
+        page.mouse.click(rebuilt["x"] + 110, rebuilt["y"] + 180)
+        send_comment(page, "Review the rebuilt block.")
+        [block_record] = recv_all(tmp_path)
+        assert block_record["selectedText"] == "Rebuilt page"
 
 
 def test_rotated_pdf_anchors(tmp_path: Path, page: Page) -> None:
@@ -200,6 +211,21 @@ def test_rotated_pdf_anchors(tmp_path: Path, page: Page) -> None:
         }
 
         overlay(page, "#edit").click()
+        page.mouse.move(x + 557, y + 90)
+        expect(sheet.locator(".pdf-block-hover")).to_be_visible()
+        page.mouse.click(x + 557, y + 90)
+        send_comment(page, "Select the rotated heading.")
+        [block_record] = recv_all(tmp_path)
+        assert block_record["selectedText"] == "ROTATION"
+        assert block_record["pdf"] == {
+            "page": 1,
+            "box": {
+                "x0": pytest.approx(62, abs=1),
+                "x1": pytest.approx(186, abs=2),
+                "y0": pytest.approx(122, abs=2),
+                "y1": pytest.approx(145, abs=2),
+            },
+        }
         page.mouse.move(x + 80, y + 40)
         page.mouse.down()
         page.mouse.move(x + 200, y + 160, steps=5)
@@ -519,3 +545,167 @@ def test_pdf_evicts_rendered_images(tmp_path: Path, page: Page) -> None:
         assert {"1", "6"} <= set(evicted)
         renders = (root.get_attribute("data-pdf-renders") or "").split(",")
         assert renders.count("0") >= 2
+
+
+def blocks_pdf(tagged: bool) -> bytes:
+    catalog = b"<< /Type /Catalog /Pages 2 0 R"
+    sheet = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 450] "
+        b"/Resources << /Font << /F1 4 0 R >> /XObject << /Im 6 0 R >> >> "
+        b"/Contents 5 0 R"
+    )
+    if tagged:
+        catalog += b" /StructTreeRoot 7 0 R /MarkInfo << /Marked true >>"
+        sheet += b" /StructParents 0"
+    lines = [
+        (22, 60, 402, "Review notes"),
+        (12, 60, 360, "First paragraph starts here."),
+        (12, 60, 346, "This is the second line."),
+        (12, 340, 360, "Right column starts here."),
+        (12, 340, 346, "It has a second line too."),
+        (12, 60, 310, "A separate paragraph."),
+        (12, 265, 260, "F = m times a"),
+    ]
+    commands: list[bytes] = []
+    for index, (size, x, y, label) in enumerate(lines):
+        if tagged:
+            commands.append(f"/Span <</MCID {index}>> BDC".encode())
+        commands.append(f"BT /F1 {size} Tf {x} {y} Td ({label}) Tj ET".encode())
+        if tagged:
+            commands.append(b"EMC")
+    if tagged:
+        commands.append(b"/Figure <</MCID 7>> BDC")
+    commands.append(b"q 75 0 0 44 85 130 cm /Im Do Q")
+    if tagged:
+        commands.append(b"EMC")
+        commands.append(
+            b"/Span <</MCID 8>> BDC BT /F1 10 Tf 85 115 Td (Sample image) Tj ET EMC"
+        )
+    objects = [
+        catalog + b" >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        sheet + b" >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        pdf_stream(b"", b"\n".join(commands)),
+        pdf_stream(
+            b"/Type /XObject /Subtype /Image /Width 2 /Height 2 "
+            b"/ColorSpace /DeviceRGB /BitsPerComponent 8",
+            bytes((205, 80, 44)) * 4,
+        ),
+    ]
+    if tagged:
+        # Group the widely separated left-column lines as a single tagged P.
+        elements = [
+            ("H1", "0"),
+            ("P", "[1 2 5]"),
+            ("P", "[3 4]"),
+            ("Formula", "6"),
+            ("Figure", "[7 8]"),
+        ]
+        objects.extend(
+            [
+                (
+                    b"<< /Type /StructTreeRoot /K [9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] "
+                    b"/ParentTree 8 0 R >>"
+                ),
+                (
+                    b"<< /Nums [0 [9 0 R 10 0 R 10 0 R 11 0 R 11 0 R 10 0 R "
+                    b"12 0 R 13 0 R 13 0 R]] >>"
+                ),
+                *(
+                    f"<< /Type /StructElem /P 7 0 R /Pg 3 0 R /S /{role} /K {kids} >>".encode()
+                    for role, kids in elements
+                ),
+            ]
+        )
+    return make_pdf(objects)
+
+
+@pytest.mark.parametrize("tagged", [False, True])
+def test_pdf_block_selection(tmp_path: Path, page: Page, tagged: bool) -> None:
+    site = tmp_path / "build"
+    site.mkdir()
+    _ = (site / "blocks.pdf").write_bytes(blocks_pdf(tagged))
+    page.add_init_script("""(() => {
+      const send = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message, ...args) {
+        if (message.action === "GetStructTree") {
+          document.documentElement.dataset.pdfRequestedTree = "yes";
+        }
+        return send.call(this, message, ...args);
+      };
+    })();""")
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(f"{joined.url.rstrip('/')}/blocks.pdf")
+        sheet = page.locator("#jamparty-pdf-page-1")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        page.locator("#pdf-zoom").select_option("0.75")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        box = sheet.bounding_box()
+        assert box is not None
+        x, y = box["x"], box["y"]
+        assert box["width"] == pytest.approx(600, abs=1)
+        overlay(page, "#edit").click()
+        hover = sheet.locator(".pdf-block-hover")
+
+        first_paragraph = "First paragraph starts here. This is the second line."
+        cases = [
+            (65, 42, 60, 402, 22, "Review notes"),
+            (65, 86, 60, 346, 12, first_paragraph),
+            (
+                345,
+                86,
+                340,
+                346,
+                12,
+                "Right column starts here. It has a second line too.",
+            ),
+            (270, 186, 265, 260, 12, "F = m times a"),
+            (100, 300, 85, 130, 0, None),
+            (65, 136, 60, 310, 12, "A separate paragraph."),
+        ]
+        for px, py, left, last_baseline, size, quote in cases:
+            page.mouse.move(x + px, y + py)
+            expect(hover).to_be_visible()
+            outline = hover.bounding_box()
+            assert outline is not None
+            assert outline["x"] - x == pytest.approx(left, abs=0.5)
+            page.mouse.click(x + px, y + py)
+            send_comment(page, "Review this block.")
+            [record] = recv_all(tmp_path)
+            assert record.get("selectedText") == quote
+            assert record["pdf"] == {
+                "page": 1,
+                "box": {
+                    "x0": left,
+                    "y0": pytest.approx(outline["y"] - y, abs=0.05),
+                    "x1": pytest.approx(left + outline["width"], abs=0.05),
+                    "y1": pytest.approx(450 - last_baseline + 0.22 * size, abs=1),
+                },
+            }
+            if quote is None:
+                assert outline["width"] == pytest.approx(75, abs=0.05)
+                assert outline["height"] == pytest.approx(44, abs=0.05)
+
+        page.mouse.move(x + 65, y + 86)
+        expect(hover).to_be_visible()
+        page.mouse.down()
+        page.mouse.move(x + 85, y + 88, steps=5)
+        expect(sheet.locator(".pdf-drag")).to_be_visible()
+        page.mouse.up()
+        send_comment(page, "Review a custom box.")
+        [record] = recv_all(tmp_path)
+        assert "selectedText" not in record
+        assert record["pdf"] == {
+            "page": 1,
+            "box": {"x0": 65, "y0": 86, "x1": 85, "y1": 88},
+        }
+
+        page.mouse.move(x + 65, y + 86)
+        expect(hover).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(hover).to_have_count(0)
+        assert page.locator("html").get_attribute("data-pdf-requested-tree") is None

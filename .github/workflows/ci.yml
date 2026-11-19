@@ -85,6 +85,9 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Test
+        run: npm test
+
       # The bundles are committed (installing needs no Node): they must
       # be the bundle of client/src.
       - name: Check the committed bundle

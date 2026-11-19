@@ -77,7 +77,7 @@ arrive twice; use comment ids to skip duplicates.
 
 ## PDF anchors
 
-A PDF text or box comment adds a field alongside `page` and `selector`:
+A PDF block, text selection or box comment adds a field alongside `page` and `selector`:
 
 ```json
 {"pdf":{"page":2,"box":{"x0":72,"y0":108,"x1":216,"y1":144}}}
@@ -88,7 +88,9 @@ page number. Coordinates are in PDF points (1/72 inch), from the top left
 of the unrotated MediaBox (the full sheet), with y increasing downward.
 A CropBox clips the selectable area without changing that origin. Both axes
 are limited to 0–14,400 points and must have positive extent. A text
-selection carries its quote in `selectedText` and uses its bounding box on its first page.
+selection carries its quote in `selectedText` and uses its bounding box on
+its first page. A block comment uses the block’s bounds and carries its text
+in `selectedText` when available.
 For these comments `selector` is the CSS ID selector of the reviewer's
 outline (`#jamparty-pdf-anchor-<uuid>`). Use `pdf` for source lookup, for
 example by passing the box's center to
