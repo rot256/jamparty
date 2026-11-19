@@ -272,10 +272,16 @@ where
         .headers()
         .contains_key(header::UPGRADE)
         .then(|| upgrade::on(&mut request));
-    let (send, recv) = control
-        .connection
-        .open_bi()
+    // A share can keep the connection alive yet withhold stream credit.
+    let (send, recv) = time::timeout(connect_wait, control.connection.open_bi())
         .await
+        .map_err(|_| {
+            tracing::debug!("the share did not open a stream in time");
+            RequestError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "the share did not answer in time",
+            )
+        })?
         .map_err(|error| unreachable(error.into()))?;
     let io = TokioIo::new(io::join(recv, send));
     let (mut sender, connection) = client_http1::handshake(io)
