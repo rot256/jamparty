@@ -1,6 +1,6 @@
 [package]
 name = "jamparty"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 description = "Share a site under development with a few people, peer to peer, and route their browser comments to a coding agent"
 license = "MIT"
@@ -9,7 +9,20 @@ readme = "README.md"
 keywords = ["browser", "cli", "development", "feedback", "proxy"]
 categories = ["command-line-utilities", "development-tools", "web-programming::http-server"]
 publish = ["crates-io"]
-include = ["/build.rs", "/assets", "/src", "/LICENSE", "/README.md"]
+# The brand images in assets/brand/ are for the repository, not the crate.
+include = [
+  "/build.rs",
+  "/assets/*.js",
+  "/assets/*.css",
+  "/assets/*.html",
+  "/assets/pdf-cmaps.bin",
+  "/assets/pdf-cmaps.rs",
+  "/assets/*-LICENSE",
+  "/assets/jamparty",
+  "/src",
+  "/LICENSE",
+  "/README.md",
+]
 
 [dependencies]
 brotli-decompressor = "5.0.3"
