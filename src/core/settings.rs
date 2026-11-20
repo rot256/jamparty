@@ -346,7 +346,7 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::settings::{Corner, Keys, Settings, SettingsChange, Switch};
+    use crate::core::settings::{Corner, Keys, Settings, SettingsChange, Switch, Theme};
 
     #[test]
     fn defaults_and_parsing() {
@@ -374,6 +374,24 @@ mod tests {
         // A newer jamparty's fields are ignored.
         let newer: Settings = serde_json::from_str(r#"{"name":"alice","future":true}"#).unwrap();
         assert_eq!(newer.name.unwrap().as_str(), "alice");
+    }
+
+    #[test]
+    fn theme_is_validated_in_both_settings_formats() {
+        assert_eq!(Settings::default().theme, Theme::Auto);
+        for (name, theme) in [
+            ("auto", Theme::Auto),
+            ("light", Theme::Light),
+            ("dark", Theme::Dark),
+        ] {
+            let json = format!(r#"{{"theme":"{name}"}}"#);
+            let settings: Settings = serde_json::from_str(&json).unwrap();
+            let change: SettingsChange = serde_json::from_str(&json).unwrap();
+            assert_eq!(settings.theme, theme);
+            assert_eq!(Settings::default().with(change), settings);
+        }
+        assert!(serde_json::from_str::<Settings>(r#"{"theme":"sepia"}"#).is_err());
+        assert!(serde_json::from_str::<SettingsChange>(r#"{"theme":"sepia"}"#).is_err());
     }
 
     #[test]

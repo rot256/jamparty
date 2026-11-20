@@ -16,7 +16,7 @@ its own joiner's client.
 
 ## Pill (bottom right)
 
-- One dark pill: the connection dot inside it, left of the text
+- One pill in the active overlay theme: the connection dot inside it, left of the text
   `N queued` (`N` = the joiner's own undelivered comments), plus local
   sending and refused counts when present.
 - Dot colours: green `#2f9e44` connected, amber `#e8a33d` reconnecting,
@@ -70,6 +70,9 @@ command only reminds the agent and never changes delivery status.
   usual queued and connection-failure toasts appear when the first send
   finishes.
 
+- The text area shows one blue focus ring. Queue comment uses the primary
+  blue button, with Cancel alongside. Drag the title with a pointer or
+  touch to move the dialog. It stays within the viewport for that edit.
 - Use the paperclip, paste files, or drop them into the dialog to attach up
   to four files of up to 8 MiB each. Each chip shows the name and size and
   has a remove button. Comment text is optional while a file is attached.
@@ -112,8 +115,8 @@ command only reminds the agent and never changes delivery status.
 
 ## Control panel (gear)
 
-Compact dark panel (about 232 px wide, faint border, light shadow), no hint
-text. Rows:
+Compact panel with the same surface, border, and shadow as the command
+bar. Rows:
 
 | Row | Control | Default | Key |
 |---|---|---|---|
@@ -122,7 +125,13 @@ text. Rows:
 | Clear answers | action | dismiss every visible answer | `D` |
 | Answer timeout | seconds | **30** (`0` turns it off) | — |
 | Corner | four buttons ↖ ↗ ↙ ↘ | bottom right | |
+| Theme | Auto, Dark, Light | Auto | |
 
+- Auto follows the browser's colour preference. Dark and Light set the
+  palette for the command bar, dialogs, panels, notices, and cards. The
+  entire overlay uses the system UI font. Anchor accents stay blue. The
+  settings file accepts `"theme": "auto"`, `"dark"`, or `"light"`, and
+  changes in the page are remembered per share.
 - Comment mode off: the page behaves normally: right-click shows the
   browser menu and `/` types normally. Edit mode can still take left clicks
   to comment on elements. The pill stays.
@@ -204,7 +213,7 @@ text. Rows:
   per share in a host-only cookie on `<sid>.localhost` (cookies ignore the
   port, so a joiner that falls back to another port finds them), holding
   what was changed: the name, the key bindings, the two switch states and
-  the corner. When a page loads and its joiner lacks some of them (a
+  the corner, theme, and answer timeout. When a page loads and its joiner lacks some of them (a
   joiner that started over), it sends them as a change for this join; a
   remembered name keeps the prompt away. A new share is a new origin and
   starts from the defaults.
@@ -232,10 +241,13 @@ text. Rows:
   send to everyone by default. Live answers open beside the target when it is
   available on the current page. PDF answers use the window margin when it
   has room. In narrower layouts, answers fit beside, below or above the
-  target. A blue marker bounds the target on the side facing the answer,
-  and a leader connects the two. Hover or focus the answer to highlight
-  its target. On another page, place answers open in the general answer
-  corner with a **Show** link.
+  target. A thin blue brace spans the target's edge facing the card,
+  separated from the text. A curved line connects the brace's tip to a dot
+  on the card. Hover or focus a card to darken its connector and tint its
+  target. Drag a card by its top row to move it with a pointer or touch.
+  It keeps its viewport position while scrolling, and its connector follows
+  the target. This position lasts until dismissal or reload. On another
+  page, place answers open in the general answer corner with a **Show** link.
 - Place answers in the comment list have a **Show** link that scrolls to the
   target, navigating within the share if needed. Show follows same-origin
   redirects, including a served directory redirect from `/docs` to `/docs/`.
@@ -243,13 +255,14 @@ text. Rows:
   or focusing its list link outlines a target on the current page. PDF boxes
   follow their page through resizing, browser zoom, scrolling and rebuilds.
   If the target disappears, the live bubble moves to the general answer
-  corner and says “Target unavailable.”
+  corner and says “Target unavailable.” Page comments and unanchored
+  answers have no target, so their cards appear without this notice.
 - Dismissing an ordinary reply bubble keeps the reply in the list.
   Multiple-choice questions appear as bubbles. A dismissed question stays
   hidden for the tab session. Open, undismissed questions pop up on load or
   reconnect.
 - The recipient's answer bubble shows a small `to you` line above the text
-  (in the answer-meta style, `#7b3221`, 11 px, bold).
+  (in the theme’s muted text colour, 11 px, bold).
 - The `jamparty agent` guides describe `--to`.
 
 ## Multiple-choice questions
