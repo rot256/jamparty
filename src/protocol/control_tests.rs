@@ -5,6 +5,7 @@ use crate::{
     protocol::{
         MAX_LINE_BYTES,
         agent::AgentRequest,
+        answer::AnswerAnchor,
         comment::{Author, DraftFields, MAX_COMMENT, MAX_PAGE, MAX_SELECTED_TEXT, MAX_SELECTOR},
         control::{
             AckOutcome, Anchor, CommentRef, Envelope, Hello, JoinerMessage, MAX_COMMENT_REF,
@@ -199,10 +200,10 @@ fn share_messages() {
             ShareMessage::Answer { choices: Default::default(),
                 id: ID.parse().unwrap(),
                 message: "Done.".to_owned().try_into().unwrap(),
-                anchor: Some(Anchor { comment: ID.parse().unwrap(), page: "/".to_owned().try_into().unwrap(), selector: "h1".to_owned().try_into().unwrap() }),
+                anchor: Some(AnswerAnchor::Comment { comment: Anchor { comment: ID.parse().unwrap(), page: "/".to_owned().try_into().unwrap(), selector: "h1".to_owned().try_into().unwrap() } }),
                 to: None,
             },
-            format!(r#"{{"type":"answer","id":"{ID}","message":"Done.","anchor":{{"comment":"{ID}","page":"/","selector":"h1"}}}}"#),
+            format!(r#"{{"type":"answer","id":"{ID}","message":"Done.","anchor":{{"type":"comment","comment":{{"comment":"{ID}","page":"/","selector":"h1"}}}}}}"#),
         ),
         (
             ShareMessage::Answer { choices: Default::default(), id: ID.parse().unwrap(), message: "Hi".to_owned().try_into().unwrap(), anchor: None, to: None },

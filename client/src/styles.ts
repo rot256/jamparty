@@ -297,7 +297,8 @@ export const styles = `
 
   :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
   :host([data-corner^="top"]) :is(#panel, #pdf-sections) { bottom: auto; top: 58px; }
-  :host([data-corner^="top"]) :is(#toast, #agent-general) { bottom: auto; top: 52px; }
+  :host([data-corner^="top"]) #toast { bottom: auto; top: 52px; }
+  :host([data-corner^="top"]) #agent-general { bottom: auto; top: calc(52px + var(--sections-offset, 0px)); }
 
   .chip {
     padding: 1px 5px;
@@ -489,11 +490,11 @@ export const styles = `
   #agent-general {
     position: fixed;
     right: 14px;
-    bottom: 52px;
+    bottom: calc(52px + var(--sections-offset, 0px));
     z-index: 2147483643;
     display: flex;
     width: min(360px, calc(100vw - 28px));
-    max-height: calc(100vh - 66px);
+    max-height: calc(100vh - 66px - var(--sections-offset, 0px));
     flex-direction: column;
     gap: 8px;
     overflow: auto;
@@ -529,6 +530,8 @@ export const styles = `
   .agent-message ul, .agent-message ol { margin: 6px 0; padding-left: 22px; }
   .agent-message pre { overflow: auto; }
   .agent-message code { font: inherit; background: #eeeae2; }
+  .agent-show { display: inline-block; margin-top: 6px; }
+  .agent-show[hidden] { display: none; }
   .agent-message a { color: #075f7a; text-decoration: underline; }
   .agent-message.has-anchor { cursor: pointer; }
   .agent-message.has-anchor:focus-visible {
@@ -572,7 +575,7 @@ export const styles = `
   #message-highlight {
     position: fixed;
     display: none;
-    z-index: 2147483646;
+    z-index: 2147483641;
     border: 3px solid #0b7896;
     border-radius: 3px;
     background: rgb(11 120 150 / 12%);

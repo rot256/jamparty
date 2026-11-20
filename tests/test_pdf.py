@@ -1247,3 +1247,115 @@ def test_single_pdf_opens_from_root_and_reloads(tmp_path: Path, page: Page) -> N
         _ = updated.write_bytes(reading_pdf([(792, 150, ["Rebuilt PDF"])]))
         _ = updated.replace(pdf)
         expect(text).to_have_text("Rebuilt PDF")
+
+
+def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) -> None:
+    site = tmp_path / "build"
+    site.mkdir()
+    path = site / "paper.pdf"
+    _ = path.write_bytes(fixture_pdf("Original second page", outline_child="Appendix"))
+    _ = (site / "index.html").write_text("<h1>Paper</h1>")
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path,
+            "send",
+            "--at-pdf",
+            "paper.pdf#page=2&box=72,120,350,150",
+            "See the second page.",
+        )
+        general = overlay(page, "#agent-general .agent-message")
+        general.get_by_role("link", name="Show").click()
+        expect(page).to_have_url(f"{joined.url.rstrip('/')}/paper.pdf")
+        sheet = page.locator("#jamparty-pdf-page-2")
+        marker = sheet.locator(".pdf-answer-anchor").first
+        expect(marker).to_be_in_viewport()
+        expect(overlay(page, ".agent-message")).to_have_count(0)
+        sections = overlay(page, "#pdf-outline")
+        panel = overlay(page, "#pdf-sections")
+        sections.click()
+        expect(panel).to_be_visible()
+        overlay(page, "#pill").click()
+        expect(panel).to_be_hidden()
+        earlier = overlay(page, "#answer-list .agent-reply")
+        expect(earlier).to_contain_text("See the second page.")
+        earlier.hover()
+        expect(overlay(page, "#message-highlight")).to_be_visible()
+        _ = page.evaluate("window.scrollTo(0, 0)")
+        earlier.get_by_role("link", name="Show").click()
+        expect(marker).to_be_in_viewport()
+        expect(overlay(page, ".agent-message")).to_have_count(0)
+        overlay(page, "#collapse").click()
+
+        _ = jamparty(
+            tmp_path,
+            "send",
+            "--at-pdf",
+            "paper.pdf#page=2&box=72,120,350,150",
+            "Live second-page note.",
+        )
+        answer = overlay(page, "#agent-anchored .agent-message")
+        expect(answer).to_contain_text("Live second-page note.")
+        sections.click()
+        expect(panel).to_be_visible()
+        panel.get_by_role("button", name="Introduction").click()
+        expect(panel).to_be_hidden()
+        indicator = page.locator("#pdf-position")
+        expect(indicator).to_have_text("1 / 2")
+        expect(indicator).to_be_visible()
+        expect(marker).not_to_be_in_viewport()
+        expect(indicator).to_be_hidden()
+        answer.click()
+        expect(marker).to_be_in_viewport()
+        expect(indicator).to_be_visible()
+
+        def check_position() -> None:
+            sheet_box = sheet.bounding_box()
+            mark_box = marker.bounding_box()
+            answer_box = answer.bounding_box()
+            assert (
+                sheet_box is not None
+                and mark_box is not None
+                and answer_box is not None
+            )
+            scale = sheet_box["width"] / 612
+            assert mark_box["x"] - sheet_box["x"] == pytest.approx(72 * scale, abs=1)
+            assert mark_box["y"] - sheet_box["y"] == pytest.approx(120 * scale, abs=1)
+            assert mark_box["width"] == pytest.approx(278 * scale, abs=1)
+            assert answer_box["y"] == pytest.approx(max(8, mark_box["y"]), abs=2)
+            assert answer_box["x"] >= mark_box["x"] + mark_box["width"]
+
+        check_position()
+        page.set_viewport_size({"width": 848, "height": 720})
+        expect(sheet).to_have_css("width", "816px")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        expect(marker).to_be_in_viewport()
+        check_position()
+        _ = page.evaluate("window.scrollBy(0, 80)")
+        _ = page.wait_for_function("""() => {
+            const mark = document.querySelector(".pdf-answer-anchor");
+            const answer = document.querySelector("#jamparty")?.shadowRoot
+                ?.querySelector("#agent-anchored .agent-message");
+            return mark && answer &&
+                Math.abs(mark.getBoundingClientRect().top - answer.getBoundingClientRect().top) < 2;
+        }""")
+        check_position()
+        answer.hover()
+        expect(overlay(page, "#message-highlight")).to_be_visible()
+
+        new_pdf = site / "paper.tmp"
+        _ = new_pdf.write_bytes(fixture_pdf("Rebuilt second page"))
+        _ = new_pdf.replace(path)
+        expect(sheet.locator(".textLayer")).to_have_text("Rebuilt second page")
+        check_position()
+
+        _ = new_pdf.write_bytes(blank_pdf(1))
+        _ = new_pdf.replace(path)
+        expect(sheet).to_have_count(0)
+        expect(general).to_contain_text("Live second-page note.")
+        expect(general).to_contain_text("Target unavailable")
+        expect(general.get_by_role("link", name="Show")).to_have_count(0)

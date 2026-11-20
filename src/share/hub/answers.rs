@@ -4,6 +4,7 @@ use crate::{
     core::{ids::CommentId, invalid::Invalid},
     protocol::{
         agent::{Addressee, KEY_PREFIX},
+        answer::AnswerAnchor,
         comment::Author,
         control::{AnswerText, Choices, ShareMessage},
     },
@@ -12,13 +13,13 @@ use crate::{
 
 impl Hub {
     /// Sends an answer, to everyone or to one person: `to` (resolved among
-    /// the people here) or, without `to`, the author of the `anchor`
-    /// comment. `anchor` must be a comment this share has seen recently.
+    /// the people here) or, for an answer to a comment, its author.
+    /// Comment anchors must refer to a comment this share has seen recently.
     /// Returns who it is for (none: everyone).
     pub(crate) fn answer(
         &self,
         message: AnswerText,
-        anchor: Option<CommentId>,
+        anchor: Option<AnswerAnchor<CommentId>>,
         to: Option<Addressee>,
         choices: Choices,
     ) -> Result<Option<Author>, Invalid> {
@@ -30,29 +31,31 @@ impl Hub {
         };
         let recipient = {
             let mut inner = self.lock();
-            let anchor = match anchor {
-                None => None,
-                Some(id) => Some(
-                    inner
+            let (anchor, author) = match anchor {
+                None => (None, None),
+                Some(AnswerAnchor::Place { place }) => (Some(AnswerAnchor::Place { place }), None),
+                Some(AnswerAnchor::Comment { comment: id }) => {
+                    let (comment, author) = inner
                         .anchors
                         .iter()
                         .find(|(anchor, _)| anchor.comment == id)
                         .cloned()
                         .ok_or_else(|| {
                             Invalid::new(format!("no comment with id {id} on this share"))
-                        })?,
-                ),
+                        })?;
+                    (Some(AnswerAnchor::Comment { comment }), Some(author))
+                }
             };
-            let recipient = match (to, anchor.as_ref()) {
-                (Some(Addressee::Named(_) | Addressee::Key(_)), _) => named,
-                (Some(Addressee::Everyone), _) | (None, None) => None,
-                (None, Some((_, author))) => Some(author.clone()),
+            let recipient = match to {
+                Some(Addressee::Named(_) | Addressee::Key(_)) => named,
+                Some(Addressee::Everyone) => None,
+                None => author,
             };
             let message = ShareMessage::Answer {
                 id: CommentId::generate(self.rng.as_ref()),
                 message,
                 choices,
-                anchor: anchor.map(|(anchor, _)| anchor),
+                anchor,
                 to: recipient.as_ref().map(|author| author.key),
             };
             if inner.answers.len() == MAX_ANSWERS {

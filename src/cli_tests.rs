@@ -108,7 +108,7 @@ fn agent_commands_parse_and_stay_out_of_help() {
         anchor,
         to,
         which,
-        choices: _,
+        ..
     }) = send.command
     else {
         panic!("not send");
@@ -234,4 +234,48 @@ fn errors_read_as_written() {
         describe(&io.unwrap_err()),
         "could not read the key: No such file or directory (os error 2)"
     );
+}
+
+#[test]
+fn send_place_flags_require_one_complete_anchor() {
+    let comment = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    let pdf = "paper.pdf#page=2&box=72,140,540,180";
+    let parse = |args: &[&str]| {
+        Cli::try_parse_from(
+            ["jamparty", "send", "hi"]
+                .into_iter()
+                .chain(args.iter().copied()),
+        )
+    };
+    assert!(matches!(
+        parse(&["--at", "#intro", "--page", "/"]).unwrap().command,
+        Some(Command::Send {
+            at: Some(_),
+            page: Some(_),
+            at_pdf: None,
+            ..
+        })
+    ));
+    assert!(matches!(
+        parse(&["--at-pdf", pdf]).unwrap().command,
+        Some(Command::Send {
+            at_pdf: Some(crate::protocol::answer::PlaceAnchor::Pdf { .. }),
+            ..
+        })
+    ));
+    for args in [
+        vec!["--at", "#intro"],
+        vec!["--page", "/"],
+        vec!["--at", "#intro", "--page", "//other.example/"],
+        vec!["--at", "#intro", "--page", "/", "--anchor", comment],
+        vec!["--at", "#intro", "--page", "/", "--at-pdf", pdf],
+        vec!["--anchor", comment, "--at-pdf", pdf],
+        vec!["--at-pdf", "paper.pdf#page=0&box=1,2,3,4"],
+        vec!["--at-pdf", "paper.pdf#page=1&box=1,2,1,4"],
+        vec!["--at-pdf", "paper.pdf#page=1&box=1,NaN,3,4"],
+        vec!["--at-pdf", "paper.pdf#page=1&box=1,2,3,14401"],
+        vec!["--at-pdf", "paper.pdf#page=1&box=1,2,3"],
+    ] {
+        assert!(parse(&args).is_err(), "accepted {args:?}");
+    }
 }

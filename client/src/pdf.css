@@ -14,7 +14,7 @@ body {
   position: fixed;
   top: 14px;
   right: 14px;
-  z-index: 2;
+  z-index: 2147483646;
   max-width: min(20rem, calc(100% - 28px));
   pointer-events: none;
 }
@@ -89,7 +89,7 @@ body:has(#jamparty[data-corner^="top"]) #pdf-feedback {
   pointer-events: none;
 }
 
-.pdf-comment-anchor, .pdf-drag, .pdf-draft, .pdf-block-hover {
+.pdf-comment-anchor, .pdf-answer-anchor, .pdf-drag, .pdf-draft, .pdf-block-hover {
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;

@@ -12,6 +12,7 @@ use crate::{
         settings::Switch,
     },
     protocol::{
+        answer::{AnswerAnchor, PlaceAnchor},
         comment::{Author, Draft, DraftFields},
         control::{AckOutcome, CommentRef, MAX_QUEUED_PER_KEY, ShareMessage},
         presence::{Position, Whereabouts},
@@ -440,7 +441,7 @@ fn comments_faster_than_their_acks_are_read_are_a_flood() {
 fn question(hub: &Hub, anchor: Option<CommentId>, to: Option<&str>) -> CommentId {
     hub.answer(
         "Which size?".to_owned().try_into().unwrap(),
-        anchor,
+        anchor.map(|comment| AnswerAnchor::Comment { comment }),
         to.map(|to| to.parse().unwrap()),
         vec!["Keep it".to_owned(), "Make it bigger".to_owned()]
             .try_into()
@@ -807,4 +808,55 @@ async fn attachment_metadata_counts_toward_recv_batch_size() {
     assert_eq!(hub.next_batch().await.len(), 1);
     hub.finish(DeliveryResult::Ok);
     assert_eq!(hub.next_batch().await.len(), 1);
+}
+
+#[tokio::test]
+async fn place_answers_go_to_everyone_unless_addressed() {
+    let (hub, _) = hub();
+    let alice = author("alice", 1);
+    let bob = author("bob", 2);
+    let alice_broadcasts = hub.subscribe();
+    let bob_broadcasts = hub.subscribe();
+    let (a, a_inbox) = hub.join(alice.clone()).unwrap();
+    let (b, b_inbox) = hub.join(bob.clone()).unwrap();
+    let mut a_out = Outbox::new(&a, alice.key, a_inbox, alice_broadcasts);
+    let mut b_out = Outbox::new(&b, bob.key, b_inbox, bob_broadcasts);
+    let place = PlaceAnchor::Html {
+        path: "/".parse().unwrap(),
+        selector: "#intro".parse().unwrap(),
+    };
+    for to in [None, Some("alice".parse().unwrap())] {
+        hub.answer(
+            "See here.".to_owned().try_into().unwrap(),
+            Some(AnswerAnchor::Place {
+                place: place.clone(),
+            }),
+            to,
+            Default::default(),
+        )
+        .unwrap();
+    }
+    let places = |key| {
+        hub.catch_up(key)
+            .into_iter()
+            .filter_map(|message| {
+                let ShareMessage::Answer {
+                    anchor: Some(AnswerAnchor::Place { place }),
+                    to,
+                    ..
+                } = message
+                else {
+                    return None;
+                };
+                Some((place, to))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        places(alice.key),
+        [(place.clone(), None), (place.clone(), Some(alice.key))]
+    );
+    assert_eq!(places(bob.key), [(place, None)]);
+    assert_eq!(sent(&mut a_out), hub.catch_up(alice.key));
+    assert_eq!(sent(&mut b_out), hub.catch_up(bob.key));
 }

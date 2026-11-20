@@ -1,5 +1,50 @@
 // Generated from client/src by `npm run build`; do not edit.
 
+// client/src/json.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+
+// client/src/pdf-anchor.ts
+function parsePdfAnchor(value) {
+  if (!isRecord(value) || typeof value.page !== "number" || !Number.isInteger(value.page) || value.page < 1 || value.page > 4294967295 || !isRecord(value.box)) return void 0;
+  const { x0, y0, x1, y1 } = value.box;
+  if (typeof x0 !== "number" || typeof y0 !== "number" || typeof x1 !== "number" || typeof y1 !== "number" || !(0 <= x0 && x0 < x1 && x1 <= 14400 && 0 <= y0 && y0 < y1 && y1 <= 14400)) {
+    return void 0;
+  }
+  return { page: value.page, box: { x0, y0, x1, y1 } };
+}
+
+// client/src/answer-anchor.ts
+function validPath(path) {
+  if (path.length > 4096 || !path.startsWith("/") || path.startsWith("//") || /[^\x21-\x7e]|["\\?#]/u.test(path)) return false;
+  try {
+    const decoded = decodeURIComponent(path);
+    return new URL(path, "http://localhost").pathname === path && !decoded.startsWith("//") && !decoded.includes("\\") && !Array.from(decoded).some((character) => /\p{Cc}/u.test(character)) && !decoded.split("/").some((part) => part === "." || part === "..") && decoded.split("/")[1] !== "_jamparty";
+  } catch {
+    return false;
+  }
+}
+function parsePlaceAnchor(value) {
+  if (!isRecord(value) || Object.keys(value).length !== 3 || typeof value.path !== "string" || !validPath(value.path)) return void 0;
+  const { path } = value;
+  if (value.type === "html" && typeof value.selector === "string" && value.selector.trim() !== "" && Array.from(value.selector).length <= 2048) {
+    return { type: "html", path, selector: value.selector };
+  }
+  if (value.type === "pdf" && path.toLowerCase().endsWith(".pdf") && isRecord(value.pdf) && Object.keys(value.pdf).length === 2 && isRecord(value.pdf.box) && Object.keys(value.pdf.box).length === 4) {
+    const pdf = parsePdfAnchor(value.pdf);
+    if (pdf !== void 0) return { type: "pdf", path, pdf };
+  }
+  return void 0;
+}
+function placeElement(root, selector) {
+  try {
+    return root.querySelector(selector);
+  } catch {
+    return null;
+  }
+}
+
 // client/src/generated/api.ts
 var MAX_NAME = 40;
 var MAX_ANSWER_TIMEOUT = 3600;
@@ -136,6 +181,22 @@ var PALETTE = [
 // client/src/answers.ts
 var GAP = 8;
 var EDGE = 8;
+var REVEAL_KEY = "jamparty-answer-reveal";
+var REVEAL_TTL_MS = 3e4;
+function takeReveal() {
+  try {
+    const stored = sessionStorage.getItem(REVEAL_KEY);
+    sessionStorage.removeItem(REVEAL_KEY);
+    const parsed = stored === null ? null : JSON.parse(stored);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { id, at } = parsed;
+    if (typeof id !== "string" || typeof at !== "number") return null;
+    const age = Date.now() - at;
+    return age >= 0 && age <= REVEAL_TTL_MS ? id : null;
+  } catch {
+    return null;
+  }
+}
 function loadDismissed() {
   try {
     const stored = JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]");
@@ -146,14 +207,20 @@ function loadDismissed() {
   }
 }
 var Answers = class {
-  constructor(ui, pick) {
+  constructor(ui, pick, pdf) {
     this.ui = ui;
     this.pick = pick;
+    this.pdf = pdf;
     const schedule = () => {
       this.schedulePlacement();
     };
+    this.sections = ui.shadow.querySelector("#pdf-sections");
+    const panels = new ResizeObserver(schedule);
+    panels.observe(ui.list);
+    if (this.sections !== null) panels.observe(this.sections);
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
+    window.addEventListener("load", schedule, true);
     new MutationObserver(schedule).observe(document.documentElement, {
       childList: true,
       subtree: true,
@@ -163,7 +230,11 @@ var Answers = class {
   }
   ui;
   pick;
+  pdf;
   shown = /* @__PURE__ */ new Map();
+  sections;
+  places = /* @__PURE__ */ new Map();
+  historyPreview;
   recent = /* @__PURE__ */ new Map();
   onHistory = () => void 0;
   historyTarget = () => null;
@@ -171,6 +242,9 @@ var Answers = class {
   placementFrame;
   timeoutSeconds = 0;
   highlightTimer;
+  hovering;
+  pendingReveal = takeReveal();
+  landingPath = location.pathname;
   /** The node of answer `id`, for comments on an answer. */
   node(id) {
     return this.shown.get(id)?.node ?? null;
@@ -213,6 +287,8 @@ var Answers = class {
   }
   publishHistory() {
     this.onHistory(Array.from(this.recent.values()).filter((answer) => answer.choices.length === 0));
+    this.prunePlaces();
+    this.schedulePlacement();
   }
   renderBody(answer) {
     const body = document.createElement("div");
@@ -231,13 +307,79 @@ var Answers = class {
     });
     return body;
   }
+  placeTarget(answer) {
+    const existing = this.places.get(answer.id);
+    if (existing !== void 0) return existing;
+    const place = parsePlaceAnchor(answer.place);
+    if (place === void 0) return void 0;
+    const redirectedPath = answer.id === this.pendingReveal ? this.landingPath : void 0;
+    const here = () => place.path === location.pathname || redirectedPath === location.pathname;
+    const marker = place.type === "pdf" && this.pdf !== void 0 && here() ? document.createElement("div") : void 0;
+    let detach = () => void 0;
+    if (marker !== void 0 && place.type === "pdf" && this.pdf !== void 0) {
+      marker.className = "pdf-answer-anchor";
+      detach = this.pdf.trackAnswer(marker, place.pdf);
+    }
+    const target = () => {
+      if (!here()) return void 0;
+      const element = place.type === "pdf" ? marker : placeElement(document, place.selector);
+      return element?.isConnected && element.getClientRects().length > 0 ? element : void 0;
+    };
+    const entry = { place, here, target, detach };
+    this.places.set(answer.id, entry);
+    return entry;
+  }
+  prunePlaces() {
+    for (const [id, entry] of this.places) {
+      if (this.recent.has(id) || this.shown.has(id)) continue;
+      entry.detach();
+      this.places.delete(id);
+    }
+  }
+  showLink(id, entry) {
+    const link = document.createElement("a");
+    link.className = "agent-show";
+    link.textContent = "Show";
+    link.href = new URL(entry.place.path, location.origin).href;
+    link.addEventListener("click", (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (entry.here()) {
+        event.preventDefault();
+        const target = entry.target();
+        if (target === void 0) this.ui.showToast("Target unavailable");
+        else this.revealElement(target);
+        return;
+      }
+      try {
+        sessionStorage.setItem(REVEAL_KEY, JSON.stringify({ id, at: Date.now() }));
+      } catch {
+      }
+    });
+    return link;
+  }
+  renderHistory(answer, node) {
+    node.append(this.renderBody(answer));
+    const entry = this.placeTarget(answer);
+    if (entry === void 0) return;
+    node.append(this.showLink(answer.id, entry));
+    const preview = () => {
+      this.historyPreview = { id: answer.id, node };
+      this.schedulePlacement();
+    };
+    node.addEventListener("pointerenter", preview);
+    node.addEventListener("focusin", preview);
+    node.addEventListener("pointerleave", () => {
+      this.schedulePlacement();
+    });
+    node.addEventListener("focusout", () => {
+      this.schedulePlacement();
+    });
+  }
   show(answer) {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
-    for (const [id, shown2] of this.shown) {
+    for (const id of this.shown.keys()) {
       if (this.shown.size < MAX_ANSWERS) break;
-      shown2.stopTimer();
-      shown2.node.remove();
-      this.shown.delete(id);
+      this.remove(id);
     }
     const node = document.createElement("article");
     node.className = "agent-message";
@@ -288,47 +430,67 @@ var Answers = class {
       options.append(button);
     }
     node.append(options);
-    const anchor = answer.anchor !== void 0 && samePage(answer.page) ? answer.anchor : null;
-    if (anchor !== null) {
-      node.classList.add("has-anchor");
-      node.tabIndex = 0;
-      node.setAttribute("aria-label", "Agent message; activate to show its anchor");
-      node.addEventListener("click", (event) => {
-        const interactive = event.target instanceof Element ? event.target.closest("a, button") : null;
-        const selection = window.getSelection();
-        if (interactive || selection && !selection.isCollapsed) return;
-        this.reveal(anchor);
-      });
-      node.addEventListener("keydown", (event) => {
-        if (event.target !== node || !["Enter", " "].includes(event.key)) return;
-        event.preventDefault();
-        this.reveal(anchor);
-      });
-    }
+    const entry = this.placeTarget(answer);
+    const selector = answer.anchor;
+    const localAnchor = () => entry === void 0 ? selector !== void 0 && samePage(answer.page) : entry.here();
+    const target = () => {
+      if (entry !== void 0) return entry.target();
+      if (!localAnchor() || selector === void 0) return void 0;
+      const element = this.findTarget(selector);
+      if (!element || element === this.ui.host || element.getClientRects().length === 0) return void 0;
+      return element;
+    };
+    const show = entry === void 0 ? null : this.showLink(answer.id, entry);
+    if (show !== null) node.append(show);
+    const activate = () => {
+      if (!localAnchor()) return;
+      const found = target();
+      if (found === void 0) this.ui.showToast("Element is unavailable");
+      else this.revealElement(found);
+    };
+    node.addEventListener("click", (event) => {
+      const interactive = event.target instanceof Element ? event.target.closest("a, button") : null;
+      const selection = window.getSelection();
+      if (!interactive && (!selection || selection.isCollapsed)) activate();
+    });
+    node.addEventListener("keydown", (event) => {
+      if (event.target !== node || !["Enter", " "].includes(event.key) || !localAnchor()) return;
+      event.preventDefault();
+      activate();
+    });
     close.addEventListener("click", () => {
-      this.shown.get(answer.id)?.stopTimer();
       this.dismissed.add(answer.id);
       for (const id of this.dismissed) {
         if (this.dismissed.size <= MAX_ANSWERS) break;
         this.dismissed.delete(id);
       }
       this.persistDismissed();
-      this.shown.delete(answer.id);
-      node.remove();
-      this.schedulePlacement();
+      this.remove(answer.id);
     });
-    const shown = { node, unavailable, anchor, stopTimer: () => void 0 };
+    const shown = { node, unavailable, show, target, localAnchor, stopTimer: () => void 0 };
+    if (entry !== void 0) {
+      node.addEventListener("mouseenter", () => {
+        this.hovering = shown;
+        this.schedulePlacement();
+      });
+      node.addEventListener("mouseleave", () => {
+        if (this.hovering === shown) this.hovering = void 0;
+        this.schedulePlacement();
+      });
+    }
     this.shown.set(answer.id, shown);
     this.startTimer(shown);
     this.schedulePlacement();
   }
   /** The share resolved this question; no session dismissal is needed. */
   remove(id) {
-    this.recent.delete(id);
+    if (this.recent.get(id)?.choices.length) this.recent.delete(id);
     const shown = this.shown.get(id);
     shown?.stopTimer();
     shown?.node.remove();
+    if (shown !== void 0 && this.hovering === shown) this.hovering = void 0;
     this.shown.delete(id);
+    this.prunePlaces();
     this.schedulePlacement();
   }
   /** Uses the same dismissal path as the close buttons. */
@@ -407,16 +569,11 @@ var Answers = class {
     } catch {
     }
   }
-  /** The element an anchored answer belongs next to; undefined when it is not shown. */
-  anchorTarget(anchor) {
+  findTarget(selector) {
     try {
-      const target = this.targetFor(anchor);
-      if (!target || target === this.ui.host || target.getClientRects().length === 0) {
-        return void 0;
-      }
-      return target;
+      return this.targetFor(selector);
     } catch {
-      return void 0;
+      return null;
     }
   }
   schedulePlacement() {
@@ -429,8 +586,20 @@ var Answers = class {
     this.placementFrame = void 0;
     const { agentAnchored, agentGeneral } = this.ui;
     const groups = /* @__PURE__ */ new Map();
+    let hovered;
     for (const entry of this.shown.values()) {
-      const target = entry.anchor === null ? void 0 : this.anchorTarget(entry.anchor);
+      const local = entry.localAnchor();
+      const target = entry.target();
+      if (entry.show !== null) entry.show.hidden = local;
+      entry.node.classList.toggle("has-anchor", local);
+      if (local) {
+        entry.node.tabIndex = 0;
+        entry.node.setAttribute("aria-label", "Agent message; activate to show its anchor");
+      } else {
+        entry.node.removeAttribute("tabindex");
+        entry.node.removeAttribute("aria-label");
+      }
+      if (this.hovering === entry) hovered = target;
       if (target !== void 0) {
         entry.unavailable.hidden = true;
         if (entry.node.parentElement !== agentAnchored) agentAnchored.append(entry.node);
@@ -438,13 +607,38 @@ var Answers = class {
         group.push(entry.node);
         groups.set(target, group);
       } else {
-        entry.unavailable.hidden = entry.anchor === null;
+        entry.unavailable.hidden = !local;
         if (entry.node.parentElement !== agentGeneral) agentGeneral.append(entry.node);
         entry.node.style.removeProperty("left");
         entry.node.style.removeProperty("top");
       }
     }
-    const occupied = Array.from(agentGeneral.children).map((node) => {
+    const preview = this.historyPreview;
+    if (preview !== void 0) {
+      if (preview.node.getClientRects().length > 0 && (preview.node.matches(":hover") || preview.node.contains(this.ui.shadow.activeElement))) {
+        hovered = this.places.get(preview.id)?.target() ?? hovered;
+      } else {
+        this.historyPreview = void 0;
+      }
+    }
+    if (this.pendingReveal !== null) {
+      const target = this.places.get(this.pendingReveal)?.target();
+      if (target !== void 0) {
+        this.pendingReveal = null;
+        this.revealElement(target);
+      }
+    }
+    if (hovered !== void 0) this.outline(hovered);
+    else if (this.highlightTimer === void 0) this.ui.messageHighlight.style.display = "none";
+    const sectionsHeight = this.sections?.offsetHeight ?? 0;
+    agentGeneral.style.setProperty("--sections-offset", `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`);
+    const obstacles = [
+      ...agentGeneral.children,
+      this.ui.list,
+      ...this.sections === null ? [] : [this.sections],
+      ...this.pdf === void 0 ? [] : document.querySelectorAll("#pdf-feedback > :not(:empty)")
+    ];
+    const occupied = obstacles.filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible").map((node) => {
       const rect = node.getBoundingClientRect();
       return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
     });
@@ -483,7 +677,7 @@ var Answers = class {
       }
     }
   }
-  showHighlight(target) {
+  outline(target) {
     const { messageHighlight } = this.ui;
     const rect = target.getBoundingClientRect();
     messageHighlight.style.display = "block";
@@ -491,27 +685,28 @@ var Answers = class {
     messageHighlight.style.top = `${rect.top}px`;
     messageHighlight.style.width = `${rect.width}px`;
     messageHighlight.style.height = `${rect.height}px`;
+  }
+  showHighlight(target) {
+    this.outline(target);
     if (this.highlightTimer !== void 0) clearTimeout(this.highlightTimer);
     this.highlightTimer = window.setTimeout(() => {
-      messageHighlight.style.display = "none";
+      this.highlightTimer = void 0;
+      this.schedulePlacement();
     }, 1800);
   }
   /** Scrolls to the element `selector` names and highlights it briefly. */
   reveal(selector) {
-    let target;
-    try {
-      target = this.targetFor(selector);
-    } catch {
-      target = null;
-    }
+    const target = this.findTarget(selector);
     if (!target || target.getClientRects().length === 0) {
       this.ui.showToast("Element is unavailable");
       return;
     }
-    const found = target;
-    found.scrollIntoView({ block: "center", inline: "nearest" });
+    this.revealElement(target);
+  }
+  revealElement(target) {
+    target.scrollIntoView({ block: "center", inline: "nearest" });
     requestAnimationFrame(() => {
-      this.showHighlight(found);
+      if (target.isConnected) this.showHighlight(target);
     });
   }
   followElementLink(link, event) {
@@ -1116,21 +1311,6 @@ function watchUrl(listener) {
   window.addEventListener("hashchange", check);
 }
 
-// client/src/json.ts
-function isRecord(value) {
-  return typeof value === "object" && value !== null;
-}
-
-// client/src/pdf-anchor.ts
-function parsePdfAnchor(value) {
-  if (!isRecord(value) || typeof value.page !== "number" || !Number.isInteger(value.page) || value.page < 1 || value.page > 4294967295 || !isRecord(value.box)) return void 0;
-  const { x0, y0, x1, y1 } = value.box;
-  if (typeof x0 !== "number" || typeof y0 !== "number" || typeof x1 !== "number" || typeof y1 !== "number" || !(0 <= x0 && x0 < x1 && x1 <= 14400 && 0 <= y0 && y0 < y1 && y1 <= 14400)) {
-    return void 0;
-  }
-  return { page: value.page, box: { x0, y0, x1, y1 } };
-}
-
 // client/src/draft.ts
 function parseKind(value) {
   switch (value) {
@@ -1717,10 +1897,10 @@ function stateText(state) {
   }
 }
 var CommentList = class {
-  constructor(ui, outbox, renderBody) {
+  constructor(ui, outbox, renderAnswer) {
     this.ui = ui;
     this.outbox = outbox;
-    this.renderBody = renderBody;
+    this.renderAnswer = renderAnswer;
     ui.pill.addEventListener("click", () => {
       this.toggle();
     });
@@ -1733,7 +1913,7 @@ var CommentList = class {
   }
   ui;
   outbox;
-  renderBody;
+  renderAnswer;
   items = /* @__PURE__ */ new Map();
   replies = /* @__PURE__ */ new Map();
   hovered = null;
@@ -1790,7 +1970,7 @@ var CommentList = class {
         node = document.createElement("article");
         node.className = "agent-reply";
         node.dataset.messageId = answer.id;
-        node.append(this.renderBody(answer));
+        this.renderAnswer(answer, node);
       }
       replies.set(answer.id, { answer, node });
     }
@@ -3015,7 +3195,8 @@ var styles = `
 
   :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
   :host([data-corner^="top"]) :is(#panel, #pdf-sections) { bottom: auto; top: 58px; }
-  :host([data-corner^="top"]) :is(#toast, #agent-general) { bottom: auto; top: 52px; }
+  :host([data-corner^="top"]) #toast { bottom: auto; top: 52px; }
+  :host([data-corner^="top"]) #agent-general { bottom: auto; top: calc(52px + var(--sections-offset, 0px)); }
 
   .chip {
     padding: 1px 5px;
@@ -3207,11 +3388,11 @@ var styles = `
   #agent-general {
     position: fixed;
     right: 14px;
-    bottom: 52px;
+    bottom: calc(52px + var(--sections-offset, 0px));
     z-index: 2147483643;
     display: flex;
     width: min(360px, calc(100vw - 28px));
-    max-height: calc(100vh - 66px);
+    max-height: calc(100vh - 66px - var(--sections-offset, 0px));
     flex-direction: column;
     gap: 8px;
     overflow: auto;
@@ -3247,6 +3428,8 @@ var styles = `
   .agent-message ul, .agent-message ol { margin: 6px 0; padding-left: 22px; }
   .agent-message pre { overflow: auto; }
   .agent-message code { font: inherit; background: #eeeae2; }
+  .agent-show { display: inline-block; margin-top: 6px; }
+  .agent-show[hidden] { display: none; }
   .agent-message a { color: #075f7a; text-decoration: underline; }
   .agent-message.has-anchor { cursor: pointer; }
   .agent-message.has-anchor:focus-visible {
@@ -3290,7 +3473,7 @@ var styles = `
   #message-highlight {
     position: fixed;
     display: none;
-    z-index: 2147483646;
+    z-index: 2147483641;
     border: 3px solid #0b7896;
     border-radius: 3px;
     background: rgb(11 120 150 / 12%);
@@ -3775,9 +3958,11 @@ function install(pdf) {
     if (outcome !== "saved" && socket.isOpen) keep(before);
     return outcome;
   };
-  const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref));
+  const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref), pdf);
   const dialog = new CommentDialog(ui, outbox);
-  const list = new CommentList(ui, outbox, (answer) => answers.renderBody(answer));
+  const list = new CommentList(ui, outbox, (answer, node) => {
+    answers.renderHistory(answer, node);
+  });
   answers.onHistory = (history2) => {
     list.setAnswers(history2);
   };
@@ -3972,6 +4157,7 @@ function install(pdf) {
     sender.setPlaced(url !== null);
   }
   watchUrl((now) => {
+    answers.schedulePlacement();
     url = now;
     layer.clear();
     layer.setPeople(here, url);

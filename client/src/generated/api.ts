@@ -91,6 +91,12 @@ export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Swi
 
 export type Choices = Array<string>;
 
+export type AnswerPath = string;
+
+export type AnswerSelector = string;
+
+export type PlaceAnchor = { "type": "html", path: AnswerPath, selector: AnswerSelector, } | { "type": "pdf", path: AnswerPath, pdf: PdfAnchorFields, };
+
 export type Answer = { id: CommentId, html: string, 
 /**
  * The ID of the comment it answers.
@@ -108,7 +114,7 @@ page?: CommentPage,
  * Addressed to this joiner alone (`jamparty send --to`, or an answer to
  * its comment); the page says so.
  */
-toYou: boolean, choices: Choices, 
+toYou: boolean, choices: Choices, place?: PlaceAnchor, 
 /**
  * Arrived after the share's admission replay.
  */
@@ -148,8 +154,8 @@ people: Array<Person>,
  */
 mine: Array<CommentId> | null, settings: PageSettings, 
 /**
- * Recent answers, oldest first: at most [`MAX_ANSWERS`], of at most
- * [`MAX_ANSWERS_HTML`] together.
+ * Recent answers, oldest first: at most [`MAX_ANSWERS`], encoding to at most
+ * [`MAX_ANSWERS_BYTES`] together.
  */
 answers: Array<Answer>, 
 /**

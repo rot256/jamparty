@@ -23,6 +23,7 @@ use crate::{
         name::JoinerName,
     },
     protocol::{
+        answer::AnswerAnchor,
         comment::{Author, Comment},
         control::{AnswerText, Choices},
         resource::ResourceId,
@@ -119,14 +120,14 @@ pub(crate) enum AgentRequest {
     Printed,
     /// Fetch one attachment by its content address.
     Fetch { id: ResourceId },
-    /// Answer on the page, next to comment `anchor` if given; only to
-    /// `to` (by default the anchor's author, else everyone).
+    /// Answer on the page, optionally at a comment or place. A comment
+    /// anchor defaults to its author, otherwise the default is everyone.
     Send {
         message: AnswerText,
         #[serde(default, skip_serializing_if = "Choices::is_empty")]
         choices: Choices,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        anchor: Option<CommentId>,
+        anchor: Option<AnswerAnchor<CommentId>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<Addressee>,
     },
@@ -155,7 +156,7 @@ pub(crate) enum AgentReply {
 mod tests {
     use crate::{
         protocol::agent::{Addressee, AgentReply, AgentRequest},
-        protocol::{control::Envelope, decode_line, encode_line},
+        protocol::{answer::AnswerAnchor, control::Envelope, decode_line, encode_line},
     };
 
     const ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
@@ -169,10 +170,14 @@ mod tests {
                 AgentRequest::Send {
                     choices: Default::default(),
                     message: "Done.".to_owned().try_into().unwrap(),
-                    anchor: Some(ID.parse().unwrap()),
+                    anchor: Some(AnswerAnchor::Comment {
+                        comment: ID.parse().unwrap(),
+                    }),
                     to: None,
                 },
-                format!(r#"{{"type":"send","message":"Done.","anchor":"{ID}"}}"#),
+                format!(
+                    r#"{{"type":"send","message":"Done.","anchor":{{"type":"comment","comment":"{ID}"}}}}"#
+                ),
             ),
             (
                 AgentRequest::Send {

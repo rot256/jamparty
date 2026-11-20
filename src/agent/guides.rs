@@ -108,8 +108,29 @@ const ANSWER: &str = r#"Answering: `jamparty send '<markdown>'`, or the message 
 Who sees it:
   jamparty send '...'                      everyone connected
   jamparty send --anchor <id> '...'        only the comment's author
+  jamparty send --at '#intro' --page / '...'   everyone, next to the HTML element
+  jamparty send --at-pdf 'paper.pdf#page=2&box=72,140,540,180' '...'
+
   jamparty send --to <name> '...'          only that person (marked "to you")
   jamparty send --to all --anchor <id> ... everyone, next to the comment
+
+Use one of --anchor, --at, or --at-pdf. --at requires --page with the
+share URL path (e.g. /pricing.html), without a query or fragment. --at-pdf
+uses a path from the share root and a 1-based page. Coordinates are PDF
+points from the top-left of the unrotated MediaBox. Place-anchored
+answers go to everyone unless --to is supplied. Earlier answers appear
+quietly in the comment list. A Show link takes the reader to the target.
+
+For LaTeX, build with SyncTeX enabled (e.g. latexmk -pdf -synctex=1), then
+run `synctex view -i <line>:<column>:<file.tex> -o <file.pdf>` against
+the matching build. Use Page and box=h,v-H,h+W,v. In the CLI output h
+and v are the left and bottom edges, and W and H are the full width and
+height including depth (big points, 1/72 inch, from the top left).
+The separate x and y give a point. For example, Page:2, h:133.768356,
+v:158.522720, W:343.711060, H:8.855677 give:
+
+  jamparty send --at-pdf 'paper.pdf#page=2&box=133.77,149.67,477.48,158.52' '...'
+
 `--to` takes a name as shown next to the comments (names only); when two
 people share a name the share refuses and lists them as `key:<fingerprint>`:
 pass `--to key:<fingerprint>` then (the comment's author.fingerprint, or the

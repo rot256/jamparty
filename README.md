@@ -72,9 +72,27 @@ jamparty recv                        # wait for comments, print them as NDJSON
 jamparty fetch <sha3:id> -o ./file    # fetch an attachment into your working directory
 jamparty send "Fixed, thanks."       # to everyone
 jamparty send --anchor <id> "Done."  # next to a comment, to its author
+jamparty send --at '#intro' --page / "Start here."
+jamparty send --at-pdf 'paper.pdf#page=2&box=72,140,540,180' "See this paragraph."
 jamparty send --choice "Keep it" --choice "Make it bigger" "Which heading size?"
 jamparty send --to alice "…"         # to one person (or --to key:<fingerprint>)
 ```
+
+Use one anchor per answer. `--at` requires a share URL path such as `/` or
+`/pricing.html` in `--page`. `--at-pdf` takes a PDF path relative to the
+share root and a 1-based page and box in PDF points. Both forms send to
+everyone by default and accept `--to`. Earlier answers appear quietly in
+the comment list. **Show** takes the reader to the anchored place.
+
+For LaTeX, compile with SyncTeX enabled (for example, `latexmk -pdf -synctex=1`),
+then run `synctex view -i 6:1:paper.tex -o paper.pdf` against the matching build.
+Use `Page` as the page number and convert the printed box to
+`box=h,v-H,h+W,v`. The CLI reports top-left-origin big points (1/72 inch).
+`h` is the left edge, `v` the bottom edge including depth, and `W` and `H`
+are the full width and height. The separate `x` and `y` give a point in the
+output. For example, `Page:2`, `h:133.768356`, `v:158.522720`,
+`W:343.711060`, `H:8.855677` give
+`'paper.pdf#page=2&box=133.77,149.67,477.48,158.52'`.
 
 Comments can include up to four files of up to 8 MiB each. In the comment
 dialog, use the paperclip, paste a file, or drop files. A comment with a
