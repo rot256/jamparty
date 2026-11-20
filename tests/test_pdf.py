@@ -3,6 +3,7 @@
 from base64 import b64decode
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from playwright.sync_api import Page, Route, expect
@@ -289,6 +290,141 @@ def test_pdf_dialog_clears_draft(
         field.press("Escape" if cancelled else "Enter")
         expect(field).to_be_hidden()
         expect_selection_cleared(page)
+
+
+@pytest.mark.parametrize("button", ["left", "right"])
+def test_pdf_click_comments(
+    tmp_path: Path, page: Page, button: Literal["left", "right"]
+) -> None:
+    pdf = tmp_path / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page"))
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        page.locator("#pdf-zoom").select_option("1")
+        sheet = page.locator("#jamparty-pdf-page-1")
+        text = sheet.locator(".textLayer span")
+        expect(text).to_have_text("First page")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        if button == "left":
+            overlay(page, "#edit").click()
+
+        bounds = sheet.bounding_box()
+        assert bounds is not None
+        x, y = bounds["x"], bounds["y"]
+        # At 100% zoom this is (4.5, 192) PDF points from the upper left.
+        if button == "left":
+            page.mouse.move(x + 5, y + 256)
+            page.mouse.down()
+            page.mouse.move(x + 6, y + 256)
+            page.mouse.up()
+        else:
+            page.mouse.click(x + 6, y + 256, button=button)
+        send_comment(page, "Review this point.")
+        [point] = recv_all(tmp_path)
+        assert point["pdf"] == {
+            "page": 1,
+            "box": {"x0": 0, "y0": 184, "x1": 12.5, "y1": 200},
+        }
+        assert "selectedText" not in point
+
+        block = text.bounding_box()
+        assert block is not None
+        page.mouse.click(
+            block["x"] + 5, block["y"] + block["height"] / 2, button=button
+        )
+        send_comment(page, "Review this block.")
+        [record] = recv_all(tmp_path)
+        assert record["selectedText"] == "First page"
+        anchor = record["pdf"]
+        assert isinstance(anchor, dict)
+        assert anchor["page"] == 1
+        block_bounds = anchor["box"]
+        assert isinstance(block_bounds, dict)
+        assert block_bounds["x0"] == 72
+        assert block_bounds["x1"] > 130
+
+        if button == "left":
+            # Place the gap between pages in the viewport.
+            _ = sheet.evaluate(
+                "node => window.scrollBy(0, node.getBoundingClientRect().bottom - 300)"
+            )
+            bounds = sheet.bounding_box()
+            assert bounds is not None
+            page.mouse.click(bounds["x"] + 100, bounds["y"] + bounds["height"] + 6)
+            expect(overlay(page, "#jamparty-dialog")).to_be_hidden()
+            expect(page.locator(".pdf-draft")).to_have_count(0)
+
+
+@pytest.mark.parametrize("button", ["left", "right"])
+@pytest.mark.parametrize("target", ["block", "point"])
+def test_pdf_click_comments_while_scrolling(
+    tmp_path: Path, page: Page, button: Literal["left", "right"], target: str
+) -> None:
+    pdf = tmp_path / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page"))
+    # Hold the next PDF.js text request after the initial render.
+    page.add_init_script("""
+        const post = Worker.prototype.postMessage;
+        Worker.prototype.postMessage = function (message, ...args) {
+            if (window.holdPdfText && message.action === "GetTextContent") {
+                window.holdPdfText = false;
+                window.releasePdfText = () => post.call(this, message, ...args);
+                return;
+            }
+            return post.call(this, message, ...args);
+        };
+    """)
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        page.set_viewport_size({"width": 848, "height": 720})
+        _ = page.goto(joined.url)
+        sheet = page.locator("#jamparty-pdf-page-1")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        if button == "left":
+            overlay(page, "#edit").click()
+        _ = page.evaluate("window.holdPdfText = true")
+
+        if target == "block":
+            bounds = sheet.locator(".textLayer span").bounding_box()
+            assert bounds is not None
+            x = bounds["x"] + 5
+            y = bounds["y"] + bounds["height"] / 2
+        else:
+            bounds = sheet.bounding_box()
+            assert bounds is not None
+            x, y = bounds["x"] + 6, bounds["y"] + 256
+        page.mouse.click(x, y, button=button)
+        _ = page.wait_for_function("typeof window.releasePdfText === 'function'")
+        expect(overlay(page, "#jamparty-dialog")).to_be_hidden()
+        _ = page.evaluate("""
+            () => new Promise(resolve => {
+                window.addEventListener("scroll", () => resolve(window.scrollY), { once: true });
+                window.scrollBy(0, 100);
+            })
+        """)
+        _ = page.evaluate("window.releasePdfText()")
+
+        send_comment(page, "Review the original location.")
+        [record] = recv_all(tmp_path)
+        if target == "block":
+            assert record["selectedText"] == "First page"
+            anchor = record["pdf"]
+            assert isinstance(anchor, dict)
+            assert anchor["page"] == 1
+            box = anchor["box"]
+            assert isinstance(box, dict)
+            assert box["x0"] == 72
+        else:
+            assert "selectedText" not in record
+            assert record["pdf"] == {
+                "page": 1,
+                "box": {"x0": 0, "y0": 184, "x1": 12.5, "y1": 200},
+            }
 
 
 def test_rotated_pdf_anchors(tmp_path: Path, page: Page) -> None:
