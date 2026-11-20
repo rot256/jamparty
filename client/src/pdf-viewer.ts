@@ -100,7 +100,7 @@ export class PdfViewer {
   private drag: Drag | null = null;
   private readonly hover = document.createElement("div");
   private hoverPoint: { page: PdfPage; x: number; y: number } | undefined;
-  private hoverRequest: Promise<void> | undefined;
+  private hoverRequest: Promise<boolean> | undefined;
   private gesture = 0;
   private draftMarker: { anchor: PdfAnchor; node: HTMLDivElement } | null = null;
   private readingRestore: { position: ViewPosition; x: number; y: number } | undefined;
@@ -372,8 +372,8 @@ export class PdfViewer {
   bind(ui: Ui, dialog: CommentDialog): void {
     this.dialog = dialog;
     this.hover.className = "pdf-block-hover";
-    ui.edit.setAttribute("aria-label", "Select a PDF block or draw a box");
-    ui.edit.title = "Select a PDF block or draw a box";
+    ui.edit.setAttribute("aria-label", "Comment on the PDF or draw a box");
+    ui.edit.title = "Comment on the PDF or draw a box";
     const setDrawing = (on: boolean): void => {
       this.drawing = on;
       ui.edit.setAttribute("aria-pressed", String(on));
@@ -405,10 +405,10 @@ export class PdfViewer {
     }, true);
     this.container?.addEventListener("pointerdown", (event) => {
       if (!this.drawing || dialog.open || !event.isPrimary || event.button !== 0) return;
+      this.gesture++;
       const page = this.pageFor(event.target);
       if (page === undefined) return;
       event.preventDefault();
-      this.gesture++;
       this.clearHover();
       page.element.setPointerCapture(event.pointerId);
       const outline = document.createElement("div");
@@ -431,7 +431,6 @@ export class PdfViewer {
     window.addEventListener("blur", () => { this.clearHover(); });
     window.addEventListener("scroll", () => {
       this.clearHover();
-      this.gesture++;
     }, { passive: true });
     this.container?.addEventListener("lostpointercapture", (event) => {
       if (this.drag?.id === event.pointerId) this.cancelDrag();
@@ -442,7 +441,7 @@ export class PdfViewer {
       this.moveDrag(event);
       this.cancelDrag();
       if (!drag.moved) {
-        this.selectBlock(drag.page, event.clientX, event.clientY);
+        this.selectAt(drag.page, event.clientX, event.clientY);
         return;
       }
       const anchor = drag.page.anchor(rectangle(drag.x, drag.y, event.clientX, event.clientY));
@@ -459,7 +458,8 @@ export class PdfViewer {
     const point = this.hoverPoint;
     if (point === undefined) return;
     const { page, x, y } = point;
-    const block = page.blockAt(x, y);
+    const pdfPoint = page.pdfPointAt(x, y);
+    const block = pdfPoint === undefined ? undefined : page.blockAt(pdfPoint);
     if (block === undefined) this.hover.remove();
     else page.mark(this.hover, block.anchor, page.element);
     const pending = page.prepareBlocks();
@@ -472,16 +472,21 @@ export class PdfViewer {
     });
   }
 
-  private selectBlock(page: PdfPage, x: number, y: number): void {
+  private selectAt(page: PdfPage, x: number, y: number): void {
+    const point = page.pdfPointAt(x, y);
+    if (point === undefined) return;
     const gesture = this.gesture;
     const select = (): void => {
       if (gesture !== this.gesture || !page.element.isConnected) return;
-      const block = page.blockAt(x, y);
-      if (block !== undefined) this.openComment(block.anchor, block.text, x, y);
+      const block = page.blockAt(point);
+      const anchor = block?.anchor ?? page.pointAnchor(point);
+      if (anchor !== undefined) this.openComment(anchor, block?.text ?? null, x, y);
     };
     const pending = page.prepareBlocks();
     if (pending === undefined) select();
-    else void pending.then(select);
+    else void pending.then((completed) => {
+      if (completed) select();
+    });
   }
 
   private pageFor(target: unknown): PdfPage | undefined {
@@ -509,6 +514,14 @@ export class PdfViewer {
     this.drag = null;
     drag.outline.remove();
     if (drag.page.element.hasPointerCapture(drag.id)) drag.page.element.releasePointerCapture(drag.id);
+  }
+
+  commentAtPointer(event: MouseEvent): boolean {
+    const page = this.pageFor(event.target);
+    if (page === undefined) return false;
+    this.gesture++;
+    if (!this.commentOnSelection(event)) this.selectAt(page, event.clientX, event.clientY);
+    return true;
   }
 
   commentOnSelection(event?: MouseEvent): boolean {

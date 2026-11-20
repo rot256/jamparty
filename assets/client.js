@@ -3863,7 +3863,7 @@ function install(pdf) {
     if (event.shiftKey || event.composedPath().includes(ui.host)) return;
     if (!(event.target instanceof Element)) return;
     if (pdf !== void 0) {
-      if (pdf.commentOnSelection(event)) event.preventDefault();
+      if (pdf.commentAtPointer(event)) event.preventDefault();
       return;
     }
     event.preventDefault();

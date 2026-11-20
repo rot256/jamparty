@@ -48,7 +48,7 @@ export class PdfPage {
   private operators: PDFOperatorList | undefined;
   private runs: Run[] | undefined;
   private blocks: PdfBlock[] | undefined;
-  private blockRequest: { controller: AbortController; promise: Promise<void> } | undefined;
+  private blockRequest: { controller: AbortController; promise: Promise<boolean> } | undefined;
 
   constructor(
     readonly number: number,
@@ -191,7 +191,7 @@ export class PdfPage {
       .sort((a, b) => a.top - b.top);
   }
 
-  prepareBlocks(): Promise<void> | undefined {
+  prepareBlocks(): Promise<boolean> | undefined {
     const page = this.page;
     if (this.blocks !== undefined || !this.visible || this.element.dataset.rendered !== "true" || page === null) return;
     if (this.blockRequest !== undefined) return this.blockRequest.promise;
@@ -201,18 +201,22 @@ export class PdfPage {
       if (!controller.signal.aborted) this.blocks = blocks;
     }).catch(() => {
       if (!controller.signal.aborted) this.blocks = [];
-    }).finally(() => {
+    }).then(() => {
       if (this.blockRequest?.controller === controller) this.blockRequest = undefined;
+      return !controller.signal.aborted;
     });
     this.blockRequest = { controller, promise };
     return promise;
   }
 
-  blockAt(x: number, y: number): { anchor: PdfAnchor; text: string | null } | undefined {
-    if (this.blocks === undefined || this.element.dataset.rendered !== "true") return;
+  pdfPointAt(x: number, y: number): [number, number] | undefined {
     const rect = this.element.getBoundingClientRect();
     if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return;
-    const [px, py] = this.viewport.convertToPdfPoint(x - rect.left, y - rect.top) as [number, number];
+    return this.viewport.convertToPdfPoint(x - rect.left, y - rect.top) as [number, number];
+  }
+
+  blockAt([px, py]: [number, number]): { anchor: PdfAnchor; text: string | null } | undefined {
+    if (this.blocks === undefined || this.element.dataset.rendered !== "true") return;
     let best: PdfBlock | undefined;
     let area = Infinity;
     for (const block of this.blocks) {
@@ -226,6 +230,11 @@ export class PdfPage {
     if (best === undefined) return;
     const anchor = this.pdfAnchor(best.bounds);
     return anchor === undefined ? undefined : { anchor, text: best.text };
+  }
+
+  pointAnchor([px, py]: [number, number]): PdfAnchor | undefined {
+    const radius = 8 / this.viewport.userUnit;
+    return this.pdfAnchor([px - radius, py - radius, px + radius, py + radius]);
   }
 
   anchor(rect: Rectangle): PdfAnchor | undefined {
