@@ -15,11 +15,16 @@ pub(crate) mod proxy;
 mod resources;
 mod socket;
 
-#[cfg(test)]
-use std::path::Path;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use iroh::Endpoint;
+use rootcause::prelude::{ResultExt, bail};
 use tokio::{
     sync::{Semaphore, oneshot},
     task::{JoinHandle, JoinSet},
@@ -37,6 +42,7 @@ use crate::{
         clock::{Clock, SystemClock},
         ids::{EndpointKey, Sid},
         rng::SystemRng,
+        text::Untrusted,
         token::{PartySecret, PartyToken},
     },
     share::{
@@ -58,8 +64,47 @@ const MAX_UNADMITTED: usize = 32;
 pub(crate) enum Source {
     /// A directory (canonical path), with live reload.
     Files(PathBuf),
+    /// One regular file (canonical parent), with live reload.
+    File(PathBuf),
     /// A dev server.
     Proxy(UpstreamUrl),
+}
+
+impl Source {
+    pub(crate) fn description(&self) -> String {
+        match self {
+            Self::Files(root) => format!(
+                "everything under {} (except dotfiles) (live reload)",
+                Untrusted(root.display())
+            ),
+            Self::File(file) => format!("file {} (live reload)", Untrusted(file.display())),
+            Self::Proxy(upstream) => upstream.to_string(),
+        }
+    }
+
+    pub(crate) fn from_path(input: &Path) -> Result<Self, Report> {
+        let path = fs::canonicalize(input)
+            .context_with(|| format!("could not share {}", input.display()))?;
+        if path.is_dir() {
+            return Ok(Self::Files(path));
+        }
+        if !fs::symlink_metadata(input)
+            .context_with(|| format!("could not share {}", input.display()))?
+            .is_file()
+        {
+            bail!("{} is not a regular file or directory", input.display());
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            bail!(
+                "{} has a file name that is not valid UTF-8",
+                input.display()
+            );
+        };
+        if name.starts_with('.') {
+            bail!("cannot share dotfile {}", input.display());
+        }
+        Ok(Self::File(path))
+    }
 }
 
 #[derive(Clone)]
@@ -138,10 +183,12 @@ impl Share {
             secret: PartySecret::generate(&SystemRng),
         };
         let (site, watcher) = match source {
-            Source::Files(root) => {
-                let (watcher, reload) = live::start(&root)?;
-                let files = Files::new(root);
-                (Site::Files { files, reload }, Some(watcher))
+            Source::Files(root) => static_site(root, None)?,
+            Source::File(file) => {
+                let Some(parent) = file.parent() else {
+                    bail!("shared file has no parent directory");
+                };
+                static_site(parent.to_owned(), Some(file))?
             }
             Source::Proxy(upstream) => {
                 let proxy = Proxy::new(upstream, token.share.sid());
@@ -247,6 +294,15 @@ impl Share {
     }
 }
 
+fn static_site(
+    root: PathBuf,
+    single: Option<PathBuf>,
+) -> Result<(Site, Option<LiveWatcher>), Report> {
+    let (watcher, reload) = live::start(&root, single.clone())?;
+    let files = Files::new(root, single);
+    Ok((Site::Files { files, reload }, Some(watcher)))
+}
+
 /// Accepts joiners until `stop` fires or is dropped; then cancels the
 /// connections and returns once all of them have finished.
 async fn accept(
@@ -274,4 +330,34 @@ async fn accept(
         while connections.try_join_next().is_some() {}
     }
     connections.shutdown().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use crate::share::Source;
+
+    #[test]
+    fn describes_each_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let file = root.join("report.html");
+        fs::write(&file, "").unwrap();
+        assert_eq!(
+            Source::from_path(&root).unwrap().description(),
+            format!(
+                "everything under {} (except dotfiles) (live reload)",
+                root.display()
+            )
+        );
+        assert_eq!(
+            Source::from_path(&file).unwrap().description(),
+            format!("file {} (live reload)", file.display())
+        );
+        assert_eq!(
+            Source::Proxy("http://localhost:8000".parse().unwrap()).description(),
+            "http://localhost:8000/"
+        );
+    }
 }

@@ -28,15 +28,17 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct Files {
     root: PathBuf,
+    single: Option<PathBuf>,
     resolver: Resolver,
 }
 
 impl Files {
-    /// `root` must be canonical.
-    pub(crate) fn new(root: PathBuf) -> Self {
+    /// `root` must be canonical. `single`, if set, is a file directly under it.
+    pub(crate) fn new(root: PathBuf, single: Option<PathBuf>) -> Self {
         Self {
             resolver: Resolver::new(root.clone()),
             root,
+            single,
         }
     }
 
@@ -45,7 +47,11 @@ impl Files {
         request: Request<B>,
         revision: Revision,
     ) -> Result<Response<AppBody>, RequestError> {
-        let Self { root, resolver } = self;
+        let Self {
+            root,
+            single,
+            resolver,
+        } = self;
         let request_method = request.method().clone();
         if !matches!(request_method, Method::GET | Method::HEAD) {
             return Err(RequestError::method_not_allowed("GET, HEAD"));
@@ -54,7 +60,12 @@ impl Files {
         let Ok(requested) = RequestedPath::try_from(uri_path) else {
             return Ok(empty_response(StatusCode::NOT_FOUND));
         };
-        let resolved = match path_access(&requested, root).await? {
+        let access = if let Some(file) = single {
+            single_access(uri_path, file, root).await?
+        } else {
+            path_access(&requested, root).await?
+        };
+        let resolved = match access {
             Access::Refused(status) => return Ok(empty_response(status)),
             Access::Listing(path) => {
                 let response = listing::response(root, &path, &requested.path, &request_method)
@@ -74,7 +85,11 @@ impl Files {
         };
         let resolved = match resolved {
             ResolveResult::Found(file) => match fs::canonicalize(root.join(&file.path)).await {
-                Ok(path) if served(&path, root) => ResolveResult::Found(file),
+                Ok(path)
+                    if served(&path, root) && single.as_ref().is_none_or(|file| *file == path) =>
+                {
+                    ResolveResult::Found(file)
+                }
                 Ok(path) => {
                     tracing::warn!(path = %Untrusted(path.display()), "refused a symlink outside the root or to a dotfile");
                     ResolveResult::NotFound
@@ -167,6 +182,32 @@ enum Access {
     File,
     Redirect(String),
     Listing(PathBuf),
+}
+
+async fn single_access(uri_path: &str, file: &Path, root: &Path) -> Result<Access, RequestError> {
+    let Some(name) = file.file_name().and_then(|name| name.to_str()) else {
+        return Ok(Access::Refused(StatusCode::NOT_FOUND));
+    };
+    if uri_path == "/" {
+        return Ok(Access::Redirect(format!("/{}", encode_name(name))));
+    }
+    let matches_name = uri_path.strip_prefix('/').is_some_and(|segment| {
+        percent_encoding::percent_decode_str(segment)
+            .decode_utf8()
+            .is_ok_and(|decoded| decoded == name)
+    });
+    if !matches_name || !served(file, root) {
+        return Ok(Access::Refused(StatusCode::NOT_FOUND));
+    }
+    match fs::symlink_metadata(file).await {
+        Ok(metadata) if metadata.is_file() => match fs::canonicalize(file).await {
+            Ok(path) if path == file => Ok(Access::File),
+            Ok(_) => Ok(Access::Refused(StatusCode::NOT_FOUND)),
+            Err(error) => access_error(error),
+        },
+        Ok(_) => Ok(Access::Refused(StatusCode::NOT_FOUND)),
+        Err(error) => access_error(error),
+    }
 }
 
 async fn path_access(requested: &RequestedPath, root: &Path) -> Result<Access, RequestError> {
@@ -310,7 +351,7 @@ mod tests {
         symlink(outside.path(), root.join("escaping-link")).unwrap();
         symlink("z-last.txt", root.join("visible-link")).unwrap();
         let _socket = UnixListener::bind(root.join("special")).unwrap();
-        let files = Files::new(root.clone());
+        let files = Files::new(root.clone(), None);
 
         let response = get(&files, "/").await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -392,7 +433,7 @@ mod tests {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
         }
         fs::write(root.join("public.txt"), "public").unwrap();
-        let files = Files::new(root);
+        let files = Files::new(root, None);
 
         let response = get(&files, "/").await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -408,6 +449,52 @@ mod tests {
             get(&files, "/private.txt").await.status(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[tokio::test]
+    async fn single_file_only_serves_its_exact_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("paper #%.pdf");
+        fs::write(&file, "the PDF").unwrap();
+        fs::write(root.join("sibling.pdf"), "private").unwrap();
+        let files = Files::new(root.clone(), Some(file.clone()));
+
+        let redirect = get(&files, "/").await;
+        assert_eq!(redirect.status(), StatusCode::MOVED_PERMANENTLY);
+        let location = redirect.headers()[header::LOCATION].to_str().unwrap();
+        assert_eq!(location, "/paper%20%23%25.pdf");
+        let response = get(&files, location).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/pdf");
+        assert_eq!(body(response).await, "the PDF");
+        for missing in [
+            "/sibling.pdf",
+            "/sub/",
+            "/sub/../paper%20%23%25.pdf",
+            "//paper%20%23%25.pdf",
+            "/paper%20%23%25.pdf/",
+        ] {
+            assert_eq!(
+                get(&files, missing).await.status(),
+                StatusCode::NOT_FOUND,
+                "{missing}"
+            );
+        }
+
+        fs::remove_file(&file).unwrap();
+        symlink("sibling.pdf", &file).unwrap();
+        assert_eq!(get(&files, location).await.status(), StatusCode::NOT_FOUND);
+        fs::remove_file(&file).unwrap();
+        fs::create_dir(&file).unwrap();
+        assert_eq!(get(&files, location).await.status(), StatusCode::NOT_FOUND);
+
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join(file.file_name().unwrap()), "outside").unwrap();
+        let moved = outside.path().join("moved");
+        fs::rename(&root, moved).unwrap();
+        symlink(outside.path(), &root).unwrap();
+        assert_eq!(get(&files, location).await.status(), StatusCode::NOT_FOUND);
     }
 
     async fn get(files: &Files, uri: &str) -> hyper::Response<crate::adapters::http::AppBody> {

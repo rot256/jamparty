@@ -1,4 +1,10 @@
-use std::{ffi::OsString, fs, time::Duration};
+use std::{
+    ffi::OsString,
+    fs,
+    os::unix::{ffi::OsStrExt, fs::symlink, net::UnixListener},
+    path::Path,
+    time::Duration,
+};
 
 use clap::{CommandFactory, Parser};
 
@@ -26,9 +32,41 @@ fn token() -> String {
 }
 
 #[test]
+fn validates_the_serve_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    assert!(matches!(Source::from_path(&root).unwrap(), Source::Files(path) if path == root));
+    let file = root.join("paper.pdf");
+    fs::write(&file, "").unwrap();
+    assert!(matches!(Source::from_path(&file).unwrap(), Source::File(path) if path == file));
+    let link = root.join("link.pdf");
+    symlink(&file, &link).unwrap();
+    let dotfile = root.join(".paper.pdf");
+    fs::write(&dotfile, "").unwrap();
+    let non_utf8 = root.join(std::ffi::OsStr::from_bytes(b"name-\xff"));
+    fs::write(&non_utf8, "").unwrap();
+    let special = root.join("socket");
+    let _socket = UnixListener::bind(&special).unwrap();
+    for (path, message) in [
+        (dotfile, "cannot share dotfile"),
+        (non_utf8, "not valid UTF-8"),
+        (special, "not a regular file or directory"),
+        (link, "not a regular file or directory"),
+        (root.join("missing"), "could not share"),
+    ] {
+        let error = Source::from_path(&path).unwrap_err();
+        assert!(describe(&error).contains(message), "{error}");
+    }
+}
+
+#[test]
 fn parses_the_commands() {
     let serve = Cli::try_parse_from(["jamparty", "serve"]).unwrap();
-    assert!(matches!(serve.command, Some(Command::Serve { .. })));
+    assert!(matches!(serve.command, Some(Command::Serve { path, .. }) if path == Path::new(".")));
+    let serve = Cli::try_parse_from(["jamparty", "serve", "build/paper.pdf"]).unwrap();
+    assert!(
+        matches!(serve.command, Some(Command::Serve { path, .. }) if path == Path::new("build/paper.pdf"))
+    );
     let proxy = Cli::try_parse_from(["jamparty", "proxy", "http://127.0.0.1:8000"]).unwrap();
     assert!(matches!(proxy.command, Some(Command::Proxy { .. })));
     let token = token();
@@ -168,10 +206,10 @@ fn t3_startup_note_pastes_exactly_or_not_at_all() {
             "proxy http://127.0.0.1:8000/a%20b/",
         ),
         // Not UTF-8: pasting a lossy path would share another directory.
-        (files(b"/srv/\xffsite"), "serve <dir>"),
+        (files(b"/srv/\xffsite"), "serve <path>"),
         // Control characters would drive the terminal it is printed to.
-        (files(b"/srv/\x1b[2J\rsite"), "serve <dir>"),
-        (files("/srv/\u{202e}site".as_bytes()), "serve <dir>"),
+        (files(b"/srv/\x1b[2J\rsite"), "serve <path>"),
+        (files("/srv/\u{202e}site".as_bytes()), "serve <path>"),
     ] {
         let (_, note) = target(delivery(&[]), &source, true);
         assert_eq!(

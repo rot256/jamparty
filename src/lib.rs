@@ -10,7 +10,6 @@ mod tests;
 use std::{
     env,
     ffi::OsString,
-    fs,
     io::{self, BufRead, Read},
     net::SocketAddr,
     path::PathBuf,
@@ -22,10 +21,7 @@ use std::{
 use clap::{Args, Parser, Subcommand};
 use iroh::RelayUrl;
 use nix::unistd;
-use rootcause::{
-    option_ext::OptionExt,
-    prelude::{ResultExt, bail},
-};
+use rootcause::{option_ext::OptionExt, prelude::ResultExt};
 use tokio::{
     signal::{
         ctrl_c,
@@ -100,11 +96,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Share a static directory (live reload); print the party token.
+    /// Share a file or static directory (live reload); print the party token.
     Serve {
-        /// Directory to share.
-        #[arg(default_value = ".")]
-        directory: PathBuf,
+        /// File or directory to share. Serving a directory exposes everything under it except dotfiles.
+        #[arg(default_value = ".", value_name = "path")]
+        path: PathBuf,
         #[command(flatten)]
         net: ShareNet,
         #[command(flatten)]
@@ -285,26 +281,15 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
     };
     match command {
         Command::Serve {
-            directory,
+            path,
             net,
             delivery,
-        } => {
-            let root = fs::canonicalize(&directory)
-                .context_with(|| format!("could not share {}", directory.display()))?;
-            if !root.is_dir() {
-                bail!("{} is not a directory", root.display());
-            }
-            let site = root.display().to_string();
-            share(Source::Files(root), &net, delivery, &site, " (live reload)").await
-        }
+        } => share(Source::from_path(&path)?, &net, delivery).await,
         Command::Proxy {
             upstream,
             net,
             delivery,
-        } => {
-            let site = upstream.to_string();
-            share(Source::Proxy(upstream), &net, delivery, &site, "").await
-        }
+        } => share(Source::Proxy(upstream), &net, delivery).await,
         Command::Join {
             token,
             settings,
@@ -379,12 +364,14 @@ fn target(delivery: Delivery, source: &Source, in_t3: bool) -> (Target, Option<S
     (Target::Recv, note)
 }
 
-/// `source` as `jamparty` arguments to paste: the mode, then the directory
+/// `source` as `jamparty` arguments to paste: the mode, then the path
 /// or URL quoted for the shell, or a placeholder when it cannot be shown
 /// exactly (not UTF-8) or safely (control characters).
 fn source_args(source: &Source) -> String {
     let (mode, placeholder, value) = match source {
-        Source::Files(root) => ("serve", "<dir>", root.to_str().map(str::to_owned)),
+        Source::Files(path) | Source::File(path) => {
+            ("serve", "<path>", path.to_str().map(str::to_owned))
+        }
         Source::Proxy(upstream) => ("proxy", "<url>", Some(upstream.to_string())),
     };
     let value = value
@@ -417,13 +404,7 @@ fn net_config(discovery: Discovery) -> Result<NetConfig, Report> {
     Ok(net)
 }
 
-async fn share(
-    source: Source,
-    net: &ShareNet,
-    delivery: Delivery,
-    site: &str,
-    detail: &str,
-) -> Result<(), Report> {
+async fn share(source: Source, net: &ShareNet, delivery: Delivery) -> Result<(), Report> {
     let discovery = if net.local {
         Discovery::Direct
     } else {
@@ -443,6 +424,7 @@ async fn share(
                 .join(" ")
         ),
     };
+    let site = source.description();
     let config = ShareConfig::new(
         source,
         net_config(discovery)?,
@@ -459,7 +441,7 @@ async fn share(
     }
     // Startup records stay on stdout for agents reading the token and id;
     // ongoing diagnostics (including tracing) go to stderr.
-    println!("jamparty: sharing {site}{detail}");
+    println!("jamparty: sharing {site}");
     println!("jamparty: token: {}", share.token());
     println!(
         "jamparty: warning: anyone with the token can see the site and send comments to the agent until this share stops"
