@@ -1,5 +1,6 @@
 """Theme, drag and connector geometry in both overlay entry points."""
 
+import re
 from pathlib import Path
 from typing import cast
 
@@ -287,6 +288,89 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
         expect(link).not_to_have_attribute("d", manual or "")
         assert answer.bounding_box() == moved
         check_link()
+
+
+def test_pdf_drag_measures_card_once_per_frame(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "paper.pdf"
+    _ = path.write_bytes(fixture_pdf("Second page"))
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        page.set_viewport_size({"width": 1440, "height": 900})
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(page.locator(".pdf-page").first).to_have_attribute(
+            "data-rendered", "true"
+        )
+        _ = jamparty(
+            tmp_path,
+            "send",
+            "--at-pdf",
+            "paper.pdf#page=1&box=72,515,540,545",
+            "Check the proof.",
+        )
+        answer = overlay(page, ".agent-message")
+        heading = answer.locator(".agent-header")
+        expect(overlay(page, ".agent-anchor-line")).to_have_attribute(
+            "d", re.compile("^M")
+        )
+        start = answer.bounding_box()
+        assert start is not None
+        _ = heading.evaluate("""node => {
+            node.addEventListener("pointerdown", event => {
+                node.dataset.testPointer = event.pointerId;
+            }, { once: true });
+        }""")
+        # A real pointerdown establishes capture before the synthetic burst.
+        start_drag(page, heading, 0, 0)
+        try:
+            synchronous, per_frame, x, y, end_x, end_y = cast(
+                list[float],
+                heading.evaluate("""async heading => {
+                    const card = heading.closest(".agent-message");
+                    const link = heading.getRootNode().querySelector(".agent-anchor-line");
+                    const measure = Element.prototype.getBoundingClientRect;
+                    const handle = measure.call(heading);
+                    let measurements = 0;
+                    Element.prototype.getBoundingClientRect = function () {
+                        if (this === card) measurements++;
+                        return measure.call(this);
+                    };
+                    try {
+                        for (let step = 1; step <= 12; step++) {
+                            heading.dispatchEvent(new PointerEvent("pointermove", {
+                                pointerId: Number(heading.dataset.testPointer),
+                                pointerType: "mouse",
+                                isPrimary: true,
+                                buttons: 1,
+                                clientX: handle.x + handle.width / 3,
+                                clientY: handle.y + handle.height / 2 - step * 10,
+                                bubbles: true,
+                            }));
+                        }
+                        const synchronous = measurements;
+                        await new Promise(resolve => requestAnimationFrame(resolve));
+                        // Geometry assertions must not count as placement reads.
+                        const rect = measure.call(card);
+                        const end = link.getPointAtLength(link.getTotalLength());
+                        return [synchronous, measurements - synchronous,
+                                rect.x, rect.y, end.x, end.y];
+                    } finally {
+                        Element.prototype.getBoundingClientRect = measure;
+                    }
+                }"""),
+            )
+        finally:
+            page.mouse.up()
+        assert synchronous == 0
+        assert per_frame == 1
+        assert x == pytest.approx(start["x"], abs=1)
+        assert y == pytest.approx(start["y"] - 120, abs=1)
+        assert end_x == pytest.approx(start["x"] + start["width"], abs=1)
+        # The target is below the moved card, so the endpoint sits at the lower inset.
+        assert end_y == pytest.approx(start["y"] - 120 + start["height"] * 0.75, abs=1)
 
 
 def test_page_comment_reply_has_no_missing_target(tmp_path: Path, page: Page) -> None:
