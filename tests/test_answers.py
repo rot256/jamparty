@@ -1010,3 +1010,213 @@ def test_clipped_answer_keeps_internal_scroll(tmp_path: Path, page: Page) -> Non
         page.set_viewport_size({"width": 540, "height": 620})
         expect(answer).not_to_have_css("width", "340px")
         assert answer.evaluate("(node) => node.scrollTop") == 200
+
+
+def test_fixed_targets_follow_their_scroll_sources(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "index.html"
+    _ = path.write_text("""
+        <body style="min-height: 1800px">
+          <section id="panel" style="position: fixed; top: 50px; left: 80px;
+            width: 260px; height: 260px; overflow: auto">
+            <div id="panel-target" style="margin: 100px 0 500px">Panel target</div>
+          </section>
+          <section style="transform: translateX(0); margin-top: 420px">
+            <div id="transformed-target" style="position: fixed; left: 80px;
+              width: 240px">Transformed target</div>
+          </section>
+        </body>
+    """)
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        for target in ("panel-target", "transformed-target"):
+            _ = jamparty(
+                tmp_path, "send", "--at", f"#{target}", "--page", "/index.html", target
+            )
+            group = overlay(page, ".agent-placement").filter(has_text=target)
+            brace = group.locator(".agent-anchor-brace")
+            expect(brace).to_have_attribute("d", re.compile("^M"))
+            delta, aligned = cast(
+                list[float],
+                brace.evaluate(
+                    """async (brace, target) => {
+                        const anchor = document.getElementById(target);
+                        const marker = brace.closest(".agent-placement")
+                            .querySelector(".agent-anchor-marker");
+                        const edgeBefore = brace.getPointAtLength(0)
+                            .matrixTransform(brace.getScreenCTM()).y;
+                        await new Promise(resolve => {
+                            const source = target === "panel-target"
+                                ? document.querySelector("#panel") : document;
+                            window.addEventListener("scroll", event => {
+                                if (event.target === source) requestAnimationFrame(resolve);
+                            }, { capture: true, once: true });
+                            if (source === document) window.scrollTo(0, 80);
+                            else source.scrollTop = 60;
+                        });
+                        const after = anchor.getBoundingClientRect();
+                        const edgeAfter = brace.getPointAtLength(0)
+                            .matrixTransform(brace.getScreenCTM()).y;
+                        return [edgeAfter - edgeBefore,
+                                marker.getBoundingClientRect().top - after.top];
+                    }""",
+                    target,
+                ),
+            )
+            assert delta == (-60 if target == "panel-target" else -80)
+            assert aligned == 0
+
+
+def test_open_comment_list_repositions_anchored_answer(
+    tmp_path: Path, page: Page
+) -> None:
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "index.html"
+    _ = path.write_text(
+        '<div id="target" style="position:absolute;top:610px;left:510px;width:170px">'
+        "Target</div>"
+    )
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path, "send", "--at", "#target", "--page", "/index.html", "A reply."
+        )
+        marker = overlay(page, ".agent-anchor-marker")
+        expect(marker).to_have_attribute("data-side", "right")
+        old_card = overlay(page, "#agent-anchored .agent-message").bounding_box()
+        assert old_card is not None
+        overlay(page, "#pill").click()
+        comment_list = overlay(page, "#list").bounding_box()
+        assert comment_list is not None
+        assert old_card["x"] + old_card["width"] > comment_list["x"]
+        assert old_card["y"] + old_card["height"] > comment_list["y"]
+        expect(marker).to_have_attribute("data-side", "left")
+
+
+def test_moving_first_answer_keeps_grip_reachable(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "index.html"
+    _ = path.write_text(
+        '<main style="min-height:1800px;padding-top:65px">'
+        '<div id="target" style="width:200px">First line</div></main>'
+    )
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path, "send", "--at", "#target", "--page", "/index.html", "A reply."
+        )
+        card = overlay(page, "#agent-anchored .agent-message")
+        heading = card.locator(".agent-header")
+        grip = card.get_by_role("button", name="Move")
+        expect(heading).to_be_visible()
+        box = heading.bounding_box()
+        assert box is not None
+        x = box["x"] + box["width"] / 2
+        page.mouse.move(x, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(x, 0, steps=8)
+        page.mouse.up()
+        expect(card).to_have_css("top", "8px")
+        expect(card).to_be_in_viewport(ratio=1)
+        expect(grip).to_be_in_viewport(ratio=1)
+        grip.focus()
+        for _ in range(8):
+            page.keyboard.press("Shift+ArrowUp")
+        _ = page.evaluate("window.scrollTo(0, 0)")
+        expect(card).to_be_in_viewport(ratio=1)
+        expect(grip).to_be_in_viewport(ratio=1)
+        before = card.bounding_box()
+        assert before is not None
+        page.keyboard.press("ArrowDown")
+        _ = page.wait_for_function(
+            """y => Math.abs(document.querySelector("#jamparty").shadowRoot
+                .querySelector("#agent-anchored .agent-message")
+                .getBoundingClientRect().top - y - 16) < 1""",
+            arg=before["y"],
+        )
+
+
+def test_nested_scroll_batches_affected_card_reads(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "index.html"
+    _ = path.write_text("""
+        <section style="height:360px;overflow:auto">
+          <section id="scroller" style="height:300px;overflow:auto;margin-left:80px">
+            <div id="first" style="margin-top:100px;width:240px">First</div>
+            <div id="second" style="margin:100px 0 500px;width:240px">Second</div>
+          </section>
+        </section>
+        <section style="height:200px;overflow:auto;margin-left:80px">
+          <div id="independent" style="margin:50px 0 500px;width:240px">Other</div>
+        </section>
+    """)
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        for target in ("first", "second", "independent"):
+            _ = jamparty(
+                tmp_path, "send", "--at", f"#{target}", "--page", "/index.html", target
+            )
+        expect(overlay(page, ".agent-placement")).to_have_count(3)
+        frames = cast(
+            list[list[str]],
+            page.evaluate("""async () => {
+                const shadow = document.querySelector("#jamparty").shadowRoot;
+                const scroller = document.querySelector("#scroller");
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                const wrappers = [...shadow.querySelectorAll(".agent-placement")];
+                const styles = new Map(wrappers.map(node => [
+                    node.style, node.querySelector(".agent-message").textContent.trim()
+                ]));
+                const measure = Element.prototype.getBoundingClientRect;
+                const set = CSSStyleDeclaration.prototype.setProperty;
+                const frames = [];
+                let calls = [];
+                Element.prototype.getBoundingClientRect = function () {
+                    calls.push("read:" + this.id);
+                    return measure.call(this);
+                };
+                CSSStyleDeclaration.prototype.setProperty = function (name, value, ...rest) {
+                    if (name === "transform" && styles.has(this)) {
+                        calls.push("write:" + styles.get(this));
+                    }
+                    return set.call(this, name, value, ...rest);
+                };
+                try {
+                    for (const top of [20, 40, 60]) {
+                        calls = [];
+                        await new Promise(resolve => {
+                            scroller.addEventListener("scroll", () => {
+                                requestAnimationFrame(resolve);
+                            }, { once: true });
+                            scroller.scrollTop = top;
+                        });
+                        frames.push(calls);
+                    }
+                    return frames;
+                } finally {
+                    Element.prototype.getBoundingClientRect = measure;
+                    CSSStyleDeclaration.prototype.setProperty = set;
+                }
+            }"""),
+        )
+        for calls in frames:
+            assert set(calls[:2]) == {"read:first", "read:second"}
+            assert len(calls) == 4
+            assert all(call.startswith("write:") for call in calls[2:])
+            assert not any("independent" in call for call in calls)

@@ -24,9 +24,10 @@ const directions: Readonly<Record<string, Point>> = {
 export function moveBy(
   handle: HTMLElement,
   surface: HTMLElement,
-  move: (point: Point, width: number) => void,
+  move: (point: Point, width: number, applied?: (point: Point) => void) => void,
   savePlacement: () => () => void,
   anchorOrigin?: () => Point | undefined,
+  fit: (point: Point, width: number, height: number, origin?: Point) => Point = fitPosition,
 ): () => void {
   const button = document.createElement("button");
   button.className = "move-control";
@@ -113,13 +114,14 @@ export function moveBy(
     const { point, rect } = keyboard;
     const step = event.shiftKey ? 64 : 16;
     const next = { x: point.x + step * direction.x, y: point.y + step * direction.y };
-    if (origin === undefined) {
-      keyboard.point = fitPosition(next, rect.width, rect.height);
-      move(keyboard.point, rect.width);
-    } else {
-      keyboard.point = next;
-      move({ x: next.x + origin.x, y: next.y + origin.y }, rect.width);
-    }
+    const x = origin?.x ?? 0;
+    const y = origin?.y ?? 0;
+    const applied = fit({ x: next.x + x, y: next.y + y }, rect.width, rect.height, origin);
+    keyboard.point = { x: applied.x - x, y: applied.y - y };
+    const active = keyboard;
+    move(applied, rect.width, (point) => {
+      if (keyboard === active) keyboard.point = point;
+    });
   };
   const stopListening = (): void => {
     window.removeEventListener("keydown", moveWithKeys, true);

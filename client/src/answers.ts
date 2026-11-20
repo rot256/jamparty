@@ -2,7 +2,7 @@
 // Recent replies also appear in the comment list.
 
 import { parsePlaceAnchor, placeElement } from "./answer-anchor";
-import { answerViewport, clamp, drawAnswerLink, nearestSide, placeAnswer, SVG_NS } from "./answer-placement";
+import { answerViewport, clamp, drawAnswerLink, nearestSide, placeAnswer, SVG_NS, oppositeSide } from "./answer-placement";
 import type { Box, Placement } from "./answer-placement";
 import { samePage } from "./capture";
 import { moveBy, fitPosition } from "./drag";
@@ -19,9 +19,16 @@ interface Shown {
   marker: HTMLElement;
   link: SVGGElement;
   dropped: { point: Point; width: number; relative: boolean } | undefined;
-  pendingDrop: { point: Point; width: number } | undefined;
-  placed: { target: Element; rect: Box; page: Box | undefined; view: Box; placement: Placement } | undefined;
-  tracksScroll: boolean;
+  pendingDrop: { point: Point; width: number; applied: ((point: Point) => void) | undefined } | undefined;
+  placed: {
+    target: Element;
+    rect: Box;
+    page: Box | undefined;
+    view: Box;
+    placement: Placement;
+    obstacles: ReadonlyMap<Element, Box>;
+  } | undefined;
+  scroll: ScrollRelationship | undefined;
   endMove: () => void;
   unavailable: HTMLElement;
   show: HTMLAnchorElement | null;
@@ -52,15 +59,41 @@ function intersects(a: Box, b: Box): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
-function scrollMode(target: Element): "document" | "fixed" | "tracked" {
+interface ScrollRelationship {
+  mode: "document" | "fixed" | "tracked";
+  sources: ReadonlySet<EventTarget>;
+  target: Element;
+  rect: Box;
+}
+
+function containsFixed(style: CSSStyleDeclaration): boolean {
+  return [style.transform, style.translate, style.rotate, style.scale, style.perspective,
+    style.filter, style.backdropFilter].some((value) => value !== "" && value !== "none") ||
+    /\b(layout|paint|strict|content)\b/.test(style.contain) ||
+    style.contentVisibility === "auto" ||
+    /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter|contain|content-visibility)\b/
+      .test(style.willChange);
+}
+
+function scrollRelationship(target: Element, rect: Box): ScrollRelationship {
+  const sources = new Set<EventTarget>();
+  let fixed = false;
+  let sticky = false;
   for (let node: Element | null = target; node !== null; node = node.parentElement) {
-    const { position, overflowX, overflowY } = getComputedStyle(node);
-    if (position === "fixed") return "fixed";
-    if (position === "sticky") return "tracked";
+    const style = getComputedStyle(node);
+    // A fixed box escapes intervening scrollers up to its containing block.
+    if (fixed && !containsFixed(style)) continue;
     if (node !== target && node !== document.body && node !== document.documentElement &&
-        [overflowX, overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) return "tracked";
+        [style.overflowX, style.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) {
+      sources.add(node);
+    }
+    fixed = style.position === "fixed";
+    sticky ||= style.position === "sticky";
   }
-  return "document";
+  if (fixed) return { mode: sources.size > 0 ? "tracked" : "fixed", sources, target, rect };
+  if (!sticky && sources.size === 0) return { mode: "document", sources, target, rect };
+  sources.add(document);
+  return { mode: "tracked", sources, target, rect };
 }
 
 function makeLink(): SVGGElement {
@@ -121,6 +154,8 @@ export class Answers {
   private readonly dismissed = loadDismissed();
   private placementFrame: number | undefined;
   private scrollFrame: number | undefined;
+  private readonly scrolled = new Set<EventTarget>();
+  private readonly obstacleChanges: MutationObserver;
   private timeoutSeconds = 0;
   private highlightTarget: Element | undefined;
   private highlightTimer: number | undefined;
@@ -150,6 +185,11 @@ export class Answers {
     this.geometry.observe(ui.bar);
     this.geometry.observe(ui.panel);
     this.geometry.observe(ui.agentGeneral);
+    this.geometry.observe(ui.dialog);
+    this.obstacleChanges = new MutationObserver(schedule);
+    for (const node of [ui.list, ui.bar, ui.panel, ui.dialog]) {
+      this.obstacleChanges.observe(node, { attributes: true });
+    }
     window.visualViewport?.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("scroll", this.onScroll);
     window.addEventListener("resize", schedule);
@@ -477,9 +517,9 @@ export class Answers {
     };
     const shown: Shown = {
       node, wrapper, marker, link, unavailable, show, target, localAnchor, hasPlace: entry !== undefined, heightAt,
-      dropped: undefined, pendingDrop: undefined, placed: undefined, tracksScroll: false,
-      endMove: moveBy(header, node, (point, width) => {
-        shown.pendingDrop = { point, width: shown.dropped?.width ?? width };
+      dropped: undefined, pendingDrop: undefined, placed: undefined, scroll: undefined,
+      endMove: moveBy(header, node, (point, width, applied) => {
+        shown.pendingDrop = { point, width: shown.dropped?.width ?? width, applied };
         this.schedulePlacement();
       }, () => {
         const previous = shown.dropped;
@@ -494,7 +534,7 @@ export class Answers {
       }, () => {
         const rect = shown.placed?.target.getBoundingClientRect();
         return rect === undefined ? undefined : { x: rect.left, y: rect.top };
-      }),
+      }, (point, width, height, origin) => this.fitMoved(point, width, height, shown.scroll?.mode, origin?.y)),
     };
     this.shown.set(answer.id, shown);
     this.schedulePlacement();
@@ -609,21 +649,34 @@ export class Answers {
     this.placementFrame = requestAnimationFrame(() => { this.place(); });
   }
 
-  private readonly onScroll = (): void => {
-    if (this.scrollFrame !== undefined) return;
+  private readonly onScroll = (event: Event): void => {
+    const source = event.target;
+    if (source === null) return;
     if (this.historyPreview === undefined && this.highlightTarget === undefined &&
-        !Array.from(this.shown.values()).some(({ tracksScroll }) => tracksScroll)) return;
+        !Array.from(this.shown.values()).some(({ scroll }) => scroll?.sources.has(source))) return;
+    this.scrolled.add(source);
+    if (this.scrollFrame !== undefined) return;
     this.scrollFrame = requestAnimationFrame(() => {
       this.scrollFrame = undefined;
-      for (const entry of this.shown.values()) {
-        const placed = entry.placed;
-        if (!entry.tracksScroll || placed === undefined) continue;
-        const rect = placed.target.getBoundingClientRect();
-        const { left, top } = placed.rect;
-        entry.wrapper.style.transform = `translate(${rect.left - left}px, ${rect.top - top}px)`;
+      const sources = Array.from(this.scrolled);
+      this.scrolled.clear();
+      const measured = new Map<Element, DOMRect>();
+      const updates = new Map<HTMLElement, string>();
+      for (const { scroll, wrapper } of this.shown.values()) {
+        if (scroll === undefined || !sources.some((item) => scroll.sources.has(item))) continue;
+        let rect = measured.get(scroll.target);
+        if (rect === undefined) {
+          rect = scroll.target.getBoundingClientRect();
+          measured.set(scroll.target, rect);
+        }
+        updates.set(wrapper, `translate(${rect.left - scroll.rect.left}px, ${rect.top - scroll.rect.top}px)`);
       }
       const highlight = this.highlightTarget ?? this.places.get(this.historyPreview?.id ?? "")?.target();
-      if (highlight?.isConnected) this.outline(highlight);
+      const outline = highlight?.isConnected
+        ? measured.get(highlight) ?? highlight.getBoundingClientRect()
+        : undefined;
+      for (const [wrapper, transform] of updates) wrapper.style.setProperty("transform", transform);
+      if (outline !== undefined) this.drawOutline(outline);
     });
   };
 
@@ -648,7 +701,8 @@ export class Answers {
       }
       if (target !== undefined) anchored.set(entry, target);
       if (target === undefined && entry.pendingDrop !== undefined) {
-        entry.dropped = { ...entry.pendingDrop, relative: false };
+        const { point, width } = entry.pendingDrop;
+        entry.dropped = { point, width, relative: false };
         entry.pendingDrop = undefined;
       }
       if (target === undefined && entry.dropped?.relative === false) {
@@ -685,7 +739,10 @@ export class Answers {
     // The PDF viewer adds its sections panel after Answers is constructed.
     if (this.pdf !== undefined && this.sections === null) {
       this.sections = this.ui.shadow.querySelector("#pdf-sections");
-      if (this.sections !== null) this.geometry.observe(this.sections);
+      if (this.sections !== null) {
+        this.geometry.observe(this.sections);
+        this.obstacleChanges.observe(this.sections, { attributes: true });
+      }
     }
     const sectionsHeight = this.sections?.offsetHeight ?? 0;
     const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`;
@@ -696,12 +753,15 @@ export class Answers {
       this.ui.bar,
       this.ui.list,
       this.ui.panel,
+      this.ui.dialog,
       ...(this.sections === null ? [] : [this.sections]),
       ...(this.pdf === undefined ? [] : document.querySelectorAll("#pdf-feedback > :not(:empty)")),
     ];
-    const occupied: Box[] = obstacles.filter((node) => node.getClientRects().length > 0 &&
-      getComputedStyle(node).visibility === "visible").map((node) => node.getBoundingClientRect());
-    occupied.push(...fixed.values());
+    const controls = new Map<Element, Box>(obstacles
+      .filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible")
+      .map((node) => [node, node.getBoundingClientRect()]));
+    for (const [entry, box] of fixed) controls.set(entry.node, box);
+    const occupied = Array.from(controls.values());
     const targets = new Set(anchored.values());
     for (const target of this.observedTargets) {
       if (targets.has(target)) continue;
@@ -737,7 +797,7 @@ export class Answers {
     );
     const placedCards: Box[] = [];
     const pending = new Set(anchored.keys());
-    const placements = new Map<Shown, { rect: Box; placement: Placement; mode: ReturnType<typeof scrollMode> }>();
+    const placements = new Map<Shown, { rect: Box; placement: Placement; scroll: ScrollRelationship }>();
     const solve = (entry: Shown): void => {
       if (!pending.delete(entry)) return;
       const target = anchored.get(entry);
@@ -748,7 +808,9 @@ export class Answers {
       const previous = general.get(entry.node);
       general.delete(entry.node);
       const page = pages.get(target);
-      const mode = parent === undefined ? scrollMode(target) : placements.get(parent)?.mode ?? "tracked";
+      const inherited = parent === undefined ? undefined : placements.get(parent)?.scroll;
+      const scroll = rect === undefined ? undefined : inherited ?? scrollRelationship(target, rect);
+      const mode = scroll?.mode ?? "document";
       const viewport = mode !== "document";
       const frame = viewport ? { x: 0, y: 0 } : { x: origin.left, y: origin.top };
       const local = rect === undefined ? undefined : translate(rect, -frame.x, -frame.y);
@@ -756,16 +818,24 @@ export class Answers {
       const cached = entry.placed;
       const previousBox = cached === undefined ? undefined :
         translate(cached.placement.box, frame.x, frame.y);
-      if (rect !== undefined && entry.pendingDrop !== undefined) {
-        const { point, width } = entry.pendingDrop;
+      const move = entry.pendingDrop;
+      if (rect !== undefined && move !== undefined) {
+        const { point, width } = move;
         entry.dropped = { point: { x: point.x - rect.left, y: point.y - rect.top }, width, relative: true };
         entry.pendingDrop = undefined;
       }
       const dropped = entry.dropped;
       const moved = rect === undefined || dropped === undefined ? undefined :
-        this.positionMoved(entry.node, dropped, rect);
-      // Only the first placement (or a change in geometry) considers
-      // viewport controls. Scrolling past them never displaces a card.
+        this.positionMoved(entry.node, dropped, rect, mode, move !== undefined);
+      if (move !== undefined && moved !== undefined && rect !== undefined && dropped !== undefined) {
+        dropped.point = { x: moved.left - rect.left, y: moved.top - rect.top };
+        move.applied?.(dropped.point);
+      }
+      // Controls that stay put while the document scrolls retain their cached geometry.
+      const obstacles = new Map([...controls, ...general]);
+      const blocked = cached !== undefined && previousBox !== undefined &&
+        Array.from(obstacles).some(([node, box]) =>
+          !sameBox(cached.obstacles.get(node), box) && intersects(box, previousBox));
       const height = view.bottom - view.top;
       const layoutView = rect === undefined || (rect.bottom > view.top && rect.top < view.bottom) ? view :
         translate(view, 0, (rect.top + rect.bottom - view.top - view.bottom) / 2);
@@ -773,14 +843,15 @@ export class Answers {
         ? { box: moved, side: nearestSide(rect, moved), maxHeight: height }
         : cached !== undefined && cached.target === target && previousBox !== undefined &&
             sameBox(cached.rect, local) && sameBox(cached.page, localPage) && sameBox(cached.view, view) &&
+            entry.scroll?.mode === mode && !blocked &&
             !placedCards.some((box) => intersects(box, previousBox))
           ? { ...cached.placement, box: previousBox }
           : placeAnswer(entry.heightAt, layoutView, rect, page, [
             ...occupied,
             ...general.values(),
             ...Array.from(targetBoxes.values()).filter((box) => box !== rect),
-          ]);
-      if (placement === undefined || rect === undefined) {
+          ], blocked ? oppositeSide[cached.placement.side] : undefined);
+      if (placement === undefined || rect === undefined || scroll === undefined) {
         this.placeGeneral(entry, false);
         if (previous === undefined) {
           // Inserting into the general stack can shift its other cards.
@@ -800,19 +871,19 @@ export class Answers {
       // before we apply the styles to the live cards.
       occupied.push(placement.box);
       placedCards.push(placement.box);
-      entry.tracksScroll = mode === "tracked";
+      entry.scroll = scroll;
       if (local !== undefined) entry.placed = {
-        target, rect: local, page: localPage, view,
+        target, rect: local, page: localPage, view, obstacles,
         placement: { ...placement, box: translate(placement.box, -frame.x, -frame.y) },
       };
       if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
-      placements.set(entry, { rect, placement, mode });
+      placements.set(entry, { rect, placement, scroll });
     };
     const ordered = Array.from(anchored).sort(([, a], [, b]) =>
       (targetBoxes.get(a)?.top ?? Infinity) - (targetBoxes.get(b)?.top ?? Infinity));
     for (const [entry] of ordered) solve(entry);
-    for (const [entry, { rect, placement, mode }] of placements) {
-      const viewport = mode !== "document";
+    for (const [entry, { rect, placement, scroll }] of placements) {
+      const viewport = scroll.mode !== "document";
       entry.wrapper.classList.toggle("viewport-anchored", viewport);
       const target = entry.placed?.target;
       entry.wrapper.classList.toggle("target-offscreen", target !== undefined &&
@@ -841,7 +912,24 @@ export class Answers {
     }
   }
 
-  private positionMoved(node: HTMLElement, dropped: NonNullable<Shown["dropped"]>, target?: Box): Box {
+  private fitMoved(
+    point: Point, width: number, height: number, mode: ScrollRelationship["mode"] | undefined, anchorTop?: number,
+  ): Point {
+    if (mode !== "document" || anchorTop === undefined) return fitPosition(point, width, height);
+    const view = answerViewport();
+    const end = (document.scrollingElement?.scrollHeight ?? window.innerHeight) - window.innerHeight;
+    return {
+      x: clamp(point.x, view.left, view.right - width),
+      y: clamp(point.y,
+        Math.max(view.top - window.scrollY, anchorTop - (view.bottom - view.top)),
+        Math.min(view.bottom + end - window.scrollY - height, anchorTop + (view.bottom - view.top) - height)),
+    };
+  }
+
+  private positionMoved(
+    node: HTMLElement, dropped: NonNullable<Shown["dropped"]>,
+    target?: Box, mode?: ScrollRelationship["mode"], moving = false,
+  ): Box {
     const view = answerViewport();
     node.classList.add("manually-placed");
     node.style.width = `${dropped.width}px`;
@@ -850,10 +938,15 @@ export class Answers {
     const { width, height } = node.isConnected
       ? node.getBoundingClientRect()
       : { width: Math.min(dropped.width, view.right - view.left), height: node.scrollHeight };
-    const point = target !== undefined && dropped.relative ? {
-      x: clamp(target.left + dropped.point.x, view.left, view.right - width),
-      y: target.top + clamp(dropped.point.y, view.top - view.bottom, view.bottom - view.top - height),
-    } : fitPosition(dropped.point, width, height);
+    let point = dropped.point;
+    if (target !== undefined && dropped.relative) {
+      point = { x: target.left + point.x, y: target.top + point.y };
+    }
+    if (mode !== "tracked" || moving) {
+      point = this.fitMoved(point, width, height, mode, target?.top);
+    } else {
+      point.x = clamp(point.x, view.left, view.right - width);
+    }
     if (target === undefined) {
       node.style.left = `${point.x}px`;
       node.style.top = `${point.y}px`;
@@ -868,7 +961,7 @@ export class Answers {
       if (entry.show.hidden !== hidden) entry.show.hidden = hidden;
     }
     entry.placed = undefined;
-    entry.tracksScroll = false;
+    entry.scroll = undefined;
     if (entry.node.parentElement !== this.ui.agentGeneral) this.ui.agentGeneral.append(entry.node);
     entry.wrapper.remove();
     if (entry.dropped?.relative === false) return;
@@ -879,8 +972,11 @@ export class Answers {
   }
 
   private outline(target: Element): void {
+    this.drawOutline(target.getBoundingClientRect());
+  }
+
+  private drawOutline(rect: DOMRect): void {
     const { messageHighlight } = this.ui;
-    const rect = target.getBoundingClientRect();
     messageHighlight.style.display = "block";
     messageHighlight.style.left = `${rect.left}px`;
     messageHighlight.style.top = `${rect.top}px`;

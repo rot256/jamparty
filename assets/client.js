@@ -46,6 +46,12 @@ function placeElement(root, selector) {
 }
 
 // client/src/answer-placement.ts
+var oppositeSide = {
+  right: "left",
+  left: "right",
+  above: "below",
+  below: "above"
+};
 var EDGE = 8;
 var GAP = 12;
 var TARGET_GAP = 28;
@@ -76,16 +82,19 @@ function sideBands(view, target, gap) {
   const bands = [{ side: "right", area: right }, { side: "left", area: left }];
   return bands.sort((a, b) => b.area.right - b.area.left - (a.area.right - a.area.left));
 }
-function placeAnswer(heightAt, view, target, page, occupied) {
+function placeAnswer(heightAt, view, target, page, occupied, preferredSide) {
   const bands = [
     ...page === void 0 ? [] : sideBands(view, page, PAGE_GAP),
     ...sideBands(view, target, TARGET_GAP),
     { side: "below", area: { ...view, top: Math.max(view.top, target.bottom + TARGET_GAP) } },
     { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - TARGET_GAP) } }
   ];
-  for (const allowClipping of [false, true]) {
+  const passes = preferredSide === void 0 ? [false, true] : [preferredSide, false, true];
+  for (const pass of passes) {
+    const allowClipping = pass === true;
     let margin;
     for (const [index, { side, area }] of bands.entries()) {
+      if (typeof pass === "string" && side !== pass) continue;
       if (index === 2 && page !== void 0 && margin !== void 0) return margin.placement;
       const width = Math.min(MAX_WIDTH, Math.floor(area.right - area.left));
       if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
@@ -126,7 +135,7 @@ function placeAnswer(heightAt, view, target, page, occupied) {
         }
       }
       if (best === void 0) continue;
-      if (page === void 0 || index >= 2) return best.placement;
+      if (side === pass || page === void 0 || index >= 2) return best.placement;
       if (margin === void 0 || best.score < margin.score) margin = best;
     }
   }
@@ -294,7 +303,7 @@ var directions = {
   ArrowUp: { x: 0, y: -1 },
   ArrowDown: { x: 0, y: 1 }
 };
-function moveBy(handle, surface, move, savePlacement, anchorOrigin) {
+function moveBy(handle, surface, move, savePlacement, anchorOrigin, fit = fitPosition) {
   const button = document.createElement("button");
   button.className = "move-control";
   button.type = "button";
@@ -374,13 +383,14 @@ function moveBy(handle, surface, move, savePlacement, anchorOrigin) {
     const { point, rect } = keyboard;
     const step = event.shiftKey ? 64 : 16;
     const next = { x: point.x + step * direction.x, y: point.y + step * direction.y };
-    if (origin === void 0) {
-      keyboard.point = fitPosition(next, rect.width, rect.height);
-      move(keyboard.point, rect.width);
-    } else {
-      keyboard.point = next;
-      move({ x: next.x + origin.x, y: next.y + origin.y }, rect.width);
-    }
+    const x = origin?.x ?? 0;
+    const y = origin?.y ?? 0;
+    const applied = fit({ x: next.x + x, y: next.y + y }, rect.width, rect.height, origin);
+    keyboard.point = { x: applied.x - x, y: applied.y - y };
+    const active = keyboard;
+    move(applied, rect.width, (point2) => {
+      if (keyboard === active) keyboard.point = point2;
+    });
   };
   const stopListening = () => {
     window.removeEventListener("keydown", moveWithKeys, true);
@@ -447,14 +457,34 @@ function sameBox(a, b) {
 function intersects(a, b) {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
-function scrollMode(target) {
+function containsFixed(style) {
+  return [
+    style.transform,
+    style.translate,
+    style.rotate,
+    style.scale,
+    style.perspective,
+    style.filter,
+    style.backdropFilter
+  ].some((value) => value !== "" && value !== "none") || /\b(layout|paint|strict|content)\b/.test(style.contain) || style.contentVisibility === "auto" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter|contain|content-visibility)\b/.test(style.willChange);
+}
+function scrollRelationship(target, rect) {
+  const sources = /* @__PURE__ */ new Set();
+  let fixed = false;
+  let sticky = false;
   for (let node = target; node !== null; node = node.parentElement) {
-    const { position, overflowX, overflowY } = getComputedStyle(node);
-    if (position === "fixed") return "fixed";
-    if (position === "sticky") return "tracked";
-    if (node !== target && node !== document.body && node !== document.documentElement && [overflowX, overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) return "tracked";
+    const style = getComputedStyle(node);
+    if (fixed && !containsFixed(style)) continue;
+    if (node !== target && node !== document.body && node !== document.documentElement && [style.overflowX, style.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) {
+      sources.add(node);
+    }
+    fixed = style.position === "fixed";
+    sticky ||= style.position === "sticky";
   }
-  return "document";
+  if (fixed) return { mode: sources.size > 0 ? "tracked" : "fixed", sources, target, rect };
+  if (!sticky && sources.size === 0) return { mode: "document", sources, target, rect };
+  sources.add(document);
+  return { mode: "tracked", sources, target, rect };
 }
 function makeLink() {
   const link = document.createElementNS(SVG_NS, "g");
@@ -505,6 +535,11 @@ var Answers = class {
     this.geometry.observe(ui.bar);
     this.geometry.observe(ui.panel);
     this.geometry.observe(ui.agentGeneral);
+    this.geometry.observe(ui.dialog);
+    this.obstacleChanges = new MutationObserver(schedule);
+    for (const node of [ui.list, ui.bar, ui.panel, ui.dialog]) {
+      this.obstacleChanges.observe(node, { attributes: true });
+    }
     window.visualViewport?.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("scroll", this.onScroll);
     window.addEventListener("resize", schedule);
@@ -535,6 +570,8 @@ var Answers = class {
   dismissed = loadDismissed();
   placementFrame;
   scrollFrame;
+  scrolled = /* @__PURE__ */ new Set();
+  obstacleChanges;
   timeoutSeconds = 0;
   highlightTarget;
   highlightTimer;
@@ -859,9 +896,9 @@ var Answers = class {
       dropped: void 0,
       pendingDrop: void 0,
       placed: void 0,
-      tracksScroll: false,
-      endMove: moveBy(header, node, (point, width) => {
-        shown.pendingDrop = { point, width: shown.dropped?.width ?? width };
+      scroll: void 0,
+      endMove: moveBy(header, node, (point, width, applied) => {
+        shown.pendingDrop = { point, width: shown.dropped?.width ?? width, applied };
         this.schedulePlacement();
       }, () => {
         const previous = shown.dropped;
@@ -876,7 +913,7 @@ var Answers = class {
       }, () => {
         const rect = shown.placed?.target.getBoundingClientRect();
         return rect === void 0 ? void 0 : { x: rect.left, y: rect.top };
-      })
+      }, (point, width, height, origin) => this.fitMoved(point, width, height, shown.scroll?.mode, origin?.y))
     };
     this.shown.set(answer.id, shown);
     this.schedulePlacement();
@@ -991,20 +1028,31 @@ var Answers = class {
       this.place();
     });
   }
-  onScroll = () => {
+  onScroll = (event) => {
+    const source = event.target;
+    if (source === null) return;
+    if (this.historyPreview === void 0 && this.highlightTarget === void 0 && !Array.from(this.shown.values()).some(({ scroll }) => scroll?.sources.has(source))) return;
+    this.scrolled.add(source);
     if (this.scrollFrame !== void 0) return;
-    if (this.historyPreview === void 0 && this.highlightTarget === void 0 && !Array.from(this.shown.values()).some(({ tracksScroll }) => tracksScroll)) return;
     this.scrollFrame = requestAnimationFrame(() => {
       this.scrollFrame = void 0;
-      for (const entry of this.shown.values()) {
-        const placed = entry.placed;
-        if (!entry.tracksScroll || placed === void 0) continue;
-        const rect = placed.target.getBoundingClientRect();
-        const { left, top } = placed.rect;
-        entry.wrapper.style.transform = `translate(${rect.left - left}px, ${rect.top - top}px)`;
+      const sources = Array.from(this.scrolled);
+      this.scrolled.clear();
+      const measured = /* @__PURE__ */ new Map();
+      const updates = /* @__PURE__ */ new Map();
+      for (const { scroll, wrapper } of this.shown.values()) {
+        if (scroll === void 0 || !sources.some((item) => scroll.sources.has(item))) continue;
+        let rect = measured.get(scroll.target);
+        if (rect === void 0) {
+          rect = scroll.target.getBoundingClientRect();
+          measured.set(scroll.target, rect);
+        }
+        updates.set(wrapper, `translate(${rect.left - scroll.rect.left}px, ${rect.top - scroll.rect.top}px)`);
       }
       const highlight = this.highlightTarget ?? this.places.get(this.historyPreview?.id ?? "")?.target();
-      if (highlight?.isConnected) this.outline(highlight);
+      const outline = highlight?.isConnected ? measured.get(highlight) ?? highlight.getBoundingClientRect() : void 0;
+      for (const [wrapper, transform] of updates) wrapper.style.setProperty("transform", transform);
+      if (outline !== void 0) this.drawOutline(outline);
     });
   };
   place() {
@@ -1028,7 +1076,8 @@ var Answers = class {
       }
       if (target !== void 0) anchored.set(entry, target);
       if (target === void 0 && entry.pendingDrop !== void 0) {
-        entry.dropped = { ...entry.pendingDrop, relative: false };
+        const { point, width } = entry.pendingDrop;
+        entry.dropped = { point, width, relative: false };
         entry.pendingDrop = void 0;
       }
       if (target === void 0 && entry.dropped?.relative === false) {
@@ -1060,7 +1109,10 @@ var Answers = class {
     else if (this.highlightTimer === void 0) this.ui.messageHighlight.style.display = "none";
     if (this.pdf !== void 0 && this.sections === null) {
       this.sections = this.ui.shadow.querySelector("#pdf-sections");
-      if (this.sections !== null) this.geometry.observe(this.sections);
+      if (this.sections !== null) {
+        this.geometry.observe(this.sections);
+        this.obstacleChanges.observe(this.sections, { attributes: true });
+      }
     }
     const sectionsHeight = this.sections?.offsetHeight ?? 0;
     const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`;
@@ -1071,11 +1123,13 @@ var Answers = class {
       this.ui.bar,
       this.ui.list,
       this.ui.panel,
+      this.ui.dialog,
       ...this.sections === null ? [] : [this.sections],
       ...this.pdf === void 0 ? [] : document.querySelectorAll("#pdf-feedback > :not(:empty)")
     ];
-    const occupied = obstacles.filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible").map((node) => node.getBoundingClientRect());
-    occupied.push(...fixed.values());
+    const controls = new Map(obstacles.filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible").map((node) => [node, node.getBoundingClientRect()]));
+    for (const [entry, box] of fixed) controls.set(entry.node, box);
+    const occupied = Array.from(controls.values());
     const targets = new Set(anchored.values());
     for (const target of this.observedTargets) {
       if (targets.has(target)) continue;
@@ -1117,28 +1171,37 @@ var Answers = class {
       const previous = general.get(entry.node);
       general.delete(entry.node);
       const page = pages.get(target);
-      const mode = parent === void 0 ? scrollMode(target) : placements.get(parent)?.mode ?? "tracked";
+      const inherited = parent === void 0 ? void 0 : placements.get(parent)?.scroll;
+      const scroll = rect === void 0 ? void 0 : inherited ?? scrollRelationship(target, rect);
+      const mode = scroll?.mode ?? "document";
       const viewport = mode !== "document";
       const frame = viewport ? { x: 0, y: 0 } : { x: origin.left, y: origin.top };
       const local = rect === void 0 ? void 0 : translate(rect, -frame.x, -frame.y);
       const localPage = page === void 0 ? void 0 : translate(page, -frame.x, -frame.y);
       const cached = entry.placed;
       const previousBox = cached === void 0 ? void 0 : translate(cached.placement.box, frame.x, frame.y);
-      if (rect !== void 0 && entry.pendingDrop !== void 0) {
-        const { point, width } = entry.pendingDrop;
+      const move = entry.pendingDrop;
+      if (rect !== void 0 && move !== void 0) {
+        const { point, width } = move;
         entry.dropped = { point: { x: point.x - rect.left, y: point.y - rect.top }, width, relative: true };
         entry.pendingDrop = void 0;
       }
       const dropped = entry.dropped;
-      const moved = rect === void 0 || dropped === void 0 ? void 0 : this.positionMoved(entry.node, dropped, rect);
+      const moved = rect === void 0 || dropped === void 0 ? void 0 : this.positionMoved(entry.node, dropped, rect, mode, move !== void 0);
+      if (move !== void 0 && moved !== void 0 && rect !== void 0 && dropped !== void 0) {
+        dropped.point = { x: moved.left - rect.left, y: moved.top - rect.top };
+        move.applied?.(dropped.point);
+      }
+      const obstacles2 = new Map([...controls, ...general]);
+      const blocked = cached !== void 0 && previousBox !== void 0 && Array.from(obstacles2).some(([node, box]) => !sameBox(cached.obstacles.get(node), box) && intersects(box, previousBox));
       const height = view.bottom - view.top;
       const layoutView = rect === void 0 || rect.bottom > view.top && rect.top < view.bottom ? view : translate(view, 0, (rect.top + rect.bottom - view.top - view.bottom) / 2);
-      const placement = rect === void 0 ? void 0 : moved !== void 0 ? { box: moved, side: nearestSide(rect, moved), maxHeight: height } : cached !== void 0 && cached.target === target && previousBox !== void 0 && sameBox(cached.rect, local) && sameBox(cached.page, localPage) && sameBox(cached.view, view) && !placedCards.some((box) => intersects(box, previousBox)) ? { ...cached.placement, box: previousBox } : placeAnswer(entry.heightAt, layoutView, rect, page, [
+      const placement = rect === void 0 ? void 0 : moved !== void 0 ? { box: moved, side: nearestSide(rect, moved), maxHeight: height } : cached !== void 0 && cached.target === target && previousBox !== void 0 && sameBox(cached.rect, local) && sameBox(cached.page, localPage) && sameBox(cached.view, view) && entry.scroll?.mode === mode && !blocked && !placedCards.some((box) => intersects(box, previousBox)) ? { ...cached.placement, box: previousBox } : placeAnswer(entry.heightAt, layoutView, rect, page, [
         ...occupied,
         ...general.values(),
         ...Array.from(targetBoxes.values()).filter((box) => box !== rect)
-      ]);
-      if (placement === void 0 || rect === void 0) {
+      ], blocked ? oppositeSide[cached.placement.side] : void 0);
+      if (placement === void 0 || rect === void 0 || scroll === void 0) {
         this.placeGeneral(entry, false);
         if (previous === void 0) {
           for (const node of general.keys()) {
@@ -1155,21 +1218,22 @@ var Answers = class {
       }
       occupied.push(placement.box);
       placedCards.push(placement.box);
-      entry.tracksScroll = mode === "tracked";
+      entry.scroll = scroll;
       if (local !== void 0) entry.placed = {
         target,
         rect: local,
         page: localPage,
         view,
+        obstacles: obstacles2,
         placement: { ...placement, box: translate(placement.box, -frame.x, -frame.y) }
       };
       if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
-      placements.set(entry, { rect, placement, mode });
+      placements.set(entry, { rect, placement, scroll });
     };
     const ordered = Array.from(anchored).sort(([, a], [, b]) => (targetBoxes.get(a)?.top ?? Infinity) - (targetBoxes.get(b)?.top ?? Infinity));
     for (const [entry] of ordered) solve(entry);
-    for (const [entry, { rect, placement, mode }] of placements) {
-      const viewport = mode !== "document";
+    for (const [entry, { rect, placement, scroll }] of placements) {
+      const viewport = scroll.mode !== "document";
       entry.wrapper.classList.toggle("viewport-anchored", viewport);
       const target = entry.placed?.target;
       entry.wrapper.classList.toggle("target-offscreen", target !== void 0 && !(this.visibleTargets.get(target) ?? (rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth)));
@@ -1195,17 +1259,35 @@ var Answers = class {
       if (entry.stopTimer === void 0) this.startTimer(entry);
     }
   }
-  positionMoved(node, dropped, target) {
+  fitMoved(point, width, height, mode, anchorTop) {
+    if (mode !== "document" || anchorTop === void 0) return fitPosition(point, width, height);
+    const view = answerViewport();
+    const end = (document.scrollingElement?.scrollHeight ?? window.innerHeight) - window.innerHeight;
+    return {
+      x: clamp(point.x, view.left, view.right - width),
+      y: clamp(
+        point.y,
+        Math.max(view.top - window.scrollY, anchorTop - (view.bottom - view.top)),
+        Math.min(view.bottom + end - window.scrollY - height, anchorTop + (view.bottom - view.top) - height)
+      )
+    };
+  }
+  positionMoved(node, dropped, target, mode, moving = false) {
     const view = answerViewport();
     node.classList.add("manually-placed");
     node.style.width = `${dropped.width}px`;
     node.style.maxWidth = `${view.right - view.left}px`;
     node.style.maxHeight = `${view.bottom - view.top}px`;
     const { width, height } = node.isConnected ? node.getBoundingClientRect() : { width: Math.min(dropped.width, view.right - view.left), height: node.scrollHeight };
-    const point = target !== void 0 && dropped.relative ? {
-      x: clamp(target.left + dropped.point.x, view.left, view.right - width),
-      y: target.top + clamp(dropped.point.y, view.top - view.bottom, view.bottom - view.top - height)
-    } : fitPosition(dropped.point, width, height);
+    let point = dropped.point;
+    if (target !== void 0 && dropped.relative) {
+      point = { x: target.left + point.x, y: target.top + point.y };
+    }
+    if (mode !== "tracked" || moving) {
+      point = this.fitMoved(point, width, height, mode, target?.top);
+    } else {
+      point.x = clamp(point.x, view.left, view.right - width);
+    }
     if (target === void 0) {
       node.style.left = `${point.x}px`;
       node.style.top = `${point.y}px`;
@@ -1219,7 +1301,7 @@ var Answers = class {
       if (entry.show.hidden !== hidden) entry.show.hidden = hidden;
     }
     entry.placed = void 0;
-    entry.tracksScroll = false;
+    entry.scroll = void 0;
     if (entry.node.parentElement !== this.ui.agentGeneral) this.ui.agentGeneral.append(entry.node);
     entry.wrapper.remove();
     if (entry.dropped?.relative === false) return;
@@ -1229,8 +1311,10 @@ var Answers = class {
     }
   }
   outline(target) {
+    this.drawOutline(target.getBoundingClientRect());
+  }
+  drawOutline(rect) {
     const { messageHighlight } = this.ui;
-    const rect = target.getBoundingClientRect();
     messageHighlight.style.display = "block";
     messageHighlight.style.left = `${rect.left}px`;
     messageHighlight.style.top = `${rect.top}px`;

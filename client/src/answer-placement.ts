@@ -8,6 +8,10 @@ export interface Box {
 
 export type Side = "right" | "left" | "below" | "above";
 
+export const oppositeSide: Readonly<Record<Side, Side>> = {
+  right: "left", left: "right", above: "below", below: "above",
+};
+
 interface Band {
   side: Side;
   area: Box;
@@ -56,6 +60,7 @@ function sideBands(view: Box, target: Box, gap: number): Band[] {
 
 export function placeAnswer(
   heightAt: (width: number) => number, view: Box, target: Box, page: Box | undefined, occupied: readonly Box[],
+  preferredSide?: Side,
 ): Placement | undefined {
   const bands: Band[] = [
     ...(page === undefined ? [] : sideBands(view, page, PAGE_GAP)),
@@ -63,9 +68,12 @@ export function placeAnswer(
     { side: "below", area: { ...view, top: Math.max(view.top, target.bottom + TARGET_GAP) } },
     { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - TARGET_GAP) } },
   ];
-  for (const allowClipping of [false, true]) {
+  const passes = preferredSide === undefined ? [false, true] : [preferredSide, false, true];
+  for (const pass of passes) {
+    const allowClipping = pass === true;
     let margin: { placement: Placement; score: number } | undefined;
     for (const [index, { side, area }] of bands.entries()) {
+      if (typeof pass === "string" && side !== pass) continue;
       if (index === 2 && page !== undefined && margin !== undefined) return margin.placement;
       const width = Math.min(MAX_WIDTH, Math.floor(area.right - area.left));
       if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
@@ -112,7 +120,7 @@ export function placeAnswer(
         }
       }
       if (best === undefined) continue;
-      if (page === undefined || index >= 2) return best.placement;
+      if (side === pass || page === undefined || index >= 2) return best.placement;
       if (margin === undefined || best.score < margin.score) margin = best;
     }
   }
