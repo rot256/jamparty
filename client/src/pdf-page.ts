@@ -116,19 +116,24 @@ export class PdfPage {
     this.render();
   }
 
+  prepareGeometry(): void {
+    if (this.page !== null || this.preparing) return;
+    this.preparing = true;
+    void this.getPage().then((loaded) => {
+      this.setPage(loaded);
+      this.preparing = false;
+      this.pageReady();
+    }).catch(() => {
+      this.preparing = false;
+      if (this.visible) this.element.dataset.rendered = "error";
+    });
+  }
+
   render(): void {
-    if (!this.visible || this.renderTask !== null || this.preparing) return;
+    if (!this.visible || this.renderTask !== null) return;
     const page = this.page;
     if (page === null) {
-      this.preparing = true;
-      void this.getPage().then((loaded) => {
-        this.setPage(loaded);
-        this.preparing = false;
-        this.pageReady();
-      }).catch(() => {
-        this.preparing = false;
-        if (this.visible) this.element.dataset.rendered = "error";
-      });
+      this.prepareGeometry();
       return;
     }
     const viewport = this.viewport;

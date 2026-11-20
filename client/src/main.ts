@@ -59,9 +59,9 @@ export function install(pdf?: PdfViewer): void {
     if (outcome !== "saved" && socket.isOpen) keep(before);
     return outcome;
   };
-  const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref));
+  const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref), pdf);
   const dialog = new CommentDialog(ui, outbox);
-  const list = new CommentList(ui, outbox, (answer) => answers.renderBody(answer));
+  const list = new CommentList(ui, outbox, (answer, node) => { answers.renderHistory(answer, node); });
   answers.onHistory = (history) => { list.setAnswers(history); };
   answers.historyTarget = (id) => list.answerTarget(id);
   // The panel takes its keys before the page and the `/` handler below.
@@ -286,6 +286,7 @@ export function install(pdf?: PdfViewer): void {
 
   // Single-page apps move without loading: follow the URL, tell the joiner.
   watchUrl((now) => {
+    answers.schedulePlacement();
     url = now;
     layer.clear();
     layer.setPeople(here, url);

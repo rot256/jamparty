@@ -56,7 +56,7 @@ export class CommentList {
   constructor(
     private readonly ui: Ui,
     private readonly outbox: Outbox,
-    private readonly renderBody: (answer: Answer) => HTMLElement,
+    private readonly renderAnswer: (answer: Answer, node: HTMLElement) => void,
   ) {
     ui.pill.addEventListener("click", () => { this.toggle(); });
     ui.listHeader.addEventListener("click", () => { this.close(); });
@@ -118,7 +118,7 @@ export class CommentList {
         node = document.createElement("article");
         node.className = "agent-reply";
         node.dataset.messageId = answer.id;
-        node.append(this.renderBody(answer));
+        this.renderAnswer(answer, node);
       }
       replies.set(answer.id, { answer, node });
     }

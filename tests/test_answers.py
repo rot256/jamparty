@@ -682,3 +682,112 @@ def test_full_outbox_keeps_question_and_reenables_choices(
         expect(yes).to_be_enabled()
         expect(question.get_by_role("button", name="No", exact=True)).to_be_enabled()
         expect(overlay(page, "#outbox-list li")).to_have_count(20)
+
+
+def test_show_html_place_on_another_page(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    site = tmp_path / "site"
+    site.mkdir()
+    docs = site / "docs"
+    docs.mkdir()
+    _ = (docs / "index.html").write_text(
+        '<main style="padding-top: 1600px; padding-bottom: 800px">'
+        '<h1 id="intro" style="width: 350px">Introduction</h1></main>'
+    )
+    _ = (site / "other.html").write_text("<h1>Other page</h1>")
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(f"{joined.url.rstrip('/')}/other.html")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path, "send", "--at", "#intro", "--page", "/docs", "See the intro."
+        )
+        general = overlay(page, "#agent-general .agent-message")
+        expect(general).to_contain_text("See the intro.")
+        general.get_by_role("link", name="Show").click()
+
+        expect(page).to_have_url(f"{joined.url.rstrip('/')}/docs/")
+        expect(page.locator("#intro")).to_be_in_viewport()
+        expect(overlay(page, "#message-highlight")).to_be_visible()
+        expect(overlay(page, ".agent-message")).to_have_count(0)
+        overlay(page, "#pill").click()
+        earlier = overlay(page, "#answer-list .agent-reply")
+        expect(earlier).to_contain_text("See the intro.")
+        earlier.hover()
+        expect(overlay(page, "#message-highlight")).to_be_visible()
+        _ = page.evaluate("window.scrollTo(0, 0)")
+        expect(page.locator("#intro")).not_to_be_in_viewport()
+        earlier.get_by_role("link", name="Show").click()
+        expect(earlier).to_be_visible()
+        expect(page.locator("#intro")).to_be_in_viewport()
+        expect(overlay(page, ".agent-message")).to_have_count(0)
+        overlay(page, "#collapse").click()
+
+        _ = jamparty(
+            tmp_path, "send", "--at", "#intro", "--page", "/docs/", "Another note."
+        )
+        answer = overlay(page, "#agent-anchored .agent-message")
+        expect(answer).to_contain_text("Another note.")
+        intro_box = page.locator("#intro").bounding_box()
+        answer_box = answer.bounding_box()
+        assert intro_box is not None and answer_box is not None
+        assert abs(intro_box["y"] - answer_box["y"]) < 10
+        assert answer_box["x"] >= intro_box["x"] + intro_box["width"]
+        answer.hover()
+        expect(overlay(page, "#message-highlight")).to_be_visible()
+        answer.get_by_role("button", name="Dismiss agent message").click()
+        _ = page.reload()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(overlay(page, ".agent-message")).to_have_count(0)
+        _ = page.goto(f"{joined.url.rstrip('/')}/other.html")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(overlay(page, ".agent-message")).to_have_count(0)
+        overlay(page, "#pill").click()
+        earlier.filter(has_text="See the intro.").get_by_role(
+            "link", name="Show"
+        ).click()
+        expect(page).to_have_url(f"{joined.url.rstrip('/')}/docs/")
+        expect(page.locator("#intro")).to_be_in_viewport()
+        expect(overlay(page, ".agent-message")).to_have_count(0)
+
+
+def test_a_stale_show_does_not_reveal_on_another_page(
+    tmp_path: Path, page: Page
+) -> None:
+    """A Show whose destination never loaded the overlay must not later
+    scroll an unrelated page that happens to have a matching element."""
+    without_answer_timeout(tmp_path)
+    site = tmp_path / "site"
+    site.mkdir()
+    tall = (
+        '<main style="padding-top: 1600px; padding-bottom: 800px">'
+        '<h1 id="intro">Introduction</h1></main>'
+    )
+    _ = (site / "docs.html").write_text(tall)
+    _ = (site / "unrelated.html").write_text(tall)
+    _ = (site / "other.html").write_text("<h1>Other page</h1>")
+    page.clock.install()
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        base = joined.url.rstrip("/")
+        _ = page.goto(f"{base}/other.html")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path, "send", "--at", "#intro", "--page", "/docs.html", "See it."
+        )
+        general = overlay(page, "#agent-general .agent-message")
+        expect(general).to_contain_text("See it.")
+        # The destination never loads, so its page never takes the request.
+        page.route("**/docs.html", lambda route: route.abort())
+        general.get_by_role("link", name="Show").click()
+        page.unroute("**/docs.html")
+        page.clock.fast_forward(60_000)
+
+        _ = page.goto(f"{base}/unrelated.html")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(page.locator("#intro")).not_to_be_in_viewport()
+        expect(overlay(page, "#message-highlight")).to_be_hidden()

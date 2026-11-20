@@ -104,6 +104,7 @@ export class PdfViewer {
   private hoverPoint: { page: PdfPage; x: number; y: number } | undefined;
   private hoverRequest: Promise<boolean> | undefined;
   private gesture = 0;
+  private readonly answerMarks = new Map<HTMLElement, PdfAnchor>();
   private draftMarker: { anchor: PdfAnchor; node: HTMLDivElement } | null = null;
   private readingRestore: { position: ViewPosition; x: number; y: number } | undefined;
   private scrollFrame: number | undefined;
@@ -290,6 +291,7 @@ export class PdfViewer {
     this.readingRestore = undefined;
     this.container?.replaceChildren(...this.pages.keys());
     this.resize(position);
+    for (const anchor of this.answerMarks.values()) this.byNumber.get(anchor.page)?.prepareGeometry();
     for (const page of this.pages.keys()) this.observer.observe(page);
     this.updateIndicator();
   }
@@ -348,6 +350,17 @@ export class PdfViewer {
     }
   }
 
+  trackAnswer(node: HTMLElement, anchor: PdfAnchor): () => void {
+    this.answerMarks.set(node, anchor);
+    const page = this.byNumber.get(anchor.page);
+    page?.mark(node, anchor);
+    page?.prepareGeometry();
+    return () => {
+      this.answerMarks.delete(node);
+      node.remove();
+    };
+  }
+
   showComments(entries: readonly OutboxEntry[]): void {
     this.comments = entries;
     this.drawComments();
@@ -378,6 +391,10 @@ export class PdfViewer {
       node.classList.toggle("pdf-comment", entry === this.preview);
       node.id = draft.selector.slice(1);
       this.byNumber.get(draft.pdf.page)?.mark(node, draft.pdf);
+    }
+    for (const [node, anchor] of this.answerMarks) {
+      const page = this.byNumber.get(anchor.page);
+      page?.mark(node, anchor);
     }
     if (this.draftMarker !== null && this.dialog?.open) {
       const { anchor, node } = this.draftMarker;

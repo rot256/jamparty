@@ -1,19 +1,28 @@
-// The agent's answers: live arrivals and open questions can pop up.
-// Recent replies also appear in the comment list. Popups that were
-// dismissed stay dismissed for the session.
+// Live answers and open questions can pop up at their targets.
+// Recent replies also appear in the comment list.
 
+import { parsePlaceAnchor, placeElement } from "./answer-anchor";
 import { samePage } from "./capture";
 import { AGENT_TARGET_PREFIX, DISMISSED_KEY } from "./config";
 import { MAX_ANSWERS } from "./generated/api";
-import type { Answer, CommentOutcome, Submission } from "./generated/api";
+import type { Answer, CommentOutcome, PlaceAnchor, Submission } from "./generated/api";
+import type { PdfViewer } from "./pdf-viewer";
 import type { Ui } from "./ui";
 
 interface Shown {
   node: HTMLElement;
   unavailable: HTMLElement;
-  /** The selector it belongs next to; null when it is not anchored here. */
-  anchor: string | null;
+  show: HTMLAnchorElement | null;
+  target: () => Element | undefined;
+  localAnchor: () => boolean;
   stopTimer: () => void;
+}
+
+interface PlaceTarget {
+  place: PlaceAnchor;
+  here: () => boolean;
+  target: () => Element | undefined;
+  detach: () => void;
 }
 
 interface Box {
@@ -25,6 +34,28 @@ interface Box {
 
 const GAP = 8;
 const EDGE = 8;
+const REVEAL_KEY = "jamparty-answer-reveal";
+
+/** How long a Show navigation may take to reach a page with the overlay. */
+const REVEAL_TTL_MS = 30_000;
+
+/** The answer a Show navigation in this tab asked to reveal, if recent: a
+ * stale request (its page never loaded the overlay) must not reveal on an
+ * unrelated page later. */
+function takeReveal(): string | null {
+  try {
+    const stored = sessionStorage.getItem(REVEAL_KEY);
+    sessionStorage.removeItem(REVEAL_KEY);
+    const parsed: unknown = stored === null ? null : JSON.parse(stored);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { id, at } = parsed as { id?: unknown; at?: unknown };
+    if (typeof id !== "string" || typeof at !== "number") return null;
+    const age = Date.now() - at;
+    return age >= 0 && age <= REVEAL_TTL_MS ? id : null;
+  } catch {
+    return null;
+  }
+}
 
 function loadDismissed(): Set<string> {
   try {
@@ -40,6 +71,9 @@ function loadDismissed(): Set<string> {
 
 export class Answers {
   private readonly shown = new Map<string, Shown>();
+  private readonly sections: HTMLElement | null;
+  private readonly places = new Map<string, PlaceTarget>();
+  private historyPreview: { id: string; node: HTMLElement } | undefined;
   private readonly recent = new Map<string, Answer>();
   onHistory: (answers: readonly Answer[]) => void = () => undefined;
   historyTarget: (id: string) => HTMLElement | null = () => null;
@@ -47,14 +81,23 @@ export class Answers {
   private placementFrame: number | undefined;
   private timeoutSeconds = 0;
   private highlightTimer: number | undefined;
+  private hovering: Shown | undefined;
+  private pendingReveal = takeReveal();
+  private readonly landingPath = location.pathname;
 
   constructor(
     private readonly ui: Ui,
     private readonly pick: (submission: Omit<Submission, "n">) => Promise<CommentOutcome>,
+    private readonly pdf?: PdfViewer,
   ) {
     const schedule = (): void => { this.schedulePlacement(); };
+    this.sections = ui.shadow.querySelector("#pdf-sections");
+    const panels = new ResizeObserver(schedule);
+    panels.observe(ui.list);
+    if (this.sections !== null) panels.observe(this.sections);
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
+    window.addEventListener("load", schedule, true);
     new MutationObserver(schedule).observe(document.documentElement, {
       childList: true,
       subtree: true,
@@ -109,9 +152,11 @@ export class Answers {
 
   private publishHistory(): void {
     this.onHistory(Array.from(this.recent.values()).filter((answer) => answer.choices.length === 0));
+    this.prunePlaces();
+    this.schedulePlacement();
   }
 
-  renderBody(answer: Answer): HTMLDivElement {
+  private renderBody(answer: Answer): HTMLDivElement {
     const body = document.createElement("div");
     body.className = "agent-body";
     // Rendered by the joiner with the restricted Markdown renderer.
@@ -130,14 +175,85 @@ export class Answers {
     return body;
   }
 
+  private placeTarget(answer: Answer): PlaceTarget | undefined {
+    const existing = this.places.get(answer.id);
+    if (existing !== undefined) return existing;
+    const place = parsePlaceAnchor(answer.place);
+    if (place === undefined) return undefined;
+    // Session storage follows this tab across same-origin redirects. Keep the
+    // landing path for this answer after the one-shot reveal has been consumed.
+    const redirectedPath = answer.id === this.pendingReveal ? this.landingPath : undefined;
+    const here = (): boolean => place.path === location.pathname || redirectedPath === location.pathname;
+    const marker = place.type === "pdf" && this.pdf !== undefined && here()
+      ? document.createElement("div") : undefined;
+    let detach = (): void => undefined;
+    if (marker !== undefined && place.type === "pdf" && this.pdf !== undefined) {
+      marker.className = "pdf-answer-anchor";
+      detach = this.pdf.trackAnswer(marker, place.pdf);
+    }
+    const target = (): Element | undefined => {
+      if (!here()) return undefined;
+      const element = place.type === "pdf" ? marker : placeElement(document, place.selector);
+      return element?.isConnected && element.getClientRects().length > 0 ? element : undefined;
+    };
+    const entry = { place, here, target, detach };
+    this.places.set(answer.id, entry);
+    return entry;
+  }
+
+  private prunePlaces(): void {
+    for (const [id, entry] of this.places) {
+      if (this.recent.has(id) || this.shown.has(id)) continue;
+      entry.detach();
+      this.places.delete(id);
+    }
+  }
+
+  private showLink(id: string, entry: PlaceTarget): HTMLAnchorElement {
+    const link = document.createElement("a");
+    link.className = "agent-show";
+    link.textContent = "Show";
+    link.href = new URL(entry.place.path, location.origin).href;
+    link.addEventListener("click", (event) => {
+      if (event.defaultPrevented || event.button !== 0 ||
+          event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (entry.here()) {
+        event.preventDefault();
+        const target = entry.target();
+        if (target === undefined) this.ui.showToast("Target unavailable");
+        else this.revealElement(target);
+        return;
+      }
+      try {
+        sessionStorage.setItem(REVEAL_KEY, JSON.stringify({ id, at: Date.now() }));
+      } catch {
+        // The link still navigates when session storage is unavailable.
+      }
+    });
+    return link;
+  }
+
+  renderHistory(answer: Answer, node: HTMLElement): void {
+    node.append(this.renderBody(answer));
+    const entry = this.placeTarget(answer);
+    if (entry === undefined) return;
+    node.append(this.showLink(answer.id, entry));
+    const preview = (): void => {
+      this.historyPreview = { id: answer.id, node };
+      this.schedulePlacement();
+    };
+    node.addEventListener("pointerenter", preview);
+    node.addEventListener("focusin", preview);
+    node.addEventListener("pointerleave", () => { this.schedulePlacement(); });
+    node.addEventListener("focusout", () => { this.schedulePlacement(); });
+  }
+
   private show(answer: Answer): void {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
     // The oldest go first (a Map keeps the order answers came in).
-    for (const [id, shown] of this.shown) {
+    for (const id of this.shown.keys()) {
       if (this.shown.size < MAX_ANSWERS) break;
-      shown.stopTimer();
-      shown.node.remove();
-      this.shown.delete(id);
+      this.remove(id);
     }
     const node = document.createElement("article");
     node.className = "agent-message";
@@ -186,39 +302,57 @@ export class Answers {
     }
     node.append(options);
 
-    const anchor = answer.anchor !== undefined && samePage(answer.page) ? answer.anchor : null;
-    if (anchor !== null) {
-      node.classList.add("has-anchor");
-      node.tabIndex = 0;
-      node.setAttribute("aria-label", "Agent message; activate to show its anchor");
-      node.addEventListener("click", (event) => {
-        const interactive = event.target instanceof Element
-          ? event.target.closest("a, button")
-          : null;
-        const selection = window.getSelection();
-        if (interactive || (selection && !selection.isCollapsed)) return;
-        this.reveal(anchor);
-      });
-      node.addEventListener("keydown", (event) => {
-        if (event.target !== node || !["Enter", " "].includes(event.key)) return;
-        event.preventDefault();
-        this.reveal(anchor);
-      });
-    }
+    const entry = this.placeTarget(answer);
+    const selector = answer.anchor;
+    const localAnchor = (): boolean => entry === undefined
+      ? selector !== undefined && samePage(answer.page)
+      : entry.here();
+    const target = (): Element | undefined => {
+      if (entry !== undefined) return entry.target();
+      if (!localAnchor() || selector === undefined) return undefined;
+      const element = this.findTarget(selector);
+      if (!element || element === this.ui.host || element.getClientRects().length === 0) return undefined;
+      return element;
+    };
+    const show = entry === undefined ? null : this.showLink(answer.id, entry);
+    if (show !== null) node.append(show);
+    const activate = (): void => {
+      if (!localAnchor()) return;
+      const found = target();
+      if (found === undefined) this.ui.showToast("Element is unavailable");
+      else this.revealElement(found);
+    };
+    node.addEventListener("click", (event) => {
+      const interactive = event.target instanceof Element ? event.target.closest("a, button") : null;
+      const selection = window.getSelection();
+      if (!interactive && (!selection || selection.isCollapsed)) activate();
+    });
+    node.addEventListener("keydown", (event) => {
+      if (event.target !== node || !["Enter", " "].includes(event.key) || !localAnchor()) return;
+      event.preventDefault();
+      activate();
+    });
 
     close.addEventListener("click", () => {
-      this.shown.get(answer.id)?.stopTimer();
       this.dismissed.add(answer.id);
       for (const id of this.dismissed) {
         if (this.dismissed.size <= MAX_ANSWERS) break;
         this.dismissed.delete(id);
       }
       this.persistDismissed();
-      this.shown.delete(answer.id);
-      node.remove();
-      this.schedulePlacement();
+      this.remove(answer.id);
     });
-    const shown: Shown = { node, unavailable, anchor, stopTimer: () => undefined };
+    const shown: Shown = { node, unavailable, show, target, localAnchor, stopTimer: () => undefined };
+    if (entry !== undefined) {
+      node.addEventListener("mouseenter", () => {
+        this.hovering = shown;
+        this.schedulePlacement();
+      });
+      node.addEventListener("mouseleave", () => {
+        if (this.hovering === shown) this.hovering = undefined;
+        this.schedulePlacement();
+      });
+    }
     this.shown.set(answer.id, shown);
     this.startTimer(shown);
     this.schedulePlacement();
@@ -226,11 +360,13 @@ export class Answers {
 
   /** The share resolved this question; no session dismissal is needed. */
   remove(id: string): void {
-    this.recent.delete(id);
+    if (this.recent.get(id)?.choices.length) this.recent.delete(id);
     const shown = this.shown.get(id);
     shown?.stopTimer();
     shown?.node.remove();
+    if (shown !== undefined && this.hovering === shown) this.hovering = undefined;
     this.shown.delete(id);
+    this.prunePlaces();
     this.schedulePlacement();
   }
 
@@ -308,16 +444,11 @@ export class Answers {
     }
   }
 
-  /** The element an anchored answer belongs next to; undefined when it is not shown. */
-  private anchorTarget(anchor: string): Element | undefined {
+  private findTarget(selector: string): Element | null {
     try {
-      const target = this.targetFor(anchor);
-      if (!target || target === this.ui.host || target.getClientRects().length === 0) {
-        return undefined;
-      }
-      return target;
+      return this.targetFor(selector);
     } catch {
-      return undefined;
+      return null;
     }
   }
 
@@ -330,8 +461,20 @@ export class Answers {
     this.placementFrame = undefined;
     const { agentAnchored, agentGeneral } = this.ui;
     const groups = new Map<Element, HTMLElement[]>();
+    let hovered: Element | undefined;
     for (const entry of this.shown.values()) {
-      const target = entry.anchor === null ? undefined : this.anchorTarget(entry.anchor);
+      const local = entry.localAnchor();
+      const target = entry.target();
+      if (entry.show !== null) entry.show.hidden = local;
+      entry.node.classList.toggle("has-anchor", local);
+      if (local) {
+        entry.node.tabIndex = 0;
+        entry.node.setAttribute("aria-label", "Agent message; activate to show its anchor");
+      } else {
+        entry.node.removeAttribute("tabindex");
+        entry.node.removeAttribute("aria-label");
+      }
+      if (this.hovering === entry) hovered = target;
       if (target !== undefined) {
         entry.unavailable.hidden = true;
         if (entry.node.parentElement !== agentAnchored) agentAnchored.append(entry.node);
@@ -339,14 +482,43 @@ export class Answers {
         group.push(entry.node);
         groups.set(target, group);
       } else {
-        entry.unavailable.hidden = entry.anchor === null;
+        entry.unavailable.hidden = !local;
         if (entry.node.parentElement !== agentGeneral) agentGeneral.append(entry.node);
         entry.node.style.removeProperty("left");
         entry.node.style.removeProperty("top");
       }
     }
 
-    const occupied: Box[] = Array.from(agentGeneral.children).map((node) => {
+    const preview = this.historyPreview;
+    if (preview !== undefined) {
+      if (preview.node.getClientRects().length > 0 &&
+          (preview.node.matches(":hover") || preview.node.contains(this.ui.shadow.activeElement))) {
+        hovered = this.places.get(preview.id)?.target() ?? hovered;
+      } else {
+        this.historyPreview = undefined;
+      }
+    }
+    if (this.pendingReveal !== null) {
+      const target = this.places.get(this.pendingReveal)?.target();
+      if (target !== undefined) {
+        this.pendingReveal = null;
+        this.revealElement(target);
+      }
+    }
+
+    if (hovered !== undefined) this.outline(hovered);
+    else if (this.highlightTimer === undefined) this.ui.messageHighlight.style.display = "none";
+
+    const sectionsHeight = this.sections?.offsetHeight ?? 0;
+    agentGeneral.style.setProperty("--sections-offset", `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`);
+    const obstacles = [
+      ...agentGeneral.children,
+      this.ui.list,
+      ...(this.sections === null ? [] : [this.sections]),
+      ...(this.pdf === undefined ? [] : document.querySelectorAll("#pdf-feedback > :not(:empty)")),
+    ];
+    const occupied: Box[] = obstacles.filter((node) => node.getClientRects().length > 0 &&
+      getComputedStyle(node).visibility === "visible").map((node) => {
       const rect = node.getBoundingClientRect();
       return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
     });
@@ -396,7 +568,7 @@ export class Answers {
     }
   }
 
-  private showHighlight(target: Element): void {
+  private outline(target: Element): void {
     const { messageHighlight } = this.ui;
     const rect = target.getBoundingClientRect();
     messageHighlight.style.display = "block";
@@ -404,27 +576,32 @@ export class Answers {
     messageHighlight.style.top = `${rect.top}px`;
     messageHighlight.style.width = `${rect.width}px`;
     messageHighlight.style.height = `${rect.height}px`;
+  }
+
+  private showHighlight(target: Element): void {
+    this.outline(target);
     if (this.highlightTimer !== undefined) clearTimeout(this.highlightTimer);
     this.highlightTimer = window.setTimeout(() => {
-      messageHighlight.style.display = "none";
+      this.highlightTimer = undefined;
+      this.schedulePlacement();
     }, 1800);
   }
 
   /** Scrolls to the element `selector` names and highlights it briefly. */
   reveal(selector: string): void {
-    let target: Element | null;
-    try {
-      target = this.targetFor(selector);
-    } catch {
-      target = null;
-    }
+    const target = this.findTarget(selector);
     if (!target || target.getClientRects().length === 0) {
       this.ui.showToast("Element is unavailable");
       return;
     }
-    const found = target;
-    found.scrollIntoView({ block: "center", inline: "nearest" });
-    requestAnimationFrame(() => { this.showHighlight(found); });
+    this.revealElement(target);
+  }
+
+  private revealElement(target: Element): void {
+    target.scrollIntoView({ block: "center", inline: "nearest" });
+    requestAnimationFrame(() => {
+      if (target.isConnected) this.showHighlight(target);
+    });
   }
 
   private followElementLink(link: HTMLAnchorElement, event: Event): void {
