@@ -402,7 +402,7 @@ export const styles = `
   }
 
   .switch[aria-checked="true"] { justify-content: flex-end; background: var(--jp-switch-on); }
-  .switch[aria-checked="true"]::after { background: var(--jp-field); }
+  .switch[aria-checked="true"]::after { background: var(--jp-on-accent); }
 
   #name-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
   #name-row label { color: var(--jp-muted); font-weight: 400; margin: 0; }
@@ -458,12 +458,16 @@ export const styles = `
     height: 24px;
     border: 2px solid var(--jp-surface);
     border-radius: 50%;
-    color: var(--jp-text);
+    color: var(--jp-cursor-text);
     font: 700 10px/1 var(--jp-font);
   }
 
   .avatar + .avatar { margin-left: -6px; }
-  .avatar[data-you="true"] { border-color: var(--jp-text); background: var(--jp-surface); }
+  .avatar[data-you="true"] {
+    border-color: var(--jp-text);
+    background: var(--jp-surface);
+    color: var(--jp-text);
+  }
 
   #cursors {
     position: fixed;
@@ -561,9 +565,10 @@ export const styles = `
     align-items: flex-end;
     gap: 8px;
     padding: 12px 14px;
-    overflow: auto;
     pointer-events: none;
   }
+
+  #agent-general.scrollable { overflow: auto; }
 
   #agent-anchored {
     position: fixed;
@@ -683,6 +688,7 @@ export const styles = `
     position: fixed;
     inset: auto;
     width: min(420px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
     margin: 0;
     padding: 0;
     border: 1px solid var(--jp-border);

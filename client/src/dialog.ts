@@ -346,7 +346,10 @@ export class CommentDialog {
   private place(): void {
     const { dialog } = this.ui;
     const { x, y } = this.position;
-    const point = fitPosition(this.dropped ?? { x: x + 12, y: y + 12 }, dialog.offsetWidth, dialog.offsetHeight);
+    const width = dialog.offsetWidth;
+    const sideSpace = window.innerWidth - width;
+    const left = sideSpace <= 32 ? sideSpace / 2 : x + 12;
+    const point = fitPosition(this.dropped ?? { x: left, y: y + 12 }, width, dialog.offsetHeight);
     dialog.style.left = `${point.x}px`;
     dialog.style.top = `${point.y}px`;
   }

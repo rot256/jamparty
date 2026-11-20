@@ -71,7 +71,8 @@ export function placeAnswer(
       if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
       const height = heightAt(width);
       const horizontal = side === "right" || side === "left";
-      const desiredLeft = clamp(target.left, area.left, area.right - width);
+      const targetCenter = (target.left + target.right) / 2;
+      const desiredLeft = clamp(horizontal ? target.left : targetCenter - width / 2, area.left, area.right - width);
       const lefts = horizontal
         ? [side === "right" ? area.left : area.right - width]
         : [desiredLeft, ...occupied.flatMap((box) => [box.right + GAP, box.left - width - GAP])]
@@ -153,9 +154,10 @@ export function drawAnswerLink(
   const end = horizontal ? target.bottom : target.right;
   const span = end - start;
   const mid = (start + end) / 2;
-  const base = edge + sign * 7;
+  const base = edge + sign * (horizontal ? 7 : 4);
   const destination = { right: box.left, left: box.right, below: box.top, above: box.bottom }[side];
-  const depth = Math.min(9, Math.max(2, (destination - base) * sign - 2), Math.max(4, span / 5));
+  const depth = Math.min(horizontal ? 9 : 5,
+    Math.max(2, (destination - base) * sign - 2), Math.max(4, span / 5));
   // Express the brace in outward/along coordinates, then rotate or mirror
   // the same four cubics onto the target edge facing the card.
   const point = (outward: number, along: number): string =>

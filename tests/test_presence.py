@@ -337,10 +337,10 @@ def test_presence_in_every_page(tmp_path: Path, browser: Browser) -> None:
                 "title", "alice (you)"
             )
             expect(overlay(alice_page, '.avatar[data-you="true"]')).to_have_css(
-                "border-top-color", "rgb(255, 255, 255)"
+                "border-top-color", "rgb(32, 38, 50)"
             )
             bob_colour = avatars(alice_page)["bob"]
-            assert bob_colour == avatars(carol_page)["bob"] != "rgb(22, 22, 22)"
+            assert bob_colour == avatars(carol_page)["bob"] != "rgb(255, 255, 255)"
             assert avatars(alice_page)["carol"] == avatars(bob_page)["carol"]
 
             # A rename reaches everyone.

@@ -140,7 +140,7 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
             "send",
             "--at-pdf",
             "paper.pdf#page=1&box=72,515,540,545",
-            "A note beside the lower paragraph.",
+            "Check the proof.",
         )
         answer = overlay(page, ".agent-message")
         expect(answer).to_be_visible()

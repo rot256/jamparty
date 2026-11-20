@@ -116,7 +116,7 @@ command only reminds the agent and never changes delivery status.
 ## Control panel (gear)
 
 Compact panel with the same surface, border, and shadow as the command
-bar. Rows:
+bar.
 
 | Row | Control | Default | Key |
 |---|---|---|---|

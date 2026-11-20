@@ -391,9 +391,23 @@ export class Answers {
     const link = makeLink();
     link.dataset.answerId = answer.id;
     wrapper.append(marker);
-    for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-      node.addEventListener(event, () => { this.schedulePlacement(); });
-    }
+    const highlight = (active: boolean): void => {
+      link.classList.toggle("active", active);
+      marker.classList.toggle("active", active);
+    };
+    let hovered = false;
+    node.addEventListener("mouseenter", () => {
+      hovered = true;
+      highlight(true);
+    });
+    node.addEventListener("mouseleave", () => {
+      hovered = false;
+      highlight(node.contains(this.ui.shadow.activeElement));
+    });
+    node.addEventListener("focusin", () => { highlight(true); });
+    node.addEventListener("focusout", (event) => {
+      highlight(hovered || (event.relatedTarget instanceof Node && node.contains(event.relatedTarget)));
+    });
     // Anchored content is fixed for the lifetime of the answer. Measure
     // each width without changing the live card's overflow or scroll.
     const heights = new Map<number, number>();
@@ -689,11 +703,9 @@ export class Answers {
         entry.node.style.maxHeight = `${maxHeight}px`;
       }
       if (entry.link.parentElement === null) this.links.append(entry.link);
-      const active = entry.node.matches(":hover, :focus-within");
-      entry.link.classList.toggle("active", active);
-      entry.marker.classList.toggle("active", active);
       drawAnswerLink(entry.marker, entry.link, view, rect, placement);
     }
+    agentGeneral.classList.toggle("scrollable", agentGeneral.scrollHeight > agentGeneral.clientHeight);
     for (const entry of this.shown.values()) {
       if (entry.stopTimer === undefined) this.startTimer(entry);
     }

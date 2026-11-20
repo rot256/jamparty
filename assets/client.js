@@ -91,7 +91,8 @@ function placeAnswer(heightAt, view, target, page, occupied) {
       if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
       const height = heightAt(width);
       const horizontal = side === "right" || side === "left";
-      const desiredLeft = clamp(target.left, area.left, area.right - width);
+      const targetCenter = (target.left + target.right) / 2;
+      const desiredLeft = clamp(horizontal ? target.left : targetCenter - width / 2, area.left, area.right - width);
       const lefts = horizontal ? [side === "right" ? area.left : area.right - width] : [desiredLeft, ...occupied.flatMap((box) => [box.right + GAP, box.left - width - GAP])].filter((left) => left >= area.left && left + width <= area.right);
       let best;
       for (const left of lefts) {
@@ -159,9 +160,13 @@ function drawAnswerLink(marker, link, view, target, { side, box }) {
   const end = horizontal ? target.bottom : target.right;
   const span = end - start;
   const mid = (start + end) / 2;
-  const base = edge + sign * 7;
+  const base = edge + sign * (horizontal ? 7 : 4);
   const destination = { right: box.left, left: box.right, below: box.top, above: box.bottom }[side];
-  const depth = Math.min(9, Math.max(2, (destination - base) * sign - 2), Math.max(4, span / 5));
+  const depth = Math.min(
+    horizontal ? 9 : 5,
+    Math.max(2, (destination - base) * sign - 2),
+    Math.max(4, span / 5)
+  );
   const point = (outward, along2) => horizontal ? `${outward},${along2}` : `${along2},${outward}`;
   const waist = base + sign * depth / 2;
   const tip = base + sign * depth;
@@ -690,11 +695,25 @@ var Answers = class {
     const link = makeLink();
     link.dataset.answerId = answer.id;
     wrapper.append(marker);
-    for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-      node.addEventListener(event, () => {
-        this.schedulePlacement();
-      });
-    }
+    const highlight = (active) => {
+      link.classList.toggle("active", active);
+      marker.classList.toggle("active", active);
+    };
+    let hovered = false;
+    node.addEventListener("mouseenter", () => {
+      hovered = true;
+      highlight(true);
+    });
+    node.addEventListener("mouseleave", () => {
+      hovered = false;
+      highlight(node.contains(this.ui.shadow.activeElement));
+    });
+    node.addEventListener("focusin", () => {
+      highlight(true);
+    });
+    node.addEventListener("focusout", (event) => {
+      highlight(hovered || event.relatedTarget instanceof Node && node.contains(event.relatedTarget));
+    });
     const heights = /* @__PURE__ */ new Map();
     const heightAt = (width) => {
       const cached = heights.get(width);
@@ -984,11 +1003,9 @@ var Answers = class {
         entry.node.style.maxHeight = `${maxHeight}px`;
       }
       if (entry.link.parentElement === null) this.links.append(entry.link);
-      const active = entry.node.matches(":hover, :focus-within");
-      entry.link.classList.toggle("active", active);
-      entry.marker.classList.toggle("active", active);
       drawAnswerLink(entry.marker, entry.link, view, rect, placement);
     }
+    agentGeneral.classList.toggle("scrollable", agentGeneral.scrollHeight > agentGeneral.clientHeight);
     for (const entry of this.shown.values()) {
       if (entry.stopTimer === void 0) this.startTimer(entry);
     }
@@ -2118,7 +2135,10 @@ var CommentDialog = class {
   place() {
     const { dialog } = this.ui;
     const { x, y } = this.position;
-    const point = fitPosition(this.dropped ?? { x: x + 12, y: y + 12 }, dialog.offsetWidth, dialog.offsetHeight);
+    const width = dialog.offsetWidth;
+    const sideSpace = window.innerWidth - width;
+    const left = sideSpace <= 32 ? sideSpace / 2 : x + 12;
+    const point = fitPosition(this.dropped ?? { x: left, y: y + 12 }, width, dialog.offsetHeight);
     dialog.style.left = `${point.x}px`;
     dialog.style.top = `${point.y}px`;
   }
@@ -3677,7 +3697,7 @@ var styles = `
   }
 
   .switch[aria-checked="true"] { justify-content: flex-end; background: var(--jp-switch-on); }
-  .switch[aria-checked="true"]::after { background: var(--jp-field); }
+  .switch[aria-checked="true"]::after { background: var(--jp-on-accent); }
 
   #name-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
   #name-row label { color: var(--jp-muted); font-weight: 400; margin: 0; }
@@ -3733,12 +3753,16 @@ var styles = `
     height: 24px;
     border: 2px solid var(--jp-surface);
     border-radius: 50%;
-    color: var(--jp-text);
+    color: var(--jp-cursor-text);
     font: 700 10px/1 var(--jp-font);
   }
 
   .avatar + .avatar { margin-left: -6px; }
-  .avatar[data-you="true"] { border-color: var(--jp-text); background: var(--jp-surface); }
+  .avatar[data-you="true"] {
+    border-color: var(--jp-text);
+    background: var(--jp-surface);
+    color: var(--jp-text);
+  }
 
   #cursors {
     position: fixed;
@@ -3836,9 +3860,10 @@ var styles = `
     align-items: flex-end;
     gap: 8px;
     padding: 12px 14px;
-    overflow: auto;
     pointer-events: none;
   }
+
+  #agent-general.scrollable { overflow: auto; }
 
   #agent-anchored {
     position: fixed;
@@ -3958,6 +3983,7 @@ var styles = `
     position: fixed;
     inset: auto;
     width: min(420px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
     margin: 0;
     padding: 0;
     border: 1px solid var(--jp-border);
