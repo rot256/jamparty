@@ -224,8 +224,14 @@ text. Rows:
 - `jamparty send --anchor <comment id> "…"` without `--to` addresses the
   comment's author by default; `--to all` (or no anchor and no `--to`)
   sends it to everyone.
-- A page shows at most as many answers as its joiner keeps (100), the
-  oldest going first, and remembers dismissals only of those.
+- Live answers appear as bubbles. Answers missed while the page was closed
+  or disconnected appear in the comment list without a popup. Replies to
+  your comments appear under their comment. Other replies appear below the
+  comments, newest first. The joiner keeps up to 100 recent answers.
+- Dismissing an ordinary reply bubble keeps the reply in the list.
+  Multiple-choice questions only appear as bubbles. A dismissed question
+  stays hidden for the tab session. Open, undismissed questions pop up on
+  load or reconnect.
 - The recipient's answer bubble shows a small `to you` line above the text
   (in the answer-meta style, `#7b3221`, 11 px, bold).
 - The `jamparty agent` guides describe `--to`.

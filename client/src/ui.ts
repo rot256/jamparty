@@ -27,7 +27,7 @@ const MARKUP = `
     <button id="edit" type="button" aria-label="Edit mode" aria-pressed="false" title="Edit mode: click an element to comment on it (Esc leaves)">${PEN_ICON}</button>
     <button id="gear" type="button" aria-label="Settings" aria-expanded="false" aria-controls="panel">${GEAR_ICON}</button>
   </div>
-  <section id="list" aria-label="Your comments" hidden>
+  <section id="list" aria-label="Comments and replies" hidden>
     <header id="list-header">
       <div id="list-summary">
         <span id="list-dot" class="dot" data-state="amber"></span>
@@ -36,7 +36,10 @@ const MARKUP = `
       </div>
       <button id="collapse" type="button" aria-label="Collapse">▾</button>
     </header>
-    <ol id="outbox-list"></ol>
+    <div id="list-content">
+      <ol id="outbox-list"></ol>
+      <ul id="answer-list" aria-label="Replies"></ul>
+    </div>
   </section>
   <section id="panel" aria-label="jamparty settings" hidden>
     <div class="control" id="comment-mode-row">
@@ -146,6 +149,7 @@ export class Ui {
   readonly connectionText: HTMLSpanElement;
   readonly collapse: HTMLButtonElement;
   readonly outboxList: HTMLOListElement;
+  readonly answerList: HTMLUListElement;
   readonly panel: HTMLElement;
   readonly commentModeKey: HTMLButtonElement;
   readonly commentMode: HTMLButtonElement;
@@ -222,6 +226,7 @@ export class Ui {
     this.connectionText = find("#connection-text", HTMLSpanElement);
     this.collapse = find("#collapse", HTMLButtonElement);
     this.outboxList = find("#outbox-list", HTMLOListElement);
+    this.answerList = find("#answer-list", HTMLUListElement);
     this.panel = find("#panel", HTMLElement);
     this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
     this.commentMode = find("#comment-mode", HTMLButtonElement);

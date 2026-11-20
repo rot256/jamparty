@@ -164,6 +164,9 @@ var Answers = class {
   ui;
   pick;
   shown = /* @__PURE__ */ new Map();
+  recent = /* @__PURE__ */ new Map();
+  onHistory = () => void 0;
+  historyTarget = () => null;
   dismissed = loadDismissed();
   placementFrame;
   timeoutSeconds = 0;
@@ -175,27 +178,60 @@ var Answers = class {
   /** The element a selector names: on the page, or one of the answers. */
   targetFor(selector) {
     if (selector.startsWith(AGENT_TARGET_PREFIX)) {
-      return this.node(selector.slice(AGENT_TARGET_PREFIX.length));
+      const id = selector.slice(AGENT_TARGET_PREFIX.length);
+      return this.node(id) ?? (this.dismissed.has(id) ? null : this.historyTarget(id));
     }
     return document.querySelector(selector);
   }
-  /**
-   * The answers the joiner has now (its hello): dismissals of others are
-   * forgotten, since those answers do not come back.
-   */
-  keepDismissed(answers) {
-    const held = new Set(answers.map((answer) => answer.id));
-    for (const id of this.shown.keys()) if (!held.has(id)) this.remove(id);
+  /** A new or reconnected tab sees cached replies quietly. */
+  sync(answers) {
+    this.recent.clear();
+    for (const answer of answers) this.recent.set(answer.id, answer);
+    for (const id of this.shown.keys()) if (!this.recent.has(id)) this.remove(id);
     let changed = false;
-    for (const id of [...this.dismissed]) {
-      if (!held.has(id)) {
+    for (const id of this.dismissed) {
+      if (!this.recent.has(id)) {
         this.dismissed.delete(id);
         changed = true;
       }
     }
     if (changed) this.persistDismissed();
+    for (const answer of answers) {
+      if (answer.choices.length > 0) this.show(answer);
+    }
+    this.publishHistory();
   }
-  add(answer) {
+  receive(answer) {
+    if (this.recent.has(answer.id)) return;
+    this.recent.set(answer.id, answer);
+    if (this.recent.size > MAX_ANSWERS) {
+      const oldest = this.recent.keys().next();
+      if (!oldest.done) this.recent.delete(oldest.value);
+    }
+    if (answer.live || answer.choices.length > 0) this.show(answer);
+    this.publishHistory();
+  }
+  publishHistory() {
+    this.onHistory(Array.from(this.recent.values()).filter((answer) => answer.choices.length === 0));
+  }
+  renderBody(answer) {
+    const body = document.createElement("div");
+    body.className = "agent-body";
+    body.innerHTML = answer.html;
+    for (const link of body.querySelectorAll("a")) {
+      const href = link.getAttribute("href") ?? "";
+      if (!href.toLowerCase().startsWith("jamparty:")) {
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+      }
+    }
+    body.addEventListener("click", (event) => {
+      const link = event.target instanceof Element ? event.target.closest("a") : null;
+      if (link) this.followElementLink(link, event);
+    });
+    return body;
+  }
+  show(answer) {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
     for (const [id, shown2] of this.shown) {
       if (this.shown.size < MAX_ANSWERS) break;
@@ -215,9 +251,7 @@ var Answers = class {
     to.className = "agent-meta agent-to";
     to.textContent = "to you";
     to.hidden = !answer.toYou;
-    const body = document.createElement("div");
-    body.className = "agent-body";
-    body.innerHTML = answer.html;
+    const body = this.renderBody(answer);
     const unavailable = document.createElement("div");
     unavailable.className = "agent-unavailable";
     unavailable.textContent = "Target unavailable";
@@ -271,17 +305,6 @@ var Answers = class {
         this.reveal(anchor);
       });
     }
-    for (const link of body.querySelectorAll("a")) {
-      const href = link.getAttribute("href") ?? "";
-      if (!href.toLowerCase().startsWith("jamparty:")) {
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-      }
-    }
-    body.addEventListener("click", (event) => {
-      const link = event.target instanceof Element ? event.target.closest("a") : null;
-      if (link) this.followElementLink(link, event);
-    });
     close.addEventListener("click", () => {
       this.shown.get(answer.id)?.stopTimer();
       this.dismissed.add(answer.id);
@@ -301,6 +324,7 @@ var Answers = class {
   }
   /** The share resolved this question; no session dismissal is needed. */
   remove(id) {
+    this.recent.delete(id);
     const shown = this.shown.get(id);
     shown?.stopTimer();
     shown?.node.remove();
@@ -1405,8 +1429,10 @@ var CommentDialog = class {
     if (element !== null) {
       captured = { element, page, selector: target.selector, selectedText };
       const rect = element.getBoundingClientRect();
-      x = rect.left;
-      y = rect.bottom;
+      if (rect.width > 0 && rect.height > 0) {
+        x = rect.left;
+        y = rect.bottom;
+      }
     }
     if (target.kind === "pdf" && draft.pdf !== void 0) {
       captured = { ...captured, selector: target.selector, pdf: draft.pdf };
@@ -1441,7 +1467,7 @@ var CommentDialog = class {
   updateHighlight = () => {
     const { highlight, dialog } = this.ui;
     const element = this.captured?.element;
-    if (!dialog.open || !element?.isConnected) {
+    if (!dialog.open || !element?.isConnected || element.getClientRects().length === 0) {
       highlight.style.display = "none";
       return;
     }
@@ -1691,9 +1717,10 @@ function stateText(state) {
   }
 }
 var CommentList = class {
-  constructor(ui, outbox) {
+  constructor(ui, outbox, renderBody) {
     this.ui = ui;
     this.outbox = outbox;
+    this.renderBody = renderBody;
     ui.pill.addEventListener("click", () => {
       this.toggle();
     });
@@ -1706,7 +1733,9 @@ var CommentList = class {
   }
   ui;
   outbox;
+  renderBody;
   items = /* @__PURE__ */ new Map();
+  replies = /* @__PURE__ */ new Map();
   hovered = null;
   focused = null;
   onPreview = () => void 0;
@@ -1753,6 +1782,24 @@ var CommentList = class {
     connectionText.dataset.state = view.colour;
     connectionText.textContent = `· ${view.text}`;
   }
+  setAnswers(answers) {
+    const replies = /* @__PURE__ */ new Map();
+    for (const answer of answers) {
+      let node = this.replies.get(answer.id)?.node;
+      if (node === void 0) {
+        node = document.createElement("article");
+        node.className = "agent-reply";
+        node.dataset.messageId = answer.id;
+        node.append(this.renderBody(answer));
+      }
+      replies.set(answer.id, { answer, node });
+    }
+    this.replies = replies;
+    this.render();
+  }
+  answerTarget(id) {
+    return this.replies.get(id)?.node ?? null;
+  }
   createItem(entry) {
     const item = document.createElement("li");
     if (entry.draft.pdf !== void 0) {
@@ -1781,11 +1828,27 @@ var CommentList = class {
     return item;
   }
   render() {
-    const { outboxList } = this.ui;
+    const { outboxList, answerList } = this.ui;
     const now = Date.now();
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
     const active = this.ui.shadow.activeElement;
-    const focusedItem = active?.closest("li");
+    const focusedReply = active instanceof HTMLElement && active.closest(".agent-reply") !== null;
+    const focusedItem = active?.closest("#outbox-list > li");
+    const ownComments = new Set(entries.map((entry) => entry.id));
+    const byComment = /* @__PURE__ */ new Map();
+    const general = [];
+    for (const { answer, node } of Array.from(this.replies.values()).reverse()) {
+      const id = answer.replyTo;
+      if (id !== void 0 && ownComments.has(id)) {
+        const replies = byComment.get(id) ?? [];
+        replies.push(node);
+        byComment.set(id, replies);
+      } else {
+        const item = document.createElement("li");
+        item.append(node);
+        general.push(item);
+      }
+    }
     const focusedAction = active instanceof HTMLButtonElement ? active.textContent : null;
     for (const [entry, item] of this.items) {
       if (entries.includes(entry)) continue;
@@ -1865,11 +1928,14 @@ var CommentList = class {
         });
         item.append(again);
       }
-      if (item === focusedItem) {
+      if (entry.id !== null) item.append(...byComment.get(entry.id) ?? []);
+      if (!focusedReply && item === focusedItem) {
         const button = focusedAction === null ? void 0 : Array.from(item.querySelectorAll("button")).find((candidate) => candidate.textContent === focusedAction);
         (button ?? item).focus({ preventScroll: true });
       }
     }
+    answerList.replaceChildren(...general);
+    if (focusedReply && active.isConnected) active.focus({ preventScroll: true });
   }
 };
 
@@ -2801,16 +2867,17 @@ var styles = `
 
   #collapse:hover, #collapse:focus-visible { background: #2a2a2a; }
 
-  #outbox-list {
+  #list-content { overflow: auto; }
+
+  #outbox-list, #answer-list {
     display: flex;
     flex-direction: column;
     margin: 0;
     padding: 4px 0;
-    overflow: auto;
     list-style: none;
   }
 
-  #outbox-list li {
+  #outbox-list > li, #answer-list > li {
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -2818,7 +2885,21 @@ var styles = `
     border-bottom: 1px solid #242424;
   }
 
-  #outbox-list li:last-child { border-bottom: 0; }
+  #outbox-list > li:last-child, #answer-list > li:last-child { border-bottom: 0; }
+  #outbox-list:empty, #answer-list:empty { display: none; }
+  #outbox-list:not(:empty) + #answer-list:not(:empty) { border-top: 1px solid #333; }
+
+  .agent-reply { min-width: 0; color: #d8d4cd; overflow-wrap: anywhere; }
+  #outbox-list .agent-reply {
+    margin-top: 4px;
+    padding-inline-start: 8px;
+    border-inline-start: 2px solid #555;
+  }
+  .agent-reply p { margin: 0 0 4px; }
+  .agent-reply p:last-child { margin-bottom: 0; }
+  .agent-reply a { color: #91c4ff; }
+  .agent-reply pre { overflow: auto; }
+  .agent-reply table { display: block; overflow: auto; }
   #outbox-list .row { display: flex; justify-content: space-between; gap: 10px; }
   #outbox-list .where, #outbox-list .state { color: #b8b2a9; }
   #outbox-list .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3406,7 +3487,7 @@ var MARKUP = `
     <button id="edit" type="button" aria-label="Edit mode" aria-pressed="false" title="Edit mode: click an element to comment on it (Esc leaves)">${PEN_ICON}</button>
     <button id="gear" type="button" aria-label="Settings" aria-expanded="false" aria-controls="panel">${GEAR_ICON}</button>
   </div>
-  <section id="list" aria-label="Your comments" hidden>
+  <section id="list" aria-label="Comments and replies" hidden>
     <header id="list-header">
       <div id="list-summary">
         <span id="list-dot" class="dot" data-state="amber"></span>
@@ -3415,7 +3496,10 @@ var MARKUP = `
       </div>
       <button id="collapse" type="button" aria-label="Collapse">▾</button>
     </header>
-    <ol id="outbox-list"></ol>
+    <div id="list-content">
+      <ol id="outbox-list"></ol>
+      <ul id="answer-list" aria-label="Replies"></ul>
+    </div>
   </section>
   <section id="panel" aria-label="jamparty settings" hidden>
     <div class="control" id="comment-mode-row">
@@ -3524,6 +3608,7 @@ var Ui = class _Ui {
   connectionText;
   collapse;
   outboxList;
+  answerList;
   panel;
   commentModeKey;
   commentMode;
@@ -3598,6 +3683,7 @@ var Ui = class _Ui {
     this.connectionText = find("#connection-text", HTMLSpanElement);
     this.collapse = find("#collapse", HTMLButtonElement);
     this.outboxList = find("#outbox-list", HTMLOListElement);
+    this.answerList = find("#answer-list", HTMLUListElement);
     this.panel = find("#panel", HTMLElement);
     this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
     this.commentMode = find("#comment-mode", HTMLButtonElement);
@@ -3691,7 +3777,11 @@ function install(pdf) {
   };
   const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref));
   const dialog = new CommentDialog(ui, outbox);
-  const list = new CommentList(ui, outbox);
+  const list = new CommentList(ui, outbox, (answer) => answers.renderBody(answer));
+  answers.onHistory = (history2) => {
+    list.setAnswers(history2);
+  };
+  answers.historyTarget = (id) => list.answerTarget(id);
   const panel = new Panel(ui, changeSettings);
   panel.onClearAnswers = () => {
     answers.clear();
@@ -3826,8 +3916,7 @@ function install(pdf) {
     you = hello.link.you?.key ?? null;
     outbox.setKey(you);
     showMine(hello.mine);
-    answers.keepDismissed(hello.answers);
-    for (const answer of hello.answers) answers.add(answer);
+    answers.sync(hello.answers);
     restoreDraft();
     showSettings(hello.settings);
     showPeople(hello.people);
@@ -3871,7 +3960,7 @@ function install(pdf) {
         answers.remove(slice.id);
         break;
       case "answer":
-        answers.add(slice);
+        answers.receive(slice);
         break;
       case "cursor":
         if (slice.url === url && slice.key !== you) layer.update(slice.key, slice.position);
@@ -3909,7 +3998,7 @@ function install(pdf) {
     if (!commenting()) return;
     if (!(event instanceof MouseEvent) || event.shiftKey) return;
     const target = event.composedPath().find(
-      (node) => node instanceof HTMLElement && node.classList.contains("agent-message")
+      (node) => node instanceof HTMLElement && node.matches(".agent-message, .agent-reply")
     );
     if (!(target instanceof HTMLElement) || !target.dataset.messageId) return;
     event.preventDefault();

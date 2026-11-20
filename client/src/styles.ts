@@ -149,16 +149,17 @@ export const styles = `
 
   #collapse:hover, #collapse:focus-visible { background: #2a2a2a; }
 
-  #outbox-list {
+  #list-content { overflow: auto; }
+
+  #outbox-list, #answer-list {
     display: flex;
     flex-direction: column;
     margin: 0;
     padding: 4px 0;
-    overflow: auto;
     list-style: none;
   }
 
-  #outbox-list li {
+  #outbox-list > li, #answer-list > li {
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -166,7 +167,21 @@ export const styles = `
     border-bottom: 1px solid #242424;
   }
 
-  #outbox-list li:last-child { border-bottom: 0; }
+  #outbox-list > li:last-child, #answer-list > li:last-child { border-bottom: 0; }
+  #outbox-list:empty, #answer-list:empty { display: none; }
+  #outbox-list:not(:empty) + #answer-list:not(:empty) { border-top: 1px solid #333; }
+
+  .agent-reply { min-width: 0; color: #d8d4cd; overflow-wrap: anywhere; }
+  #outbox-list .agent-reply {
+    margin-top: 4px;
+    padding-inline-start: 8px;
+    border-inline-start: 2px solid #555;
+  }
+  .agent-reply p { margin: 0 0 4px; }
+  .agent-reply p:last-child { margin-bottom: 0; }
+  .agent-reply a { color: #91c4ff; }
+  .agent-reply pre { overflow: auto; }
+  .agent-reply table { display: block; overflow: auto; }
   #outbox-list .row { display: flex; justify-content: space-between; gap: 10px; }
   #outbox-list .where, #outbox-list .state { color: #b8b2a9; }
   #outbox-list .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

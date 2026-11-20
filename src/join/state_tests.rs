@@ -21,7 +21,7 @@ use crate::{
     protocol::{
         comment::{Author, Draft},
         control::{
-            AckOutcome, AnswerText, CommentRef, MAX_QUEUED_PER_KEY, Revision, ShareMessage,
+            AckOutcome, Anchor, AnswerText, CommentRef, MAX_QUEUED_PER_KEY, Revision, ShareMessage,
             StatusLine,
         },
         presence::Person,
@@ -196,6 +196,31 @@ fn a_readmitted_joiner_forgets_the_old_status_line() {
     // the one from before is stale.
     state.admitted(author(1), &[]).unwrap();
     assert_eq!(state.snapshot().link.status, None);
+}
+
+#[test]
+fn answers_become_live_after_admission_presence() {
+    let mut state = State::new(settings(Switch::Off));
+    state.admitted(author(1), &[]).unwrap();
+    let answer = |index| ShareMessage::Answer {
+        id: nth(index),
+        message: "Reply".to_owned().try_into().unwrap(),
+        choices: Default::default(),
+        anchor: Some(Anchor {
+            comment: nth(3),
+            page: "http://localhost:8080/".to_owned().try_into().unwrap(),
+            selector: "#intro".to_owned().try_into().unwrap(),
+        }),
+        to: None,
+    };
+    let cached = state.apply(answer(1));
+    state.apply(ShareMessage::Presence { here: Vec::new() });
+    let live = state.apply(answer(2));
+    assert!(
+        matches!(cached.as_slice(), [ToPage::Answer(answer)] if !answer.live && answer.reply_to == Some(nth(3)))
+    );
+    assert!(matches!(live.as_slice(), [ToPage::Answer(answer)] if answer.live));
+    assert!(state.apply(answer(1)).is_empty());
 }
 
 #[test]

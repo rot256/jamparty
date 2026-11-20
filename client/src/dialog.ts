@@ -272,8 +272,10 @@ export class CommentDialog {
     if (element !== null) {
       captured = { element, page, selector: target.selector, selectedText };
       const rect = element.getBoundingClientRect();
-      x = rect.left;
-      y = rect.bottom;
+      if (rect.width > 0 && rect.height > 0) {
+        x = rect.left;
+        y = rect.bottom;
+      }
     }
     if (target.kind === "pdf" && draft.pdf !== undefined) {
       captured = { ...captured, selector: target.selector, pdf: draft.pdf };
@@ -311,7 +313,7 @@ export class CommentDialog {
   private readonly updateHighlight = (): void => {
     const { highlight, dialog } = this.ui;
     const element = this.captured?.element;
-    if (!dialog.open || !element?.isConnected) {
+    if (!dialog.open || !element?.isConnected || element.getClientRects().length === 0) {
       highlight.style.display = "none";
       return;
     }

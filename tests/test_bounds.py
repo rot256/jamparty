@@ -21,6 +21,7 @@ def answer(index: int) -> str:
             "id": str(uuid.UUID(int=index + 1)),
             "html": f"<p>answer {index}</p>",
             "toYou": False,
+            "live": True,
         }
     )
 
@@ -59,6 +60,7 @@ def test_answers_and_dismissals_are_bounded(tmp_path: Path, page: Page) -> None:
         expect(messages).to_have_count(MAX_ANSWERS)
         expect(messages.filter(has_text="answer 49")).to_have_count(0)
         expect(messages.filter(has_text="answer 50")).to_have_count(1)
+        expect(overlay(page, "#answer-list .agent-reply")).to_have_count(MAX_ANSWERS)
 
         # Dismissals of answers the joiner no longer has are forgotten.
         stale = [str(uuid.UUID(int=index)) for index in range(1, 1000)]

@@ -63,6 +63,10 @@ pub(crate) struct Answer {
     pub(crate) id: CommentId,
     #[cfg_attr(test, ts(type = "string"))]
     pub(crate) html: AnswerHtml,
+    /// The ID of the comment it answers.
+    #[serde(rename = "replyTo", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) reply_to: Option<CommentId>,
     /// The selector of the comment it answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
@@ -76,6 +80,8 @@ pub(crate) struct Answer {
     #[serde(rename = "toYou")]
     pub(crate) to_you: bool,
     pub(crate) choices: Choices,
+    /// Arrived after the share's admission replay.
+    pub(crate) live: bool,
 }
 
 /// Everything a page is told when it connects.
@@ -168,6 +174,7 @@ pub(crate) struct State {
     mine: Mine,
     settings: PageSettings,
     answers: VecDeque<Answer>,
+    catching_up: bool,
     /// The HTML of `answers`, in bytes.
     answers_html: usize,
     revision: Option<Revision>,
@@ -182,6 +189,7 @@ impl State {
             mine: Mine::default(),
             settings,
             answers: VecDeque::new(),
+            catching_up: true,
             answers_html: 0,
             revision: None,
         }
@@ -220,6 +228,7 @@ impl State {
         undelivered: &[CommentId],
     ) -> Result<Vec<ToPage>, TooMany> {
         self.mine.admitted(undelivered)?;
+        self.catching_up = true;
         self.link = Link {
             connected: true,
             path: None,
@@ -298,6 +307,9 @@ impl State {
                 vec![ToPage::Reload { revision }]
             }
             ShareMessage::Presence { here } => {
+                // Admission sends the cached answers first, then starts the
+                // broadcast queue, which includes this joiner's arrival.
+                self.catching_up = false;
                 self.people.clone_from(&here);
                 vec![ToPage::People { here }]
             }
@@ -319,18 +331,24 @@ impl State {
                 if self.answers.iter().any(|answer| answer.id == id) {
                     return Vec::new();
                 }
-                let (anchor, page) = match anchor {
-                    Some(anchor) => (Some(anchor.selector), Some(anchor.page)),
-                    None => (None, None),
+                let (reply_to, anchor, page) = match anchor {
+                    Some(anchor) => (
+                        Some(anchor.comment),
+                        Some(anchor.selector),
+                        Some(anchor.page),
+                    ),
+                    None => (None, None, None),
                 };
                 let you = self.link.you.as_ref().map(|you| you.key);
                 let answer = Answer {
                     id,
                     choices,
                     html: markdown::render(&String::from(message)),
+                    reply_to,
                     anchor,
                     page,
                     to_you: to.is_some() && to == you,
+                    live: !self.catching_up,
                 };
                 while !room(self.answers.len(), self.answers_html, answer.html.len()) {
                     let Some(oldest) = self.answers.pop_front() else {
