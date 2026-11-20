@@ -344,7 +344,7 @@ impl State {
                 let (reply_to, anchor, page, place) = match anchor {
                     Some(AnswerAnchor::Comment { comment }) => (
                         Some(comment.comment),
-                        Some(comment.selector),
+                        (!comment.selector.as_ref().trim().is_empty()).then_some(comment.selector),
                         Some(comment.page),
                         None,
                     ),
