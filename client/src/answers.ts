@@ -2,6 +2,8 @@
 // Recent replies also appear in the comment list.
 
 import { parsePlaceAnchor, placeElement } from "./answer-anchor";
+import { answerViewport, drawAnswerLink, placeAnswer } from "./answer-placement";
+import type { Box, Placement } from "./answer-placement";
 import { samePage } from "./capture";
 import { AGENT_TARGET_PREFIX, DISMISSED_KEY } from "./config";
 import { MAX_ANSWERS } from "./generated/api";
@@ -11,11 +13,16 @@ import type { Ui } from "./ui";
 
 interface Shown {
   node: HTMLElement;
+  wrapper: HTMLElement;
+  marker: HTMLElement;
+  line: HTMLElement;
   unavailable: HTMLElement;
   show: HTMLAnchorElement | null;
   target: () => Element | undefined;
   localAnchor: () => boolean;
-  stopTimer: () => void;
+  hasPlace: boolean;
+  heightAt: (width: number) => number;
+  stopTimer?: () => void;
 }
 
 interface PlaceTarget {
@@ -25,15 +32,6 @@ interface PlaceTarget {
   detach: () => void;
 }
 
-interface Box {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-}
-
-const GAP = 8;
-const EDGE = 8;
 const REVEAL_KEY = "jamparty-answer-reveal";
 
 /** How long a Show navigation may take to reach a page with the overlay. */
@@ -81,7 +79,8 @@ export class Answers {
   private placementFrame: number | undefined;
   private timeoutSeconds = 0;
   private highlightTimer: number | undefined;
-  private hovering: Shown | undefined;
+  private readonly geometry: ResizeObserver;
+  private observedTargets = new Set<Element>();
   private pendingReveal = takeReveal();
   private readonly landingPath = location.pathname;
 
@@ -92,9 +91,14 @@ export class Answers {
   ) {
     const schedule = (): void => { this.schedulePlacement(); };
     this.sections = ui.shadow.querySelector("#pdf-sections");
-    const panels = new ResizeObserver(schedule);
-    panels.observe(ui.list);
-    if (this.sections !== null) panels.observe(this.sections);
+    this.geometry = new ResizeObserver(schedule);
+    this.geometry.observe(ui.list);
+    this.geometry.observe(ui.bar);
+    this.geometry.observe(ui.panel);
+    if (this.sections !== null) this.geometry.observe(this.sections);
+    this.geometry.observe(ui.agentGeneral);
+    window.visualViewport?.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("scroll", schedule);
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
     window.addEventListener("load", schedule, true);
@@ -311,17 +315,33 @@ export class Answers {
       if (entry !== undefined) return entry.target();
       if (!localAnchor() || selector === undefined) return undefined;
       const element = this.findTarget(selector);
-      if (!element || element === this.ui.host || element.getClientRects().length === 0) return undefined;
+      if (!element || element === this.ui.host) return undefined;
+      // A live answer may still be waiting for its first placement.
+      if (selector.startsWith(AGENT_TARGET_PREFIX) &&
+          this.node(selector.slice(AGENT_TARGET_PREFIX.length)) === element) return element;
+      if (element.getClientRects().length === 0) return undefined;
       return element;
     };
-    const show = entry === undefined ? null : this.showLink(answer.id, entry);
-    if (show !== null) node.append(show);
     const activate = (): void => {
       if (!localAnchor()) return;
       const found = target();
       if (found === undefined) this.ui.showToast("Element is unavailable");
       else this.revealElement(found);
     };
+    const show = entry !== undefined ? this.showLink(answer.id, entry)
+      : selector === undefined ? null : document.createElement("a");
+    if (show !== null) {
+      if (entry === undefined) {
+        show.className = "agent-show";
+        show.textContent = "Show";
+        show.href = location.href;
+        show.addEventListener("click", (event) => {
+          event.preventDefault();
+          activate();
+        });
+      }
+      node.append(show);
+    }
     node.addEventListener("click", (event) => {
       const interactive = event.target instanceof Element ? event.target.closest("a, button") : null;
       const selection = window.getSelection();
@@ -342,19 +362,41 @@ export class Answers {
       this.persistDismissed();
       this.remove(answer.id);
     });
-    const shown: Shown = { node, unavailable, show, target, localAnchor, stopTimer: () => undefined };
-    if (entry !== undefined) {
-      node.addEventListener("mouseenter", () => {
-        this.hovering = shown;
-        this.schedulePlacement();
+    const wrapper = document.createElement("div");
+    wrapper.className = "agent-placement";
+    const marker = document.createElement("div");
+    marker.className = "agent-anchor-marker";
+    marker.setAttribute("aria-hidden", "true");
+    const line = document.createElement("div");
+    line.className = "agent-anchor-line";
+    line.setAttribute("aria-hidden", "true");
+    wrapper.append(marker, line);
+    // Anchored content is fixed for the lifetime of the answer. Measure
+    // each width without changing the live card's overflow or scroll.
+    const heights = new Map<number, number>();
+    const heightAt = (width: number): number => {
+      const cached = heights.get(width);
+      if (cached !== undefined) return cached;
+      const measure = node.cloneNode(true) as HTMLElement;
+      measure.removeAttribute("data-message-id");
+      measure.inert = true;
+      measure.querySelector(".agent-timeout")?.remove();
+      for (const detail of measure.querySelectorAll<HTMLElement>(".agent-show, .agent-unavailable")) {
+        detail.hidden = true;
+      }
+      Object.assign(measure.style, {
+        left: "-10000px", top: "0", width: `${width}px`, maxHeight: "none", visibility: "hidden",
       });
-      node.addEventListener("mouseleave", () => {
-        if (this.hovering === shown) this.hovering = undefined;
-        this.schedulePlacement();
-      });
-    }
+      this.ui.agentAnchored.append(measure);
+      const height = measure.getBoundingClientRect().height;
+      measure.remove();
+      heights.set(width, height);
+      return height;
+    };
+    const shown: Shown = {
+      node, wrapper, marker, line, unavailable, show, target, localAnchor, hasPlace: entry !== undefined, heightAt,
+    };
     this.shown.set(answer.id, shown);
-    this.startTimer(shown);
     this.schedulePlacement();
   }
 
@@ -362,9 +404,9 @@ export class Answers {
   remove(id: string): void {
     if (this.recent.get(id)?.choices.length) this.recent.delete(id);
     const shown = this.shown.get(id);
-    shown?.stopTimer();
+    shown?.stopTimer?.();
     shown?.node.remove();
-    if (shown !== undefined && this.hovering === shown) this.hovering = undefined;
+    shown?.wrapper.remove();
     this.shown.delete(id);
     this.prunePlaces();
     this.schedulePlacement();
@@ -385,8 +427,8 @@ export class Answers {
   }
 
   private startTimer(shown: Shown): void {
-    shown.stopTimer();
-    if (this.timeoutSeconds === 0) return;
+    shown.stopTimer?.();
+    if (this.timeoutSeconds === 0 || !shown.node.isConnected) return;
     const { node } = shown;
     const bar = document.createElement("div");
     bar.className = "agent-timeout";
@@ -399,9 +441,10 @@ export class Answers {
     let started: number | undefined;
     let timer: number | undefined;
     let hovering = node.matches(":hover");
+    let visible = false;
     const update = (): void => {
       if (stopped) return;
-      const paused = hovering || node.contains(this.ui.shadow.activeElement);
+      const paused = !visible || document.hidden || hovering || node.contains(this.ui.shadow.activeElement);
       if (paused && started !== undefined) {
         remaining = Math.max(0, remaining - (performance.now() - started));
         started = undefined;
@@ -419,6 +462,12 @@ export class Answers {
     const leave = (): void => { hovering = false; update(); };
     // focusout fires before the new activeElement is installed.
     const focus = (): void => { queueMicrotask(update); };
+    const visibility = new IntersectionObserver(([intersection]) => {
+      visible = intersection?.isIntersecting ?? false;
+      update();
+    });
+    visibility.observe(node);
+    document.addEventListener("visibilitychange", update);
     node.addEventListener("mouseenter", enter);
     node.addEventListener("mouseleave", leave);
     node.addEventListener("focusin", focus);
@@ -426,12 +475,14 @@ export class Answers {
     shown.stopTimer = () => {
       stopped = true;
       clearTimeout(timer);
+      visibility.disconnect();
+      document.removeEventListener("visibilitychange", update);
       node.removeEventListener("mouseenter", enter);
       node.removeEventListener("mouseleave", leave);
       node.removeEventListener("focusin", focus);
       node.removeEventListener("focusout", focus);
       bar.remove();
-      shown.stopTimer = () => undefined;
+      delete shown.stopTimer;
     };
     update();
   }
@@ -460,40 +511,30 @@ export class Answers {
   private place(): void {
     this.placementFrame = undefined;
     const { agentAnchored, agentGeneral } = this.ui;
-    const groups = new Map<Element, HTMLElement[]>();
+    const anchored = new Map<Shown, Element>();
+    const cards = new Map<Element, Shown>();
     let hovered: Element | undefined;
     for (const entry of this.shown.values()) {
       const local = entry.localAnchor();
       const target = entry.target();
-      if (entry.show !== null) entry.show.hidden = local;
+      cards.set(entry.node, entry);
       entry.node.classList.toggle("has-anchor", local);
-      if (local) {
+      if (local && entry.node.tabIndex !== 0) {
         entry.node.tabIndex = 0;
         entry.node.setAttribute("aria-label", "Agent message; activate to show its anchor");
-      } else {
+      } else if (!local && entry.node.hasAttribute("tabindex")) {
         entry.node.removeAttribute("tabindex");
         entry.node.removeAttribute("aria-label");
       }
-      if (this.hovering === entry) hovered = target;
-      if (target !== undefined) {
-        entry.unavailable.hidden = true;
-        if (entry.node.parentElement !== agentAnchored) agentAnchored.append(entry.node);
-        const group = groups.get(target) ?? [];
-        group.push(entry.node);
-        groups.set(target, group);
-      } else {
-        entry.unavailable.hidden = !local;
-        if (entry.node.parentElement !== agentGeneral) agentGeneral.append(entry.node);
-        entry.node.style.removeProperty("left");
-        entry.node.style.removeProperty("top");
-      }
+      if (target !== undefined) anchored.set(entry, target);
+      else this.placeGeneral(entry, local);
     }
 
     const preview = this.historyPreview;
     if (preview !== undefined) {
       if (preview.node.getClientRects().length > 0 &&
           (preview.node.matches(":hover") || preview.node.contains(this.ui.shadow.activeElement))) {
-        hovered = this.places.get(preview.id)?.target() ?? hovered;
+        hovered = this.places.get(preview.id)?.target();
       } else {
         this.historyPreview = undefined;
       }
@@ -510,61 +551,112 @@ export class Answers {
     else if (this.highlightTimer === undefined) this.ui.messageHighlight.style.display = "none";
 
     const sectionsHeight = this.sections?.offsetHeight ?? 0;
-    agentGeneral.style.setProperty("--sections-offset", `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`);
+    const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`;
+    if (agentGeneral.style.getPropertyValue("--sections-offset") !== sectionsOffset) {
+      agentGeneral.style.setProperty("--sections-offset", sectionsOffset);
+    }
     const obstacles = [
-      ...agentGeneral.children,
+      this.ui.bar,
       this.ui.list,
+      this.ui.panel,
       ...(this.sections === null ? [] : [this.sections]),
       ...(this.pdf === undefined ? [] : document.querySelectorAll("#pdf-feedback > :not(:empty)")),
     ];
     const occupied: Box[] = obstacles.filter((node) => node.getClientRects().length > 0 &&
-      getComputedStyle(node).visibility === "visible").map((node) => {
-      const rect = node.getBoundingClientRect();
-      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
-    });
-    const overlaps = (candidate: Box): boolean => occupied.some((rect) => !(
-      candidate.right + GAP <= rect.left ||
-      candidate.left >= rect.right + GAP ||
-      candidate.bottom + GAP <= rect.top ||
-      candidate.top >= rect.bottom + GAP
-    ));
-    const placement = (rect: DOMRect, width: number, height: number, desiredTop: number): Box => {
-      const maximumLeft = window.innerWidth - width - EDGE;
-      const right = Math.max(EDGE, Math.min(rect.right + GAP, maximumLeft));
-      const left = Math.max(EDGE, Math.min(rect.left - width - GAP, maximumLeft));
-      const horizontal = rect.right + GAP + width <= window.innerWidth - EDGE
-        ? [right, left]
-        : [left, right];
-      const maximumTop = window.innerHeight - height - EDGE;
-      const vertical = [
-        desiredTop,
-        ...occupied.flatMap((placed) => [placed.bottom + GAP, placed.top - height - GAP]),
-      ].map((top) => Math.max(EDGE, Math.min(top, maximumTop)));
-      const candidates = horizontal
-        .flatMap((candidateLeft, side) => vertical.map((candidateTop) => ({
-          left: candidateLeft,
-          right: candidateLeft + width,
-          top: candidateTop,
-          bottom: candidateTop + height,
-          score: Math.abs(candidateTop - desiredTop) * 2 + side,
-        })))
-        .sort((first, second) => first.score - second.score);
-      const fallback = { left: EDGE, right: EDGE + width, top: desiredTop, bottom: desiredTop + height };
-      return candidates.find((candidate) => !overlaps(candidate)) ?? candidates[0] ?? fallback;
-    };
-    for (const [target, nodes] of groups) {
-      const rect = target.getBoundingClientRect();
-      const heights = nodes.map((node) => node.offsetHeight);
-      const totalHeight = heights.reduce((total, height) => total + height, 0) +
-        GAP * Math.max(0, nodes.length - 1);
-      let top = Math.max(EDGE, Math.min(rect.top, window.innerHeight - totalHeight - EDGE));
-      for (const [index, node] of nodes.entries()) {
-        const placed = placement(rect, node.offsetWidth, heights[index] ?? 0, top);
-        node.style.left = `${placed.left}px`;
-        node.style.top = `${placed.top}px`;
-        occupied.push(placed);
-        top = placed.bottom + GAP;
+      getComputedStyle(node).visibility === "visible").map((node) => node.getBoundingClientRect());
+    const targets = new Set(anchored.values());
+    for (const target of this.observedTargets) if (!targets.has(target)) this.geometry.unobserve(target);
+    for (const target of targets) if (!this.observedTargets.has(target)) this.geometry.observe(target);
+    this.observedTargets = targets;
+
+    const view = answerViewport();
+    const pdfViewer = document.documentElement.hasAttribute("data-jamparty-pdf");
+    const targetBoxes = new Map<Element, Box>();
+    const pages = new Map<Element, Box>();
+    for (const target of targets) {
+      const parent = cards.get(target);
+      if (parent !== undefined && anchored.has(parent)) continue;
+      targetBoxes.set(target, target.getBoundingClientRect());
+      // Only the joiner's PDF viewer has page sheets; a shared HTML page may
+      // use the same class name for anything.
+      const page = pdfViewer ? target.closest(".pdf-page") : null;
+      if (page !== null) pages.set(target, page.getBoundingClientRect());
+    }
+    const general = new Map(
+      Array.from(agentGeneral.children, (node) => [node, node.getBoundingClientRect()]),
+    );
+    const pending = new Set(anchored.keys());
+    const placements = new Map<Shown, { rect: Box; placement: Placement }>();
+    const solve = (entry: Shown): void => {
+      if (!pending.delete(entry)) return;
+      const target = anchored.get(entry);
+      if (target === undefined) return;
+      const parent = cards.get(target);
+      if (parent !== undefined) solve(parent);
+      const rect = targetBoxes.get(target);
+      const previous = general.get(entry.node);
+      general.delete(entry.node);
+      const placement = rect === undefined ? undefined : placeAnswer(entry.heightAt, view, rect, pages.get(target), [
+        ...occupied,
+        ...general.values(),
+        ...Array.from(targetBoxes.values()).filter((box) => box !== rect),
+      ]);
+      if (placement === undefined || rect === undefined) {
+        this.placeGeneral(entry, false);
+        if (previous === undefined) {
+          // Inserting into the general stack can shift its other cards.
+          for (const node of general.keys()) {
+            const box = node.getBoundingClientRect();
+            general.set(node, box);
+            if (targetBoxes.has(node)) targetBoxes.set(node, box);
+          }
+          this.schedulePlacement();
+        }
+        const box = previous ?? entry.node.getBoundingClientRect();
+        general.set(entry.node, box);
+        if (targets.has(entry.node)) targetBoxes.set(entry.node, box);
+        return;
       }
+      // Border-box sizing gives dependents their parent's final geometry
+      // before we apply the styles to the live cards.
+      occupied.push(placement.box);
+      if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
+      placements.set(entry, { rect, placement });
+    };
+    const ordered = Array.from(anchored).sort(([, a], [, b]) =>
+      (targetBoxes.get(a)?.top ?? Infinity) - (targetBoxes.get(b)?.top ?? Infinity));
+    for (const [entry] of ordered) solve(entry);
+    for (const [entry, { rect, placement }] of placements) {
+      entry.unavailable.hidden = true;
+      if (entry.show !== null) entry.show.hidden = true;
+      if (entry.node.parentElement !== entry.wrapper) {
+        if (entry.node.parentElement === agentGeneral) this.schedulePlacement();
+        entry.wrapper.prepend(entry.node);
+      }
+      if (entry.wrapper.parentElement !== agentAnchored) agentAnchored.append(entry.wrapper);
+      const { box, maxHeight } = placement;
+      entry.node.style.left = `${box.left}px`;
+      entry.node.style.top = `${box.top}px`;
+      entry.node.style.width = `${box.right - box.left}px`;
+      entry.node.style.maxHeight = `${maxHeight}px`;
+      drawAnswerLink(entry.marker, entry.line, view, rect, placement);
+    }
+    for (const entry of this.shown.values()) {
+      if (entry.stopTimer === undefined) this.startTimer(entry);
+    }
+  }
+
+  private placeGeneral(entry: Shown, unavailable: boolean): void {
+    if (entry.unavailable.hidden === unavailable) entry.unavailable.hidden = !unavailable;
+    if (entry.show !== null) {
+      const hidden = unavailable || (!entry.hasPlace && !entry.localAnchor());
+      if (entry.show.hidden !== hidden) entry.show.hidden = hidden;
+    }
+    if (entry.node.parentElement === this.ui.agentGeneral) return;
+    this.ui.agentGeneral.append(entry.node);
+    entry.wrapper.remove();
+    for (const property of ["left", "top", "width", "max-height"]) {
+      entry.node.style.removeProperty(property);
     }
   }
 

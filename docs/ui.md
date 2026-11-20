@@ -230,8 +230,12 @@ text. Rows:
   comments, newest first. The joiner keeps up to 100 recent answers.
 - `--at <selector> --page <path>` and `--at-pdf <path>#page=<number>&box=<coords>`
   send to everyone by default. Live answers open beside the target when it is
-  available on the current page. On another page, they open in the general
-  answer corner with a **Show** link.
+  available on the current page. PDF answers use the window margin when it
+  has room. In narrower layouts, answers fit beside, below or above the
+  target. A blue marker bounds the target on the side facing the answer,
+  and a leader connects the two. Hover or focus the answer to highlight
+  its target. On another page, place answers open in the general answer
+  corner with a **Show** link.
 - Place answers in the comment list have a **Show** link that scrolls to the
   target, navigating within the share if needed. Show follows same-origin
   redirects, including a served directory redirect from `/docs` to `/docs/`.

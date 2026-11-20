@@ -45,6 +45,118 @@ function placeElement(root, selector) {
   }
 }
 
+// client/src/answer-placement.ts
+var EDGE = 8;
+var GAP = 12;
+var PAGE_GAP = 24;
+var MIN_WIDTH = 200;
+var MAX_WIDTH = 340;
+var MIN_HEIGHT = 48;
+function answerViewport() {
+  const viewport = window.visualViewport;
+  const x = viewport?.offsetLeft ?? 0;
+  const y = viewport?.offsetTop ?? 0;
+  return {
+    left: x + EDGE,
+    top: y + EDGE,
+    right: x + (viewport?.width ?? window.innerWidth) - EDGE,
+    bottom: y + (viewport?.height ?? window.innerHeight) - EDGE
+  };
+}
+function overlaps(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+function clamp(value, lower, upper) {
+  return Math.max(lower, Math.min(value, upper));
+}
+function sideBands(view, target, gap) {
+  const right = { ...view, left: Math.max(view.left, target.right + gap) };
+  const left = { ...view, right: Math.min(view.right, target.left - gap) };
+  const bands = [{ side: "right", area: right }, { side: "left", area: left }];
+  return bands.sort((a, b) => b.area.right - b.area.left - (a.area.right - a.area.left));
+}
+function placeAnswer(heightAt, view, target, page, occupied) {
+  const bands = [
+    ...page === void 0 ? [] : sideBands(view, page, PAGE_GAP),
+    ...sideBands(view, target, GAP),
+    { side: "below", area: { ...view, top: Math.max(view.top, target.bottom + GAP) } },
+    { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - GAP) } }
+  ];
+  for (const allowClipping of [false, true]) {
+    for (const { side, area } of bands) {
+      const width = Math.min(MAX_WIDTH, Math.floor(area.right - area.left));
+      if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
+      const height = heightAt(width);
+      const horizontal = side === "right" || side === "left";
+      const desiredLeft = clamp(target.left, area.left, area.right - width);
+      const lefts = horizontal ? [side === "right" ? area.left : area.right - width] : [desiredLeft, ...occupied.flatMap((box) => [box.right + GAP, box.left - width - GAP])].filter((left) => left >= area.left && left + width <= area.right);
+      let best;
+      for (const left of lefts) {
+        const obstacles = occupied.filter((box) => left < box.right + GAP && left + width > box.left - GAP);
+        const desiredTop = side === "above" ? target.top - GAP - height : target.top;
+        const tops = [
+          clamp(desiredTop, area.top, area.bottom - height),
+          ...obstacles.flatMap((box) => [box.bottom + GAP, box.top - GAP - height]),
+          area.top
+        ];
+        for (const top of tops) {
+          if (top < area.top || top >= area.bottom) continue;
+          if (overlaps({ left, right: left + width, top, bottom: top + Math.min(height, area.bottom - top) }, target)) {
+            continue;
+          }
+          let bottom = area.bottom;
+          for (const box of obstacles) {
+            if (top >= box.bottom + GAP) continue;
+            bottom = Math.min(bottom, box.top - GAP);
+          }
+          const maxHeight = bottom - top;
+          if (maxHeight < height && (!allowClipping || maxHeight < MIN_HEIGHT)) continue;
+          const fittedHeight = Math.min(maxHeight, height);
+          const score = Math.abs(top - desiredTop) + Math.abs(left - desiredLeft) + (height - fittedHeight) * 2;
+          if (best === void 0 || score < best.score) {
+            best = {
+              placement: { side, maxHeight, box: { left, right: left + width, top, bottom: top + fittedHeight } },
+              score
+            };
+          }
+        }
+      }
+      if (best !== void 0) return best.placement;
+    }
+  }
+  return void 0;
+}
+function drawBox(node, box) {
+  node.style.left = `${box.left}px`;
+  node.style.top = `${box.top}px`;
+  node.style.width = `${box.right - box.left}px`;
+  node.style.height = `${box.bottom - box.top}px`;
+}
+function drawAnswerLink(marker, line, view, target, { side, box }) {
+  const horizontal = side === "right" || side === "left";
+  marker.hidden = target.bottom <= view.top || target.top >= view.bottom || target.right <= view.left || target.left >= view.right;
+  line.hidden = marker.hidden;
+  if (marker.hidden) return;
+  const edge = {
+    right: { x: target.right + 3, y: box.top + 16 },
+    left: { x: target.left - 3, y: box.top + 16 },
+    below: { x: box.left + 16, y: target.bottom + 3 },
+    above: { x: box.left + 16, y: target.top - 3 }
+  }[side];
+  const x = clamp(edge.x, Math.max(view.left, target.left), Math.min(view.right, target.right));
+  const y = clamp(edge.y, Math.max(view.top, target.top), Math.min(view.bottom, target.bottom));
+  const fromX = horizontal ? edge.x : x;
+  const fromY = horizontal ? y : edge.y;
+  const toX = horizontal ? side === "right" ? box.left : box.right : clamp(x, box.left + 8, box.right - 8);
+  const toY = horizontal ? clamp(y, box.top + 8, box.bottom - 8) : side === "below" ? box.top : box.bottom;
+  marker.dataset.side = side;
+  drawBox(marker, target);
+  line.style.left = `${fromX}px`;
+  line.style.top = `${fromY}px`;
+  line.style.width = `${Math.hypot(toX - fromX, toY - fromY)}px`;
+  line.style.transform = `rotate(${Math.atan2(toY - fromY, toX - fromX)}rad)`;
+}
+
 // client/src/generated/api.ts
 var MAX_NAME = 40;
 var MAX_ANSWER_TIMEOUT = 3600;
@@ -179,8 +291,6 @@ var PALETTE = [
 ];
 
 // client/src/answers.ts
-var GAP = 8;
-var EDGE = 8;
 var REVEAL_KEY = "jamparty-answer-reveal";
 var REVEAL_TTL_MS = 3e4;
 function takeReveal() {
@@ -215,9 +325,14 @@ var Answers = class {
       this.schedulePlacement();
     };
     this.sections = ui.shadow.querySelector("#pdf-sections");
-    const panels = new ResizeObserver(schedule);
-    panels.observe(ui.list);
-    if (this.sections !== null) panels.observe(this.sections);
+    this.geometry = new ResizeObserver(schedule);
+    this.geometry.observe(ui.list);
+    this.geometry.observe(ui.bar);
+    this.geometry.observe(ui.panel);
+    if (this.sections !== null) this.geometry.observe(this.sections);
+    this.geometry.observe(ui.agentGeneral);
+    window.visualViewport?.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("scroll", schedule);
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
     window.addEventListener("load", schedule, true);
@@ -242,7 +357,8 @@ var Answers = class {
   placementFrame;
   timeoutSeconds = 0;
   highlightTimer;
-  hovering;
+  geometry;
+  observedTargets = /* @__PURE__ */ new Set();
   pendingReveal = takeReveal();
   landingPath = location.pathname;
   /** The node of answer `id`, for comments on an answer. */
@@ -437,17 +553,30 @@ var Answers = class {
       if (entry !== void 0) return entry.target();
       if (!localAnchor() || selector === void 0) return void 0;
       const element = this.findTarget(selector);
-      if (!element || element === this.ui.host || element.getClientRects().length === 0) return void 0;
+      if (!element || element === this.ui.host) return void 0;
+      if (selector.startsWith(AGENT_TARGET_PREFIX) && this.node(selector.slice(AGENT_TARGET_PREFIX.length)) === element) return element;
+      if (element.getClientRects().length === 0) return void 0;
       return element;
     };
-    const show = entry === void 0 ? null : this.showLink(answer.id, entry);
-    if (show !== null) node.append(show);
     const activate = () => {
       if (!localAnchor()) return;
       const found = target();
       if (found === void 0) this.ui.showToast("Element is unavailable");
       else this.revealElement(found);
     };
+    const show = entry !== void 0 ? this.showLink(answer.id, entry) : selector === void 0 ? null : document.createElement("a");
+    if (show !== null) {
+      if (entry === void 0) {
+        show.className = "agent-show";
+        show.textContent = "Show";
+        show.href = location.href;
+        show.addEventListener("click", (event) => {
+          event.preventDefault();
+          activate();
+        });
+      }
+      node.append(show);
+    }
     node.addEventListener("click", (event) => {
       const interactive = event.target instanceof Element ? event.target.closest("a, button") : null;
       const selection = window.getSelection();
@@ -467,28 +596,61 @@ var Answers = class {
       this.persistDismissed();
       this.remove(answer.id);
     });
-    const shown = { node, unavailable, show, target, localAnchor, stopTimer: () => void 0 };
-    if (entry !== void 0) {
-      node.addEventListener("mouseenter", () => {
-        this.hovering = shown;
-        this.schedulePlacement();
+    const wrapper = document.createElement("div");
+    wrapper.className = "agent-placement";
+    const marker = document.createElement("div");
+    marker.className = "agent-anchor-marker";
+    marker.setAttribute("aria-hidden", "true");
+    const line = document.createElement("div");
+    line.className = "agent-anchor-line";
+    line.setAttribute("aria-hidden", "true");
+    wrapper.append(marker, line);
+    const heights = /* @__PURE__ */ new Map();
+    const heightAt = (width) => {
+      const cached = heights.get(width);
+      if (cached !== void 0) return cached;
+      const measure = node.cloneNode(true);
+      measure.removeAttribute("data-message-id");
+      measure.inert = true;
+      measure.querySelector(".agent-timeout")?.remove();
+      for (const detail of measure.querySelectorAll(".agent-show, .agent-unavailable")) {
+        detail.hidden = true;
+      }
+      Object.assign(measure.style, {
+        left: "-10000px",
+        top: "0",
+        width: `${width}px`,
+        maxHeight: "none",
+        visibility: "hidden"
       });
-      node.addEventListener("mouseleave", () => {
-        if (this.hovering === shown) this.hovering = void 0;
-        this.schedulePlacement();
-      });
-    }
+      this.ui.agentAnchored.append(measure);
+      const height = measure.getBoundingClientRect().height;
+      measure.remove();
+      heights.set(width, height);
+      return height;
+    };
+    const shown = {
+      node,
+      wrapper,
+      marker,
+      line,
+      unavailable,
+      show,
+      target,
+      localAnchor,
+      hasPlace: entry !== void 0,
+      heightAt
+    };
     this.shown.set(answer.id, shown);
-    this.startTimer(shown);
     this.schedulePlacement();
   }
   /** The share resolved this question; no session dismissal is needed. */
   remove(id) {
     if (this.recent.get(id)?.choices.length) this.recent.delete(id);
     const shown = this.shown.get(id);
-    shown?.stopTimer();
+    shown?.stopTimer?.();
     shown?.node.remove();
-    if (shown !== void 0 && this.hovering === shown) this.hovering = void 0;
+    shown?.wrapper.remove();
     this.shown.delete(id);
     this.prunePlaces();
     this.schedulePlacement();
@@ -506,8 +668,8 @@ var Answers = class {
     for (const shown of this.shown.values()) this.startTimer(shown);
   }
   startTimer(shown) {
-    shown.stopTimer();
-    if (this.timeoutSeconds === 0) return;
+    shown.stopTimer?.();
+    if (this.timeoutSeconds === 0 || !shown.node.isConnected) return;
     const { node } = shown;
     const bar = document.createElement("div");
     bar.className = "agent-timeout";
@@ -520,9 +682,10 @@ var Answers = class {
     let started;
     let timer;
     let hovering = node.matches(":hover");
+    let visible = false;
     const update = () => {
       if (stopped) return;
-      const paused = hovering || node.contains(this.ui.shadow.activeElement);
+      const paused = !visible || document.hidden || hovering || node.contains(this.ui.shadow.activeElement);
       if (paused && started !== void 0) {
         remaining = Math.max(0, remaining - (performance.now() - started));
         started = void 0;
@@ -547,6 +710,12 @@ var Answers = class {
     const focus = () => {
       queueMicrotask(update);
     };
+    const visibility = new IntersectionObserver(([intersection]) => {
+      visible = intersection?.isIntersecting ?? false;
+      update();
+    });
+    visibility.observe(node);
+    document.addEventListener("visibilitychange", update);
     node.addEventListener("mouseenter", enter);
     node.addEventListener("mouseleave", leave);
     node.addEventListener("focusin", focus);
@@ -554,12 +723,14 @@ var Answers = class {
     shown.stopTimer = () => {
       stopped = true;
       clearTimeout(timer);
+      visibility.disconnect();
+      document.removeEventListener("visibilitychange", update);
       node.removeEventListener("mouseenter", enter);
       node.removeEventListener("mouseleave", leave);
       node.removeEventListener("focusin", focus);
       node.removeEventListener("focusout", focus);
       bar.remove();
-      shown.stopTimer = () => void 0;
+      delete shown.stopTimer;
     };
     update();
   }
@@ -585,38 +756,28 @@ var Answers = class {
   place() {
     this.placementFrame = void 0;
     const { agentAnchored, agentGeneral } = this.ui;
-    const groups = /* @__PURE__ */ new Map();
+    const anchored = /* @__PURE__ */ new Map();
+    const cards = /* @__PURE__ */ new Map();
     let hovered;
     for (const entry of this.shown.values()) {
       const local = entry.localAnchor();
       const target = entry.target();
-      if (entry.show !== null) entry.show.hidden = local;
+      cards.set(entry.node, entry);
       entry.node.classList.toggle("has-anchor", local);
-      if (local) {
+      if (local && entry.node.tabIndex !== 0) {
         entry.node.tabIndex = 0;
         entry.node.setAttribute("aria-label", "Agent message; activate to show its anchor");
-      } else {
+      } else if (!local && entry.node.hasAttribute("tabindex")) {
         entry.node.removeAttribute("tabindex");
         entry.node.removeAttribute("aria-label");
       }
-      if (this.hovering === entry) hovered = target;
-      if (target !== void 0) {
-        entry.unavailable.hidden = true;
-        if (entry.node.parentElement !== agentAnchored) agentAnchored.append(entry.node);
-        const group = groups.get(target) ?? [];
-        group.push(entry.node);
-        groups.set(target, group);
-      } else {
-        entry.unavailable.hidden = !local;
-        if (entry.node.parentElement !== agentGeneral) agentGeneral.append(entry.node);
-        entry.node.style.removeProperty("left");
-        entry.node.style.removeProperty("top");
-      }
+      if (target !== void 0) anchored.set(entry, target);
+      else this.placeGeneral(entry, local);
     }
     const preview = this.historyPreview;
     if (preview !== void 0) {
       if (preview.node.getClientRects().length > 0 && (preview.node.matches(":hover") || preview.node.contains(this.ui.shadow.activeElement))) {
-        hovered = this.places.get(preview.id)?.target() ?? hovered;
+        hovered = this.places.get(preview.id)?.target();
       } else {
         this.historyPreview = void 0;
       }
@@ -631,50 +792,103 @@ var Answers = class {
     if (hovered !== void 0) this.outline(hovered);
     else if (this.highlightTimer === void 0) this.ui.messageHighlight.style.display = "none";
     const sectionsHeight = this.sections?.offsetHeight ?? 0;
-    agentGeneral.style.setProperty("--sections-offset", `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`);
+    const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`;
+    if (agentGeneral.style.getPropertyValue("--sections-offset") !== sectionsOffset) {
+      agentGeneral.style.setProperty("--sections-offset", sectionsOffset);
+    }
     const obstacles = [
-      ...agentGeneral.children,
+      this.ui.bar,
       this.ui.list,
+      this.ui.panel,
       ...this.sections === null ? [] : [this.sections],
       ...this.pdf === void 0 ? [] : document.querySelectorAll("#pdf-feedback > :not(:empty)")
     ];
-    const occupied = obstacles.filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible").map((node) => {
-      const rect = node.getBoundingClientRect();
-      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
-    });
-    const overlaps = (candidate) => occupied.some((rect) => !(candidate.right + GAP <= rect.left || candidate.left >= rect.right + GAP || candidate.bottom + GAP <= rect.top || candidate.top >= rect.bottom + GAP));
-    const placement = (rect, width, height, desiredTop) => {
-      const maximumLeft = window.innerWidth - width - EDGE;
-      const right = Math.max(EDGE, Math.min(rect.right + GAP, maximumLeft));
-      const left = Math.max(EDGE, Math.min(rect.left - width - GAP, maximumLeft));
-      const horizontal = rect.right + GAP + width <= window.innerWidth - EDGE ? [right, left] : [left, right];
-      const maximumTop = window.innerHeight - height - EDGE;
-      const vertical = [
-        desiredTop,
-        ...occupied.flatMap((placed) => [placed.bottom + GAP, placed.top - height - GAP])
-      ].map((top) => Math.max(EDGE, Math.min(top, maximumTop)));
-      const candidates = horizontal.flatMap((candidateLeft, side) => vertical.map((candidateTop) => ({
-        left: candidateLeft,
-        right: candidateLeft + width,
-        top: candidateTop,
-        bottom: candidateTop + height,
-        score: Math.abs(candidateTop - desiredTop) * 2 + side
-      }))).sort((first, second) => first.score - second.score);
-      const fallback = { left: EDGE, right: EDGE + width, top: desiredTop, bottom: desiredTop + height };
-      return candidates.find((candidate) => !overlaps(candidate)) ?? candidates[0] ?? fallback;
-    };
-    for (const [target, nodes] of groups) {
-      const rect = target.getBoundingClientRect();
-      const heights = nodes.map((node) => node.offsetHeight);
-      const totalHeight = heights.reduce((total, height) => total + height, 0) + GAP * Math.max(0, nodes.length - 1);
-      let top = Math.max(EDGE, Math.min(rect.top, window.innerHeight - totalHeight - EDGE));
-      for (const [index, node] of nodes.entries()) {
-        const placed = placement(rect, node.offsetWidth, heights[index] ?? 0, top);
-        node.style.left = `${placed.left}px`;
-        node.style.top = `${placed.top}px`;
-        occupied.push(placed);
-        top = placed.bottom + GAP;
+    const occupied = obstacles.filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible").map((node) => node.getBoundingClientRect());
+    const targets = new Set(anchored.values());
+    for (const target of this.observedTargets) if (!targets.has(target)) this.geometry.unobserve(target);
+    for (const target of targets) if (!this.observedTargets.has(target)) this.geometry.observe(target);
+    this.observedTargets = targets;
+    const view = answerViewport();
+    const pdfViewer = document.documentElement.hasAttribute("data-jamparty-pdf");
+    const targetBoxes = /* @__PURE__ */ new Map();
+    const pages = /* @__PURE__ */ new Map();
+    for (const target of targets) {
+      const parent = cards.get(target);
+      if (parent !== void 0 && anchored.has(parent)) continue;
+      targetBoxes.set(target, target.getBoundingClientRect());
+      const page = pdfViewer ? target.closest(".pdf-page") : null;
+      if (page !== null) pages.set(target, page.getBoundingClientRect());
+    }
+    const general = new Map(
+      Array.from(agentGeneral.children, (node) => [node, node.getBoundingClientRect()])
+    );
+    const pending = new Set(anchored.keys());
+    const placements = /* @__PURE__ */ new Map();
+    const solve = (entry) => {
+      if (!pending.delete(entry)) return;
+      const target = anchored.get(entry);
+      if (target === void 0) return;
+      const parent = cards.get(target);
+      if (parent !== void 0) solve(parent);
+      const rect = targetBoxes.get(target);
+      const previous = general.get(entry.node);
+      general.delete(entry.node);
+      const placement = rect === void 0 ? void 0 : placeAnswer(entry.heightAt, view, rect, pages.get(target), [
+        ...occupied,
+        ...general.values(),
+        ...Array.from(targetBoxes.values()).filter((box) => box !== rect)
+      ]);
+      if (placement === void 0 || rect === void 0) {
+        this.placeGeneral(entry, false);
+        if (previous === void 0) {
+          for (const node of general.keys()) {
+            const box2 = node.getBoundingClientRect();
+            general.set(node, box2);
+            if (targetBoxes.has(node)) targetBoxes.set(node, box2);
+          }
+          this.schedulePlacement();
+        }
+        const box = previous ?? entry.node.getBoundingClientRect();
+        general.set(entry.node, box);
+        if (targets.has(entry.node)) targetBoxes.set(entry.node, box);
+        return;
       }
+      occupied.push(placement.box);
+      if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
+      placements.set(entry, { rect, placement });
+    };
+    const ordered = Array.from(anchored).sort(([, a], [, b]) => (targetBoxes.get(a)?.top ?? Infinity) - (targetBoxes.get(b)?.top ?? Infinity));
+    for (const [entry] of ordered) solve(entry);
+    for (const [entry, { rect, placement }] of placements) {
+      entry.unavailable.hidden = true;
+      if (entry.show !== null) entry.show.hidden = true;
+      if (entry.node.parentElement !== entry.wrapper) {
+        if (entry.node.parentElement === agentGeneral) this.schedulePlacement();
+        entry.wrapper.prepend(entry.node);
+      }
+      if (entry.wrapper.parentElement !== agentAnchored) agentAnchored.append(entry.wrapper);
+      const { box, maxHeight } = placement;
+      entry.node.style.left = `${box.left}px`;
+      entry.node.style.top = `${box.top}px`;
+      entry.node.style.width = `${box.right - box.left}px`;
+      entry.node.style.maxHeight = `${maxHeight}px`;
+      drawAnswerLink(entry.marker, entry.line, view, rect, placement);
+    }
+    for (const entry of this.shown.values()) {
+      if (entry.stopTimer === void 0) this.startTimer(entry);
+    }
+  }
+  placeGeneral(entry, unavailable) {
+    if (entry.unavailable.hidden === unavailable) entry.unavailable.hidden = !unavailable;
+    if (entry.show !== null) {
+      const hidden = unavailable || !entry.hasPlace && !entry.localAnchor();
+      if (entry.show.hidden !== hidden) entry.show.hidden = hidden;
+    }
+    if (entry.node.parentElement === this.ui.agentGeneral) return;
+    this.ui.agentGeneral.append(entry.node);
+    entry.wrapper.remove();
+    for (const property of ["left", "top", "width", "max-height"]) {
+      entry.node.style.removeProperty(property);
     }
   }
   outline(target) {
@@ -3400,6 +3614,7 @@ var styles = `
   }
 
   #agent-anchored {
+    --answer-accent: #2868b6;
     position: fixed;
     inset: 0;
     z-index: 2147483643;
@@ -3416,13 +3631,38 @@ var styles = `
     background: #fffdf8;
     color: #1d1b19;
     box-shadow: 0 6px 24px rgb(0 0 0 / 24%);
-    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font: 13px/1.45 system-ui, sans-serif;
     overflow-wrap: anywhere;
     overflow-y: auto;
     pointer-events: auto;
   }
 
-  #agent-anchored .agent-message { position: fixed; }
+  #agent-anchored .agent-message { position: fixed; z-index: 1; }
+  .agent-message[hidden], .agent-anchor-marker[hidden], .agent-anchor-line[hidden] { display: none; }
+  .agent-anchor-marker, .agent-anchor-line { position: fixed; pointer-events: none; }
+  .agent-anchor-marker { border-radius: 2px; }
+  .agent-anchor-marker::before {
+    content: "";
+    position: absolute;
+    border-radius: 2px;
+    background: var(--answer-accent);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
+  }
+  .agent-anchor-marker[data-side="right"]::before { inset: 0 -5px 0 auto; width: 4px; }
+  .agent-anchor-marker[data-side="left"]::before { inset: 0 auto 0 -5px; width: 4px; }
+  .agent-anchor-marker[data-side="below"]::before { inset: auto 0 -5px; height: 4px; }
+  .agent-anchor-marker[data-side="above"]::before { inset: -5px 0 auto; height: 4px; }
+  .agent-anchor-line {
+    height: 2px;
+    background: var(--answer-accent);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
+    transform-origin: left center;
+    translate: 0 -50%;
+  }
+  .agent-placement > .agent-message:is(:hover, :focus-within) ~ .agent-anchor-marker {
+    background: rgb(47 128 237 / 8%);
+    box-shadow: inset 0 0 0 1px var(--answer-accent);
+  }
   .agent-message p { margin: 0 0 8px; }
   .agent-message p:last-child { margin-bottom: 0; }
   .agent-message ul, .agent-message ol { margin: 6px 0; padding-left: 22px; }
@@ -3474,10 +3714,9 @@ var styles = `
     position: fixed;
     display: none;
     z-index: 2147483641;
-    border: 3px solid #0b7896;
+    border: 1px solid #2868b6;
     border-radius: 3px;
-    background: rgb(11 120 150 / 12%);
-    box-shadow: 0 0 0 3px rgb(255 255 255 / 85%);
+    background: rgb(47 128 237 / 8%);
     pointer-events: none;
   }
 

@@ -502,6 +502,7 @@ export const styles = `
   }
 
   #agent-anchored {
+    --answer-accent: #2868b6;
     position: fixed;
     inset: 0;
     z-index: 2147483643;
@@ -518,13 +519,38 @@ export const styles = `
     background: #fffdf8;
     color: #1d1b19;
     box-shadow: 0 6px 24px rgb(0 0 0 / 24%);
-    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font: 13px/1.45 system-ui, sans-serif;
     overflow-wrap: anywhere;
     overflow-y: auto;
     pointer-events: auto;
   }
 
-  #agent-anchored .agent-message { position: fixed; }
+  #agent-anchored .agent-message { position: fixed; z-index: 1; }
+  .agent-message[hidden], .agent-anchor-marker[hidden], .agent-anchor-line[hidden] { display: none; }
+  .agent-anchor-marker, .agent-anchor-line { position: fixed; pointer-events: none; }
+  .agent-anchor-marker { border-radius: 2px; }
+  .agent-anchor-marker::before {
+    content: "";
+    position: absolute;
+    border-radius: 2px;
+    background: var(--answer-accent);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
+  }
+  .agent-anchor-marker[data-side="right"]::before { inset: 0 -5px 0 auto; width: 4px; }
+  .agent-anchor-marker[data-side="left"]::before { inset: 0 auto 0 -5px; width: 4px; }
+  .agent-anchor-marker[data-side="below"]::before { inset: auto 0 -5px; height: 4px; }
+  .agent-anchor-marker[data-side="above"]::before { inset: -5px 0 auto; height: 4px; }
+  .agent-anchor-line {
+    height: 2px;
+    background: var(--answer-accent);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
+    transform-origin: left center;
+    translate: 0 -50%;
+  }
+  .agent-placement > .agent-message:is(:hover, :focus-within) ~ .agent-anchor-marker {
+    background: rgb(47 128 237 / 8%);
+    box-shadow: inset 0 0 0 1px var(--answer-accent);
+  }
   .agent-message p { margin: 0 0 8px; }
   .agent-message p:last-child { margin-bottom: 0; }
   .agent-message ul, .agent-message ol { margin: 6px 0; padding-left: 22px; }
@@ -576,10 +602,9 @@ export const styles = `
     position: fixed;
     display: none;
     z-index: 2147483641;
-    border: 3px solid #0b7896;
+    border: 1px solid #2868b6;
     border-radius: 3px;
-    background: rgb(11 120 150 / 12%);
-    box-shadow: 0 0 0 3px rgb(255 255 255 / 85%);
+    background: rgb(47 128 237 / 8%);
     pointer-events: none;
   }
 
