@@ -249,9 +249,12 @@ bar.
   on the card. Hover or focus a card to darken its connector and tint its
   target. Drag a card by its top row to move it with a pointer or touch,
   or use the **Move** button with the same keys as in the comment dialog.
-  It keeps its viewport position while scrolling, and its connector follows
-  the target. This position lasts until dismissal or reload. On another
-  page, place answers open in the general answer corner with a **Show** link.
+  Cards attached to places or comments keep their offset from the target.
+  The card, brace and connector scroll with the target and go out of view
+  with it. A manually chosen offset lasts until dismissal or reload, with
+  room for the card adjusted if the window shrinks. Unanchored answers stay
+  in the viewport. On another page, place answers open in the general
+  answer corner with a **Show** link.
 - Place answers in the comment list have a **Show** link that scrolls to the
   target, navigating within the share if needed. Show follows same-origin
   redirects, including a served directory redirect from `/docs` to `/docs/`.

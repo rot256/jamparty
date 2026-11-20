@@ -964,7 +964,7 @@ def test_reply_marker_follows_parent_after_one_scroll(
                     const bounds = parent.getBoundingClientRect();
                     const id = child.querySelector(".agent-message").dataset.messageId;
                     const leader = shadow.querySelector(`[data-answer-id="${id}"] .agent-anchor-line`);
-                    const start = leader.getPointAtLength(0);
+                    const start = leader.getPointAtLength(0).matrixTransform(leader.getScreenCTM());
                     resolve({
                         parent: bounds.toJSON(),
                         marker: marker.getBoundingClientRect().toJSON(),
@@ -1002,7 +1002,10 @@ def test_clipped_answer_keeps_internal_scroll(tmp_path: Path, page: Page) -> Non
         expect(answer).to_be_visible()
         _ = answer.evaluate("(node) => { node.scrollTop = 200; }")
         _ = page.evaluate("window.scrollTo(0, 80)")
-        expect(overlay(page, ".agent-anchor-marker")).to_have_css("top", "108px")
+        assert (
+            overlay(page, ".agent-anchor-marker").bounding_box()
+            == page.locator("#target").bounding_box()
+        )
         assert answer.evaluate("(node) => node.scrollTop") == 200
         page.set_viewport_size({"width": 540, "height": 620})
         expect(answer).not_to_have_css("width", "340px")

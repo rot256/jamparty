@@ -1312,9 +1312,11 @@ def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) ->
         expect(indicator).to_be_visible()
         expect(marker).not_to_be_in_viewport()
         expect(indicator).to_be_hidden()
-        answer.click()
+        expect(answer).not_to_be_in_viewport()
+        sections.click()
+        panel.get_by_role("button", name="Analysis", exact=True).click()
         expect(marker).to_be_in_viewport()
-        expect(indicator).to_be_visible()
+        expect(answer).to_be_in_viewport()
 
         def check_position(*, side: str = "right", outer_margin: bool = False) -> None:
             expect(link_marker).to_have_attribute("data-side", side)

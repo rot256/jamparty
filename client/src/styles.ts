@@ -574,8 +574,11 @@ export const styles = `
   #agent-general.scrollable { overflow: auto; }
 
   #agent-anchored {
-    position: fixed;
-    inset: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
     z-index: 2147483643;
     pointer-events: none;
   }
@@ -596,17 +599,21 @@ export const styles = `
     pointer-events: auto;
   }
 
-  #agent-anchored .agent-message { position: fixed; z-index: 1; }
+  .agent-placement { position: absolute; inset: 0; pointer-events: none; }
+  .agent-placement.target-offscreen { visibility: hidden; }
+  .agent-placement.viewport-anchored { position: fixed; }
+  #agent-anchored .agent-message { position: absolute; z-index: 1; }
   #agent-general .agent-message { max-width: 100%; flex: none; }
   #agent-general .manually-placed { position: fixed; }
   .agent-message[hidden], .agent-anchor-marker[hidden], .agent-anchor-layer g[hidden] { display: none; }
-  .agent-anchor-marker { position: fixed; pointer-events: none; border-radius: 2px; }
+  .agent-anchor-marker { position: absolute; pointer-events: none; border-radius: 2px; }
   .agent-anchor-marker.active { background: var(--jp-tint); }
   .agent-anchor-layer {
     position: absolute;
     inset: 0;
-    width: 100%;
-    height: 100%;
+    width: 1px;
+    height: 1px;
+    overflow: visible;
     color: var(--jp-anchor);
     pointer-events: none;
   }

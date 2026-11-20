@@ -27,6 +27,7 @@ export function moveBy(
   move: (point: Point, width: number) => void,
   savePlacement: () => () => void,
   before?: HTMLElement,
+  anchorOrigin?: () => Point | undefined,
 ): () => void {
   const button = document.createElement("button");
   button.className = "move-control";
@@ -102,16 +103,22 @@ export function moveBy(
       end();
       return;
     }
+    const origin = anchorOrigin?.();
     if (keyboard === undefined) {
       const rect = surface.getBoundingClientRect();
-      keyboard = { point: { x: rect.left, y: rect.top }, rect };
+      keyboard = { point: { x: rect.left - (origin?.x ?? 0), y: rect.top - (origin?.y ?? 0) }, rect };
       begin();
     }
     const { point, rect } = keyboard;
     const step = event.shiftKey ? 64 : 16;
-    keyboard.point = fitPosition({ x: point.x + step * direction.x, y: point.y + step * direction.y },
-      rect.width, rect.height);
-    move(keyboard.point, rect.width);
+    const next = { x: point.x + step * direction.x, y: point.y + step * direction.y };
+    if (origin === undefined) {
+      keyboard.point = fitPosition(next, rect.width, rect.height);
+      move(keyboard.point, rect.width);
+    } else {
+      keyboard.point = next;
+      move({ x: next.x + origin.x, y: next.y + origin.y }, rect.width);
+    }
   };
   const stopListening = (): void => {
     window.removeEventListener("keydown", moveWithKeys, true);

@@ -2,7 +2,7 @@
 // Recent replies also appear in the comment list.
 
 import { parsePlaceAnchor, placeElement } from "./answer-anchor";
-import { answerViewport, drawAnswerLink, nearestSide, placeAnswer, SVG_NS } from "./answer-placement";
+import { answerViewport, clamp, drawAnswerLink, nearestSide, placeAnswer, SVG_NS } from "./answer-placement";
 import type { Box, Placement } from "./answer-placement";
 import { samePage } from "./capture";
 import { moveBy, fitPosition } from "./drag";
@@ -18,7 +18,10 @@ interface Shown {
   wrapper: HTMLElement;
   marker: HTMLElement;
   link: SVGGElement;
-  dropped: { point: Point; width: number } | undefined;
+  dropped: { point: Point; width: number; relative: boolean } | undefined;
+  pendingDrop: { point: Point; width: number } | undefined;
+  placed: { target: Element; rect: Box; page: Box | undefined; view: Box; placement: Placement } | undefined;
+  tracksScroll: boolean;
   endMove: () => void;
   unavailable: HTMLElement;
   show: HTMLAnchorElement | null;
@@ -34,6 +37,30 @@ interface PlaceTarget {
   here: () => boolean;
   target: () => Element | undefined;
   detach: () => void;
+}
+
+function translate(box: Box, x: number, y: number): Box {
+  return { left: box.left + x, right: box.right + x, top: box.top + y, bottom: box.bottom + y };
+}
+
+function sameBox(a: Box | undefined, b: Box | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+}
+
+function intersects(a: Box, b: Box): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function scrollMode(target: Element): "document" | "fixed" | "tracked" {
+  for (let node: Element | null = target; node !== null; node = node.parentElement) {
+    const { position, overflowX, overflowY } = getComputedStyle(node);
+    if (position === "fixed") return "fixed";
+    if (position === "sticky") return "tracked";
+    if (node !== target && node !== document.body && node !== document.documentElement &&
+        [overflowX, overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) return "tracked";
+  }
+  return "document";
 }
 
 function makeLink(): SVGGElement {
@@ -93,9 +120,21 @@ export class Answers {
   historyTarget: (id: string) => HTMLElement | null = () => null;
   private readonly dismissed = loadDismissed();
   private placementFrame: number | undefined;
+  private scrollFrame: number | undefined;
   private timeoutSeconds = 0;
+  private highlightTarget: Element | undefined;
   private highlightTimer: number | undefined;
   private readonly geometry: ResizeObserver;
+  private readonly visibleTargets = new Map<Element, boolean>();
+  private readonly visibility = new IntersectionObserver((entries) => {
+    for (const { target, intersectionRect } of entries) {
+      const visible = intersectionRect.width > 0 && intersectionRect.height > 0;
+      this.visibleTargets.set(target, visible);
+      for (const entry of this.shown.values()) {
+        if (entry.placed?.target === target) entry.wrapper.classList.toggle("target-offscreen", !visible);
+      }
+    }
+  });
   private observedTargets = new Set<Element>();
   private pendingReveal = takeReveal();
   private readonly landingPath = location.pathname;
@@ -111,15 +150,18 @@ export class Answers {
     this.geometry.observe(ui.bar);
     this.geometry.observe(ui.panel);
     this.geometry.observe(ui.agentGeneral);
-    this.links.classList.add("agent-anchor-layer");
-    this.links.setAttribute("aria-hidden", "true");
-    ui.agentAnchored.prepend(this.links);
     window.visualViewport?.addEventListener("resize", schedule);
-    window.visualViewport?.addEventListener("scroll", schedule);
+    window.visualViewport?.addEventListener("scroll", this.onScroll);
     window.addEventListener("resize", schedule);
-    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
     window.addEventListener("load", schedule, true);
-    new MutationObserver(schedule).observe(document.documentElement, {
+    const indicator = this.pdf === undefined ? null : document.querySelector("#pdf-position");
+    new MutationObserver((records) => {
+      // The viewer updates this fixed indicator while scrolling.
+      if (records.some(({ target }) => target !== indicator)) {
+        schedule();
+      }
+    }).observe(document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
@@ -269,8 +311,6 @@ export class Answers {
     node.addEventListener("focusout", () => { this.schedulePlacement(); });
   }
 
-  private readonly links = document.createElementNS(SVG_NS, "svg");
-
   private show(answer: Answer): void {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
     // The oldest go first (a Map keeps the order answers came in).
@@ -391,7 +431,11 @@ export class Answers {
     marker.setAttribute("aria-hidden", "true");
     const link = makeLink();
     link.dataset.answerId = answer.id;
-    wrapper.append(marker);
+    const links = document.createElementNS(SVG_NS, "svg");
+    links.classList.add("agent-anchor-layer");
+    links.setAttribute("aria-hidden", "true");
+    links.append(link);
+    wrapper.append(links, marker);
     const highlight = (active: boolean): void => {
       link.classList.toggle("active", active);
       marker.classList.toggle("active", active);
@@ -433,17 +477,24 @@ export class Answers {
     };
     const shown: Shown = {
       node, wrapper, marker, link, unavailable, show, target, localAnchor, hasPlace: entry !== undefined, heightAt,
-      dropped: undefined,
+      dropped: undefined, pendingDrop: undefined, placed: undefined, tracksScroll: false,
       endMove: moveBy(header, node, (point, width) => {
-        shown.dropped = { point, width: shown.dropped?.width ?? width };
+        shown.pendingDrop = { point, width: shown.dropped?.width ?? width };
         this.schedulePlacement();
       }, () => {
         const previous = shown.dropped;
+        const pending = shown.pendingDrop;
+        const placed = shown.placed;
         return () => {
+          shown.placed = placed;
+          shown.pendingDrop = pending;
           shown.dropped = previous;
           this.schedulePlacement();
         };
-      }, close),
+      }, close, () => {
+        const rect = shown.placed?.target.getBoundingClientRect();
+        return rect === undefined ? undefined : { x: rect.left, y: rect.top };
+      }),
     };
     this.shown.set(answer.id, shown);
     this.schedulePlacement();
@@ -457,7 +508,6 @@ export class Answers {
     shown?.endMove();
     shown?.node.remove();
     shown?.wrapper.remove();
-    shown?.link.remove();
     this.shown.delete(id);
     this.prunePlaces();
     this.schedulePlacement();
@@ -559,6 +609,24 @@ export class Answers {
     this.placementFrame = requestAnimationFrame(() => { this.place(); });
   }
 
+  private readonly onScroll = (): void => {
+    if (this.scrollFrame !== undefined) return;
+    if (this.historyPreview === undefined && this.highlightTarget === undefined &&
+        !Array.from(this.shown.values()).some(({ tracksScroll }) => tracksScroll)) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = undefined;
+      for (const entry of this.shown.values()) {
+        const placed = entry.placed;
+        if (!entry.tracksScroll || placed === undefined) continue;
+        const rect = placed.target.getBoundingClientRect();
+        const { left, top } = placed.rect;
+        entry.wrapper.style.transform = `translate(${rect.left - left}px, ${rect.top - top}px)`;
+      }
+      const highlight = this.highlightTarget ?? this.places.get(this.historyPreview?.id ?? "")?.target();
+      if (highlight?.isConnected) this.outline(highlight);
+    });
+  };
+
   private place(): void {
     this.placementFrame = undefined;
     const { agentAnchored, agentGeneral } = this.ui;
@@ -579,9 +647,13 @@ export class Answers {
         entry.node.removeAttribute("aria-label");
       }
       if (target !== undefined) anchored.set(entry, target);
-      if (entry.dropped !== undefined) {
+      if (target === undefined && entry.pendingDrop !== undefined) {
+        entry.dropped = { ...entry.pendingDrop, relative: false };
+        entry.pendingDrop = undefined;
+      }
+      if (target === undefined && entry.dropped?.relative === false) {
         fixed.set(entry, this.positionMoved(entry.node, entry.dropped));
-      } else if (entry.node.classList.contains("manually-placed")) {
+      } else if (entry.dropped === undefined && entry.node.classList.contains("manually-placed")) {
         entry.node.classList.remove("manually-placed");
         for (const property of ["left", "top", "width", "max-width", "max-height"]) {
           entry.node.style.removeProperty(property);
@@ -631,11 +703,21 @@ export class Answers {
       getComputedStyle(node).visibility === "visible").map((node) => node.getBoundingClientRect());
     occupied.push(...fixed.values());
     const targets = new Set(anchored.values());
-    for (const target of this.observedTargets) if (!targets.has(target)) this.geometry.unobserve(target);
-    for (const target of targets) if (!this.observedTargets.has(target)) this.geometry.observe(target);
+    for (const target of this.observedTargets) {
+      if (targets.has(target)) continue;
+      this.geometry.unobserve(target);
+      this.visibility.unobserve(target);
+      this.visibleTargets.delete(target);
+    }
+    for (const target of targets) {
+      if (this.observedTargets.has(target)) continue;
+      this.geometry.observe(target);
+      this.visibility.observe(target);
+    }
     this.observedTargets = targets;
 
     const view = answerViewport();
+    const origin = agentAnchored.getBoundingClientRect();
     const pdfViewer = document.documentElement.hasAttribute("data-jamparty-pdf");
     const targetBoxes = new Map<Element, Box>();
     const pages = new Map<Element, Box>();
@@ -653,8 +735,9 @@ export class Answers {
         .filter((node) => !node.classList.contains("manually-placed"))
         .map((node) => [node, node.getBoundingClientRect()]),
     );
+    const placedCards: Box[] = [];
     const pending = new Set(anchored.keys());
-    const placements = new Map<Shown, { rect: Box; placement: Placement }>();
+    const placements = new Map<Shown, { rect: Box; placement: Placement; mode: ReturnType<typeof scrollMode> }>();
     const solve = (entry: Shown): void => {
       if (!pending.delete(entry)) return;
       const target = anchored.get(entry);
@@ -664,14 +747,39 @@ export class Answers {
       const rect = targetBoxes.get(target);
       const previous = general.get(entry.node);
       general.delete(entry.node);
-      const moved = fixed.get(entry);
+      const page = pages.get(target);
+      const mode = parent === undefined ? scrollMode(target) : placements.get(parent)?.mode ?? "tracked";
+      const viewport = mode !== "document";
+      const frame = viewport ? { x: 0, y: 0 } : { x: origin.left, y: origin.top };
+      const local = rect === undefined ? undefined : translate(rect, -frame.x, -frame.y);
+      const localPage = page === undefined ? undefined : translate(page, -frame.x, -frame.y);
+      const cached = entry.placed;
+      const previousBox = cached === undefined ? undefined :
+        translate(cached.placement.box, frame.x, frame.y);
+      if (rect !== undefined && entry.pendingDrop !== undefined) {
+        const { point, width } = entry.pendingDrop;
+        entry.dropped = { point: { x: point.x - rect.left, y: point.y - rect.top }, width, relative: true };
+        entry.pendingDrop = undefined;
+      }
+      const dropped = entry.dropped;
+      const moved = rect === undefined || dropped === undefined ? undefined :
+        this.positionMoved(entry.node, dropped, rect);
+      // Only the first placement (or a change in geometry) considers
+      // viewport controls. Scrolling past them never displaces a card.
+      const height = view.bottom - view.top;
+      const layoutView = rect === undefined || (rect.bottom > view.top && rect.top < view.bottom) ? view :
+        translate(view, 0, (rect.top + rect.bottom - view.top - view.bottom) / 2);
       const placement = rect === undefined ? undefined : moved !== undefined
-        ? { box: moved, side: nearestSide(rect, moved), maxHeight: view.bottom - view.top }
-        : placeAnswer(entry.heightAt, view, rect, pages.get(target), [
-        ...occupied,
-        ...general.values(),
-        ...Array.from(targetBoxes.values()).filter((box) => box !== rect),
-      ]);
+        ? { box: moved, side: nearestSide(rect, moved), maxHeight: height }
+        : cached !== undefined && cached.target === target && previousBox !== undefined &&
+            sameBox(cached.rect, local) && sameBox(cached.page, localPage) && sameBox(cached.view, view) &&
+            !placedCards.some((box) => intersects(box, previousBox))
+          ? { ...cached.placement, box: previousBox }
+          : placeAnswer(entry.heightAt, layoutView, rect, page, [
+            ...occupied,
+            ...general.values(),
+            ...Array.from(targetBoxes.values()).filter((box) => box !== rect),
+          ]);
       if (placement === undefined || rect === undefined) {
         this.placeGeneral(entry, false);
         if (previous === undefined) {
@@ -690,30 +798,42 @@ export class Answers {
       }
       // Border-box sizing gives dependents their parent's final geometry
       // before we apply the styles to the live cards.
-      if (moved === undefined) occupied.push(placement.box);
+      occupied.push(placement.box);
+      placedCards.push(placement.box);
+      entry.tracksScroll = mode === "tracked";
+      if (local !== undefined) entry.placed = {
+        target, rect: local, page: localPage, view,
+        placement: { ...placement, box: translate(placement.box, -frame.x, -frame.y) },
+      };
       if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
-      placements.set(entry, { rect, placement });
+      placements.set(entry, { rect, placement, mode });
     };
     const ordered = Array.from(anchored).sort(([, a], [, b]) =>
       (targetBoxes.get(a)?.top ?? Infinity) - (targetBoxes.get(b)?.top ?? Infinity));
     for (const [entry] of ordered) solve(entry);
-    for (const [entry, { rect, placement }] of placements) {
+    for (const [entry, { rect, placement, mode }] of placements) {
+      const viewport = mode !== "document";
+      entry.wrapper.classList.toggle("viewport-anchored", viewport);
+      const target = entry.placed?.target;
+      entry.wrapper.classList.toggle("target-offscreen", target !== undefined &&
+        !(this.visibleTargets.get(target) ??
+          (rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth)));
+      entry.wrapper.style.transform = "";
+      const x = viewport ? 0 : -origin.left;
+      const y = viewport ? 0 : -origin.top;
       entry.unavailable.hidden = true;
       if (entry.show !== null) entry.show.hidden = true;
-      if (entry.node.parentElement !== entry.wrapper && entry.dropped === undefined) {
+      if (entry.node.parentElement !== entry.wrapper) {
         if (entry.node.parentElement === agentGeneral) this.schedulePlacement();
         entry.wrapper.prepend(entry.node);
       }
       if (entry.wrapper.parentElement !== agentAnchored) agentAnchored.append(entry.wrapper);
-      const { box, maxHeight } = placement;
-      if (entry.dropped === undefined) {
-        entry.node.style.left = `${box.left}px`;
-        entry.node.style.top = `${box.top}px`;
-        entry.node.style.width = `${box.right - box.left}px`;
-        entry.node.style.maxHeight = `${maxHeight}px`;
-      }
-      if (entry.link.parentElement === null) this.links.append(entry.link);
-      drawAnswerLink(entry.marker, entry.link, view, rect, placement);
+      const box = translate(placement.box, x, y);
+      entry.node.style.left = `${box.left}px`;
+      entry.node.style.top = `${box.top}px`;
+      entry.node.style.width = `${box.right - box.left}px`;
+      entry.node.style.maxHeight = `${placement.maxHeight}px`;
+      drawAnswerLink(entry.marker, entry.link, translate(rect, x, y), { ...placement, box });
     }
     agentGeneral.classList.toggle("scrollable", agentGeneral.scrollHeight > agentGeneral.clientHeight);
     for (const entry of this.shown.values()) {
@@ -721,16 +841,23 @@ export class Answers {
     }
   }
 
-  private positionMoved(node: HTMLElement, dropped: NonNullable<Shown["dropped"]>): Box {
+  private positionMoved(node: HTMLElement, dropped: NonNullable<Shown["dropped"]>, target?: Box): Box {
     const view = answerViewport();
     node.classList.add("manually-placed");
     node.style.width = `${dropped.width}px`;
     node.style.maxWidth = `${view.right - view.left}px`;
     node.style.maxHeight = `${view.bottom - view.top}px`;
-    const { width, height } = node.getBoundingClientRect();
-    const point = fitPosition(dropped.point, width, height);
-    node.style.left = `${point.x}px`;
-    node.style.top = `${point.y}px`;
+    const { width, height } = node.isConnected
+      ? node.getBoundingClientRect()
+      : { width: Math.min(dropped.width, view.right - view.left), height: node.scrollHeight };
+    const point = target !== undefined && dropped.relative ? {
+      x: clamp(target.left + dropped.point.x, view.left, view.right - width),
+      y: target.top + clamp(dropped.point.y, view.top - view.bottom, view.bottom - view.top - height),
+    } : fitPosition(dropped.point, width, height);
+    if (target === undefined) {
+      node.style.left = `${point.x}px`;
+      node.style.top = `${point.y}px`;
+    }
     return { left: point.x, top: point.y, right: point.x + width, bottom: point.y + height };
   }
 
@@ -740,15 +867,13 @@ export class Answers {
       const hidden = unavailable || (!entry.hasPlace && !entry.localAnchor());
       if (entry.show.hidden !== hidden) entry.show.hidden = hidden;
     }
-    entry.link.remove();
-    if (entry.dropped !== undefined) {
-      entry.marker.hidden = true;
-      return;
-    }
-    if (entry.node.parentElement === this.ui.agentGeneral) return;
-    this.ui.agentGeneral.append(entry.node);
+    entry.placed = undefined;
+    entry.tracksScroll = false;
+    if (entry.node.parentElement !== this.ui.agentGeneral) this.ui.agentGeneral.append(entry.node);
     entry.wrapper.remove();
-    for (const property of ["left", "top", "width", "max-height"]) {
+    if (entry.dropped?.relative === false) return;
+    entry.node.classList.remove("manually-placed");
+    for (const property of ["left", "top", "width", "max-width", "max-height"]) {
       entry.node.style.removeProperty(property);
     }
   }
@@ -765,9 +890,11 @@ export class Answers {
 
   private showHighlight(target: Element): void {
     this.outline(target);
+    this.highlightTarget = target;
     if (this.highlightTimer !== undefined) clearTimeout(this.highlightTimer);
     this.highlightTimer = window.setTimeout(() => {
       this.highlightTimer = undefined;
+      this.highlightTarget = undefined;
       this.schedulePlacement();
     }, 1800);
   }

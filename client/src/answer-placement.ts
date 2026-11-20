@@ -140,13 +140,8 @@ export function nearestSide(target: Box, card: Box): Side {
 }
 
 export function drawAnswerLink(
-  marker: HTMLElement, link: SVGGElement, view: Box, target: Box, { side, box }: Placement,
+  marker: HTMLElement, link: SVGGElement, target: Box, { side, box }: Placement,
 ): void {
-  marker.hidden = target.bottom <= view.top || target.top >= view.bottom ||
-    target.right <= view.left || target.left >= view.right;
-  link.toggleAttribute("hidden", marker.hidden);
-  if (marker.hidden) return;
-
   const horizontal = side === "right" || side === "left";
   const sign = side === "right" || side === "below" ? 1 : -1;
   const edge = { right: target.right, left: target.left, below: target.bottom, above: target.top }[side];
