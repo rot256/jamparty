@@ -48,6 +48,7 @@ function placeElement(root, selector) {
 // client/src/answer-placement.ts
 var EDGE = 8;
 var GAP = 12;
+var TARGET_GAP = 28;
 var PAGE_GAP = 24;
 var MIN_WIDTH = 200;
 var MAX_WIDTH = 340;
@@ -78,9 +79,9 @@ function sideBands(view, target, gap) {
 function placeAnswer(heightAt, view, target, page, occupied) {
   const bands = [
     ...page === void 0 ? [] : sideBands(view, page, PAGE_GAP),
-    ...sideBands(view, target, GAP),
-    { side: "below", area: { ...view, top: Math.max(view.top, target.bottom + GAP) } },
-    { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - GAP) } }
+    ...sideBands(view, target, TARGET_GAP),
+    { side: "below", area: { ...view, top: Math.max(view.top, target.bottom + TARGET_GAP) } },
+    { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - TARGET_GAP) } }
   ];
   for (const allowClipping of [false, true]) {
     let margin;
@@ -95,7 +96,7 @@ function placeAnswer(heightAt, view, target, page, occupied) {
       let best;
       for (const left of lefts) {
         const obstacles = occupied.filter((box) => left < box.right + GAP && left + width > box.left - GAP);
-        const desiredTop = side === "above" ? target.top - GAP - height : target.top;
+        const desiredTop = side === "above" ? target.top - TARGET_GAP - height : target.top;
         const tops = [
           clamp(desiredTop, area.top, area.bottom - height),
           ...obstacles.flatMap((box) => [box.bottom + GAP, box.top - GAP - height]),
@@ -174,7 +175,8 @@ function drawAnswerLink(marker, link, view, target, { side, box }) {
   ].join(" "));
   const near = horizontal ? box.top : box.left;
   const far = horizontal ? box.bottom : box.right;
-  const along = clamp(mid, near + 10, far - 10);
+  const inset = (far - near) / 4;
+  const along = clamp(mid, near + inset, far - inset);
   const bend = (tip + destination) / 2;
   curve?.setAttribute("d", `M ${point(tip, mid)} C ${point(bend, mid)} ${point(bend, along)} ${point(destination, along)}`);
   dot?.setAttribute("cx", String(horizontal ? destination : along));
@@ -3623,7 +3625,7 @@ var styles = `
 
   /* The chosen corner (Panel sets data-corner on the host): what sits at
      the bottom right by default moves to that corner. */
-  :host([data-corner$="left"]) :is(#bar, #list, #panel, #pdf-sections, #toast, #agent-general) {
+  :host([data-corner$="left"]) :is(#bar, #list, #panel, #pdf-sections, #toast) {
     right: auto;
     left: 14px;
   }
@@ -3631,7 +3633,8 @@ var styles = `
   :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
   :host([data-corner^="top"]) :is(#panel, #pdf-sections) { bottom: auto; top: 58px; }
   :host([data-corner^="top"]) #toast { bottom: auto; top: 52px; }
-  :host([data-corner^="top"]) #agent-general { bottom: auto; top: calc(52px + var(--sections-offset, 0px)); }
+  :host([data-corner$="left"]) #agent-general { right: auto; left: 0; align-items: flex-start; }
+  :host([data-corner^="top"]) #agent-general { bottom: auto; top: calc(40px + var(--sections-offset, 0px)); }
 
   .chip {
     padding: 1px 5px;
@@ -3823,14 +3826,16 @@ var styles = `
 
   #agent-general {
     position: fixed;
-    right: 14px;
-    bottom: calc(52px + var(--sections-offset, 0px));
+    right: 0;
+    bottom: calc(40px + var(--sections-offset, 0px));
     z-index: 2147483643;
     display: flex;
-    width: min(360px, calc(100vw - 28px));
-    max-height: calc(100vh - 66px - var(--sections-offset, 0px));
+    width: min(388px, 100vw);
+    max-height: calc(100dvh - 54px - var(--sections-offset, 0px));
     flex-direction: column;
+    align-items: flex-end;
     gap: 8px;
+    padding: 12px 14px;
     overflow: auto;
     pointer-events: none;
   }
@@ -3859,6 +3864,7 @@ var styles = `
   }
 
   #agent-anchored .agent-message { position: fixed; z-index: 1; }
+  #agent-general .agent-message { max-width: 100%; flex: none; }
   #agent-general .manually-placed { position: fixed; }
   .agent-message[hidden], .agent-anchor-marker[hidden], .agent-anchor-layer g[hidden] { display: none; }
   .agent-anchor-marker { position: fixed; pointer-events: none; border-radius: 2px; }
@@ -3971,6 +3977,8 @@ var styles = `
     line-height: 1.3;
   }
 
+  #dialog-label { font-size: 14px; }
+
   #selection-preview {
     margin: 0 0 10px;
     padding: 8px 10px;
@@ -4007,7 +4015,7 @@ var styles = `
     box-shadow: none;
     padding: 9px 10px;
     border: 1px solid var(--jp-input-border);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--jp-field);
     color: var(--jp-text);
     font: 14px/1.4 var(--jp-font);
@@ -4098,7 +4106,7 @@ var styles = `
   button {
     padding: 7px 11px;
     border: 1px solid var(--jp-border);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--jp-field);
     color: var(--jp-text);
     cursor: pointer;

@@ -350,7 +350,7 @@ export const styles = `
 
   /* The chosen corner (Panel sets data-corner on the host): what sits at
      the bottom right by default moves to that corner. */
-  :host([data-corner$="left"]) :is(#bar, #list, #panel, #pdf-sections, #toast, #agent-general) {
+  :host([data-corner$="left"]) :is(#bar, #list, #panel, #pdf-sections, #toast) {
     right: auto;
     left: 14px;
   }
@@ -358,7 +358,8 @@ export const styles = `
   :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
   :host([data-corner^="top"]) :is(#panel, #pdf-sections) { bottom: auto; top: 58px; }
   :host([data-corner^="top"]) #toast { bottom: auto; top: 52px; }
-  :host([data-corner^="top"]) #agent-general { bottom: auto; top: calc(52px + var(--sections-offset, 0px)); }
+  :host([data-corner$="left"]) #agent-general { right: auto; left: 0; align-items: flex-start; }
+  :host([data-corner^="top"]) #agent-general { bottom: auto; top: calc(40px + var(--sections-offset, 0px)); }
 
   .chip {
     padding: 1px 5px;
@@ -550,14 +551,16 @@ export const styles = `
 
   #agent-general {
     position: fixed;
-    right: 14px;
-    bottom: calc(52px + var(--sections-offset, 0px));
+    right: 0;
+    bottom: calc(40px + var(--sections-offset, 0px));
     z-index: 2147483643;
     display: flex;
-    width: min(360px, calc(100vw - 28px));
-    max-height: calc(100vh - 66px - var(--sections-offset, 0px));
+    width: min(388px, 100vw);
+    max-height: calc(100dvh - 54px - var(--sections-offset, 0px));
     flex-direction: column;
+    align-items: flex-end;
     gap: 8px;
+    padding: 12px 14px;
     overflow: auto;
     pointer-events: none;
   }
@@ -586,6 +589,7 @@ export const styles = `
   }
 
   #agent-anchored .agent-message { position: fixed; z-index: 1; }
+  #agent-general .agent-message { max-width: 100%; flex: none; }
   #agent-general .manually-placed { position: fixed; }
   .agent-message[hidden], .agent-anchor-marker[hidden], .agent-anchor-layer g[hidden] { display: none; }
   .agent-anchor-marker { position: fixed; pointer-events: none; border-radius: 2px; }
@@ -698,6 +702,8 @@ export const styles = `
     line-height: 1.3;
   }
 
+  #dialog-label { font-size: 14px; }
+
   #selection-preview {
     margin: 0 0 10px;
     padding: 8px 10px;
@@ -734,7 +740,7 @@ export const styles = `
     box-shadow: none;
     padding: 9px 10px;
     border: 1px solid var(--jp-input-border);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--jp-field);
     color: var(--jp-text);
     font: 14px/1.4 var(--jp-font);
@@ -825,7 +831,7 @@ export const styles = `
   button {
     padding: 7px 11px;
     border: 1px solid var(--jp-border);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--jp-field);
     color: var(--jp-text);
     cursor: pointer;

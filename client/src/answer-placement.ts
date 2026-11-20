@@ -21,6 +21,7 @@ export interface Placement {
 
 const EDGE = 8;
 const GAP = 12;
+const TARGET_GAP = 28;
 const PAGE_GAP = 24;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 340;
@@ -58,9 +59,9 @@ export function placeAnswer(
 ): Placement | undefined {
   const bands: Band[] = [
     ...(page === undefined ? [] : sideBands(view, page, PAGE_GAP)),
-    ...sideBands(view, target, GAP),
-    { side: "below", area: { ...view, top: Math.max(view.top, target.bottom + GAP) } },
-    { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - GAP) } },
+    ...sideBands(view, target, TARGET_GAP),
+    { side: "below", area: { ...view, top: Math.max(view.top, target.bottom + TARGET_GAP) } },
+    { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - TARGET_GAP) } },
   ];
   for (const allowClipping of [false, true]) {
     let margin: { placement: Placement; score: number } | undefined;
@@ -78,7 +79,7 @@ export function placeAnswer(
       let best: { placement: Placement; score: number } | undefined;
       for (const left of lefts) {
         const obstacles = occupied.filter((box) => left < box.right + GAP && left + width > box.left - GAP);
-        const desiredTop = side === "above" ? target.top - GAP - height : target.top;
+        const desiredTop = side === "above" ? target.top - TARGET_GAP - height : target.top;
         const tops = [
           clamp(desiredTop, area.top, area.bottom - height),
           ...obstacles.flatMap((box) => [box.bottom + GAP, box.top - GAP - height]),
@@ -172,7 +173,9 @@ export function drawAnswerLink(
 
   const near = horizontal ? box.top : box.left;
   const far = horizontal ? box.bottom : box.right;
-  const along = clamp(mid, near + 10, far - 10);
+  // Keep the dot clear of the rounded corners as the card moves.
+  const inset = (far - near) / 4;
+  const along = clamp(mid, near + inset, far - inset);
   const bend = (tip + destination) / 2;
   curve?.setAttribute("d", `M ${point(tip, mid)} C ${point(bend, mid)} ${point(bend, along)} ${point(destination, along)}`);
   dot?.setAttribute("cx", String(horizontal ? destination : along));
