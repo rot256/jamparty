@@ -12,6 +12,7 @@ import pytest
 from playwright.sync_api import (
     Browser,
     Page,
+    Route,
     expect,
 )
 from support import (
@@ -130,11 +131,15 @@ FILL_OUTBOX = """([count, key]) => {
         key,
         at: Date.now(),
     }));
-    sessionStorage.setItem("jamparty-outbox-v1", JSON.stringify(entries));
+    const existing = JSON.parse(sessionStorage.getItem("jamparty-outbox-v1") ?? "[]");
+    sessionStorage.setItem("jamparty-outbox-v1", JSON.stringify([...existing, ...entries]));
 }"""
 
 
-def test_a_full_outbox_refuses_a_new_comment(tmp_path: Path, page: Page) -> None:
+@pytest.mark.parametrize("with_refusal", [False, True])
+def test_a_full_outbox_refuses_a_new_comment(
+    tmp_path: Path, page: Page, with_refusal: bool
+) -> None:
     """Comments still to send are never dropped: with the outbox full of
     them, a new one is refused, visibly, and stays a draft."""
     with (
@@ -147,7 +152,14 @@ def test_a_full_outbox_refuses_a_new_comment(tmp_path: Path, page: Page) -> None
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         link = cast(dict[str, object], hello(joined)["link"])
         key = cast(dict[str, object], link["you"])["key"]
-        _ = page.evaluate(FILL_OUTBOX, [20, key])
+        if with_refusal:
+            page.route(
+                UPLOAD,
+                lambda route: route.fulfill(status=507, json={"error": "storage full"}),
+            )
+            send_with_files(page, attachment_files(tmp_path, 1))
+            expect(overlay(page, "#badge")).to_have_text("0 queued · 1 refused")
+        _ = page.evaluate(FILL_OUTBOX, [19 if with_refusal else 20, key])
         tap.hold = {"comment_reply"}
         _ = page.reload()
         rows = overlay(page, "#outbox-list li")
@@ -156,11 +168,23 @@ def test_a_full_outbox_refuses_a_new_comment(tmp_path: Path, page: Page) -> None
         textarea = overlay(page, "textarea")
         textarea.press_sequentially("One too many")
         textarea.press("Enter")
-        expect(overlay(page, "#status")).to_contain_text("waiting to be sent")
+        expect(overlay(page, "#status")).to_contain_text(
+            "The comment list is full" if with_refusal else "waiting to be sent"
+        )
         expect(overlay(page, "#jamparty-dialog")).to_be_visible()
         expect(textarea).to_have_value("One too many")
         expect(rows).to_have_count(20)
         expect(rows.filter(has_text="old 0")).to_have_count(1)
+        if with_refusal:
+            refused = rows.filter(has_text="storage full")
+            expect(refused).to_have_attribute("data-state", "failed")
+            assert page.evaluate(FILE_STORE, "count") == 1
+            textarea.press("Escape")
+            overlay(page, "#pill").click()
+            refused.get_by_role("button", name="edit").click()
+            expect(overlay(page, "#attachments .attachment-name")).to_have_text(
+                "attachment-0.txt"
+            )
 
 
 def test_a_comment_draft_survives_reloads(tmp_path: Path, page: Page) -> None:
@@ -260,10 +284,7 @@ HOLD_COMMENTS = """(outcome) => {
 }"""
 
 
-def test_a_sending_dialog_stays_until_answered(tmp_path: Path, page: Page) -> None:
-    """Escape and an outside click do not dismiss a dialog whose comment
-    is on its way, so the next comment's draft is never one the sending
-    one forgets."""
+def test_comment_sends_in_background(tmp_path: Path, page: Page) -> None:
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
         join(tmp_path, shared) as joined,
@@ -271,56 +292,84 @@ def test_a_sending_dialog_stays_until_answered(tmp_path: Path, page: Page) -> No
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         _ = page.evaluate(HOLD_COMMENTS, None)
-        page.locator("#intro").click(button="right")
-        textarea = overlay(page, "textarea")
-        textarea.press_sequentially("First")
-        textarea.press("Enter")
-        dialog = overlay(page, "#jamparty-dialog")
-        status = overlay(page, "#status")
-        expect(status).to_have_text("Queueing…")
-        textarea.press("Escape")
-        page.mouse.click(5, 5)
-        # Enter again sends nothing more.
-        textarea.press("Enter")
-        expect(dialog).to_be_visible()
-        expect(textarea).to_have_value("First")
-        expect(status).to_have_text("Queueing…")
+        comment_on_intro(page, "First")
+        expect(overlay(page, "#badge")).to_have_text("0 queued · 1 sending")
+        overlay(page, "#pill").click()
+        row = overlay(page, "#outbox-list li")
+        expect(row).to_have_attribute("data-state", "sending")
+        spinner = row.locator(".sending-indicator")
+        expect(spinner).to_be_visible()
+        expect(spinner).to_have_css("animation-name", "jamparty-sending")
+        page.emulate_media(reduced_motion="reduce")
+        expect(spinner).to_have_css("animation-name", "none")
 
-        _ = page.evaluate("() => window.jampartyRelease()")
-        expect(dialog).not_to_be_visible()
-        expect(overlay(page, "#badge")).to_have_text("1 queued")
-        # The next comment is a draft again, and survives a reload.
+        overlay(page, "#collapse").click()
         page.locator("#action").click(button="right")
-        textarea.press_sequentially("Second")
+        textarea = overlay(page, "textarea")
+        textarea.fill("Second")
+        _ = page.evaluate("() => window.jampartyRelease()")
+        expect(row).to_have_attribute("data-state", "queued")
+        expect(textarea).to_have_value("Second")
         _ = page.reload()
         expect(textarea).to_have_value("Second")
         [record] = recv_all(tmp_path)
         assert record["comment"] == "First"
+        expect(row).to_have_attribute("data-state", "delivered")
 
 
-def test_a_refused_comment_is_a_draft_again(tmp_path: Path, page: Page) -> None:
-    """A comment the joiner refuses (too many) goes back to the dialog, and
-    is a draft again: a reload keeps it."""
+@pytest.mark.parametrize("hash_route", [False, True])
+def test_refused_comment_can_be_edited_or_discarded(
+    tmp_path: Path, page: Page, hash_route: bool
+) -> None:
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
         join(tmp_path, shared) as joined,
     ):
-        _ = page.goto(joined.url)
+        original = f"{joined.url}#one" if hash_route else joined.url
+        _ = page.goto(original)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         _ = page.evaluate(HOLD_COMMENTS, {"refused": {"error": "too many comments"}})
-        page.locator("#intro").click(button="right")
-        textarea = overlay(page, "textarea")
-        textarea.press_sequentially("Refused")
-        textarea.press("Enter")
-        expect(overlay(page, "#status")).to_have_text("Queueing…")
-        textarea.press("Escape")
+        comment_on_intro(page, "Refused")
         _ = page.evaluate("() => window.jampartyRelease()")
-        expect(overlay(page, "#status")).to_have_text("too many comments")
-        expect(overlay(page, "#jamparty-dialog")).to_be_visible()
-        expect(overlay(page, "#outbox-list li")).to_have_count(0)
-        _ = page.reload()
+        expect(overlay(page, "#badge")).to_have_text("0 queued · 1 refused")
+        overlay(page, "#pill").click()
+        row = overlay(page, "#outbox-list li")
+        expect(row).to_have_attribute("data-state", "failed")
+        expect(row).to_contain_text("too many comments")
+        other = (
+            f"{joined.url}#two"
+            if hash_route
+            else f"{joined.url.rstrip('/')}/index.html"
+        )
+        _ = page.goto(other)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        if hash_route:
+            _ = page.evaluate("""() => {
+                const intro = document.querySelector("#intro");
+                intro.id = "";
+                // The route mounts its target after a fetch, not at once.
+                window.addEventListener("hashchange", () => {
+                    if (location.hash === "#one") {
+                        setTimeout(() => { intro.id = "intro"; }, 400);
+                    }
+                });
+            }""")
+        else:
+            overlay(page, "#pill").click()
+        row.get_by_role("button", name="edit").click()
+        expect(page).to_have_url(original)
+        textarea = overlay(page, "textarea")
         expect(textarea).to_have_value("Refused")
-        expect(overlay(page, "#badge")).to_have_text("0 queued")
+        expect(overlay(page, "#highlight")).to_be_visible()
+        textarea.fill("Edited after navigation")
+        _ = page.reload()
+        expect(textarea).to_have_value("Edited after navigation")
+        expect(overlay(page, "#highlight")).to_be_visible()
+        textarea.press("Escape")
+        overlay(page, "#pill").click()
+        row.get_by_role("button", name="discard").click()
+        expect(row).to_have_count(0)
+        expect(overlay(page, "#list-count")).to_have_text("0 queued")
 
 
 def test_a_reload_during_sending_does_not_send_twice(
@@ -342,6 +391,10 @@ def test_a_reload_during_sending_does_not_send_twice(
         tap.hold.add("comment_reply")
         textarea.press("Enter")
         waiting(page, "the joiner's answer", lambda: len(tap.held) > 0)
+        expect(overlay(page, "#jamparty-dialog")).to_be_hidden()
+        expect(overlay(page, "#outbox-list li")).to_have_attribute(
+            "data-state", "sending"
+        )
         tap.held.clear()
         tap.hold.clear()
         _ = page.reload()
@@ -724,3 +777,288 @@ def test_html_comment_clears_highlight_and_selection(
         expect(field).to_be_hidden()
         expect(highlight).to_be_hidden()
         assert page.evaluate("window.getSelection().rangeCount") == 0
+
+
+UPLOAD = "**/_jamparty/api/attachments"
+
+
+def attachment_files(tmp_path: Path, count: int) -> list[Path]:
+    files = [tmp_path / f"attachment-{index}.txt" for index in range(count)]
+    for path in files:
+        _ = path.write_text(f"Contents of {path.name}")
+    return files
+
+
+def send_with_files(page: Page, files: list[Path]) -> None:
+    page.locator("#intro").click(button="right")
+    with page.expect_file_chooser() as chooser:
+        overlay(page, "#attach").click()
+    chooser.value.set_files(files)
+    field = overlay(page, "textarea")
+    field.fill("With files")
+    field.press("Enter")
+    expect(field).to_be_hidden()
+
+
+def attachment_refs(files: list[Path]) -> list[dict[str, str]]:
+    return [
+        {
+            "type": "file",
+            "file": f"sha3:{sha3_256(path.read_bytes()).hexdigest()}",
+            "name": path.name,
+        }
+        for path in files
+    ]
+
+
+FILE_STORE = """async (action) => {
+    const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open("jamparty-outbox", 2);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+    try {
+        return await new Promise((resolve, reject) => {
+            const tx = db.transaction("files", "readwrite");
+            const store = tx.objectStore("files");
+            if (action === "fill" || action === "expire") {
+                const count = action === "fill" ? 19 : 1;
+                const at = Date.now() - (action === "expire" ? 8 * 86400000 : 0);
+                for (let i = 0; i < count; i++) {
+                    store.put({ at, files: [new File(["bytes"], "saved.txt")] }, "fixture-" + i);
+                }
+            }
+            const count = store.count();
+            tx.oncomplete = () => resolve(count.result);
+            tx.onabort = () => reject(tx.error);
+        });
+    } finally {
+        db.close();
+    }
+}"""
+
+
+def test_attachment_upload_continues_after_reload(tmp_path: Path, page: Page) -> None:
+    files = attachment_files(tmp_path, 4)
+    uploads: list[bytes | None] = []
+
+    def upload(route: Route) -> None:
+        uploads.append(route.request.post_data_buffer)
+        if len(uploads) != 4:
+            route.continue_()
+
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        page.route(UPLOAD, upload)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        send_with_files(page, files)
+        waiting(page, "fourth upload", lambda: len(uploads) == 4)
+        row = overlay(page, "#outbox-list li")
+        expect(row).to_have_attribute("data-state", "sending")
+        assert tap.submissions == []
+
+        _ = page.reload()
+        expect(row).to_have_attribute("data-state", "queued")
+        [record] = recv_all(tmp_path)
+        assert record["attachments"] == attachment_refs(files)
+        assert uploads == [path.read_bytes() for path in [*files, files[-1]]]
+        expect(row).to_have_attribute("data-state", "delivered")
+        assert len(tap.submissions) == 1
+        assert page.evaluate(FILE_STORE, "count") == 0
+        resource = attachment_refs(files)[0]["file"]
+        fetched = tmp_path / "fetched"
+        _ = jamparty(tmp_path, "fetch", resource, "-o", str(fetched))
+        assert fetched.read_bytes() == files[0].read_bytes()
+
+
+@pytest.mark.parametrize("failure", [0, 503, 504])
+def test_upload_retries_after_disconnect(
+    tmp_path: Path, page: Page, failure: int
+) -> None:
+    files = attachment_files(tmp_path, 2)
+    attempts = 0
+    interrupted: list[Route] = []
+
+    def upload(route: Route) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            interrupted.append(route)
+        else:
+            route.continue_()
+
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        page.route(UPLOAD, upload)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        send_with_files(page, files)
+        waiting(page, "second upload", lambda: bool(interrupted))
+        ref = page.evaluate(
+            "JSON.parse(sessionStorage.getItem('jamparty-outbox-v1'))[0].ref"
+        )
+
+        tap.hold.add("hello")
+        tap.sockets[-1].close()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "amber")
+        if failure == 0:
+            interrupted[0].abort("internetdisconnected")
+        else:
+            interrupted[0].fulfill(status=failure, json={"error": "try again"})
+        row = overlay(page, "#outbox-list li")
+        expect(row).to_have_attribute("data-state", "unsent")
+        assert page.evaluate(FILE_STORE, "count") == 1
+        waiting(page, "reconnect hello", lambda: bool(tap.held))
+        tap.release()
+        expect(row).to_have_attribute("data-state", "queued")
+        [record] = recv_all(tmp_path)
+        assert record["attachments"] == attachment_refs(files)
+        [submission] = tap.submissions
+        assert submission["ref"] == ref
+        assert attempts == 3
+
+
+def test_duplicate_tab_recognizes_accepted_comment(
+    tmp_path: Path, browser: Browser
+) -> None:
+    files = attachment_files(tmp_path, 1)
+    uploads: list[Route] = []
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+        pages(browser, joined) as opened,
+    ):
+        [page] = opened
+        page.route(UPLOAD, lambda route: uploads.append(route))
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        send_with_files(page, files)
+        row = overlay(page, "#outbox-list li")
+        expect(row).to_have_attribute("data-state", "sending")
+        waiting(page, "first upload", lambda: bool(uploads))
+        storage = page.evaluate("Object.entries(sessionStorage)")
+        duplicate = page.context.new_page()
+        try:
+            # Give the second tab the same snapshot a duplicated tab gets,
+            # and keep it disconnected until the first tab handles acceptance.
+            other = SocketTap(duplicate)
+            duplicate.add_init_script(
+                f"for (const [key, value] of {json.dumps(storage)}) sessionStorage.setItem(key, value);"
+            )
+            uploads[0].continue_()
+            expect(row).to_have_attribute("data-state", "queued")
+            assert page.evaluate(FILE_STORE, "count") == 0
+
+            _ = duplicate.goto(joined.url)
+            expect(overlay(duplicate, "#outbox-list li")).to_have_attribute(
+                "data-state", "queued"
+            )
+            expect(
+                overlay(duplicate, "#outbox-list li").get_by_role("button", name="edit")
+            ).to_have_count(0)
+            assert other.submissions == []
+            [record] = recv_all(tmp_path)
+            assert record["attachments"] == attachment_refs(files)
+            expect(overlay(duplicate, "#outbox-list li")).to_have_attribute(
+                "data-state", "delivered"
+            )
+        finally:
+            duplicate.close()
+
+
+def test_attachment_storage_is_pruned_on_load_and_discard(
+    tmp_path: Path, page: Page
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        page.route(UPLOAD, lambda route: route.fulfill(status=413))
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        send_with_files(page, attachment_files(tmp_path, 1))
+        row = overlay(page, "#outbox-list li")
+        expect(row).to_have_attribute("data-state", "failed")
+        assert page.evaluate(FILE_STORE, "expire") == 2
+        _ = page.reload()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        waiting(
+            page,
+            "expired bytes to be removed",
+            lambda: page.evaluate(FILE_STORE, "count") == 1,
+        )
+        overlay(page, "#pill").click()
+        row.get_by_role("button", name="discard").click()
+        expect(row).to_have_count(0)
+        waiting(
+            page,
+            "discarded bytes to be removed",
+            lambda: page.evaluate(FILE_STORE, "count") == 0,
+        )
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_upload_failure_can_be_edited(tmp_path: Path, page: Page, full: bool) -> None:
+    path = tmp_path / "retry.txt"
+    _ = path.write_text("File contents")
+    upload = "**/_jamparty/api/attachments"
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        page.route(
+            upload,
+            lambda route: route.fulfill(
+                status=507, json={"error": "the share's attachment storage is full"}
+            ),
+        )
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        page.locator("#intro").click(button="right")
+        with page.expect_file_chooser() as chooser:
+            overlay(page, "#attach").click()
+        chooser.value.set_files(path)
+        field = overlay(page, "textarea")
+        field.fill("With a file")
+        field.press("Enter")
+        expect(field).to_be_hidden()
+        expect(overlay(page, "#badge")).to_have_text("0 queued · 1 refused")
+        _ = page.reload()
+        overlay(page, "#pill").click()
+        row = overlay(page, "#outbox-list li")
+        expect(row).to_have_attribute("data-state", "failed")
+        expect(row).to_contain_text(
+            "retry.txt — the share's attachment storage is full"
+        )
+        assert tap.submissions == []
+        row.get_by_role("button", name="edit").click()
+        expect(field).to_have_value("With a file")
+        expect(overlay(page, "#attachments .attachment-name")).to_have_text("retry.txt")
+        field.fill("Corrected after refusal")
+        if full:
+            assert page.evaluate(FILE_STORE, "fill") == 20
+        _ = page.reload()
+        expect(field).to_have_value("Corrected after refusal")
+        expect(overlay(page, "#attachments .attachment-name")).to_have_text("retry.txt")
+        page.unroute(upload)
+        field.press("Enter")
+        expect(field).to_be_hidden()
+        expect(row).to_have_count(1)
+        expect(row).to_have_attribute("data-state", "queued")
+        [record] = recv_all(tmp_path)
+        assert record["comment"] == "Corrected after refusal"
+        assert record["selector"] == "#intro"
+        assert record["attachments"] == [
+            {
+                "type": "file",
+                "file": f"sha3:{sha3_256(path.read_bytes()).hexdigest()}",
+                "name": "retry.txt",
+            }
+        ]

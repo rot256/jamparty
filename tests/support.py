@@ -378,7 +378,7 @@ def comment_on_intro(page: Page, text: str) -> None:
     expect(textarea).to_be_focused()
     textarea.fill(text)
     textarea.press("Enter")
-    # Closed once the joiner answered.
+    # Closed once the page saved the comment locally.
     expect(page.locator("#jamparty #jamparty-dialog")).not_to_be_visible()
 
 
@@ -416,6 +416,7 @@ class SocketTap:
     def __init__(self, page: Page) -> None:
         self.hold: set[str] = set()
         self.held: list[tuple[WebSocketRoute, str]] = []
+        self.submissions: list[dict[str, object]] = []
         self.sockets: list[WebSocketRoute] = []
         self.edit: Callable[[dict[str, object]], dict[str, object]] | None = None
         page.route_web_socket("**/_jamparty/api/socket", self._route)
@@ -433,8 +434,14 @@ class SocketTap:
             else:
                 route.send(message)
 
+        def from_page(message: str | bytes) -> None:
+            parsed = cast(dict[str, object], json.loads(message))
+            if parsed["type"] == "comment":
+                self.submissions.append(parsed)
+            server.send(message)
+
         server.on_message(from_joiner)
-        route.on_message(server.send)
+        route.on_message(from_page)
 
     def release(self) -> None:
         self.hold.clear()

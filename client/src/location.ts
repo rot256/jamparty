@@ -15,6 +15,17 @@ export function pageUrl(): string | null {
   return encoded.startsWith("/") && encoded.length <= MAX_PAGE_PATH ? encoded : null;
 }
 
+/** Whether `page` is this page: path, query and fragment alike. */
+export function isThisPage(page: string): boolean {
+  try {
+    const url = new URL(page);
+    const here = window.location;
+    return url.pathname === here.pathname && url.search === here.search && url.hash === here.hash;
+  } catch {
+    return false;
+  }
+}
+
 type Listener = (url: string | null) => void;
 
 /**

@@ -17,7 +17,8 @@ its own joiner's client.
 ## Pill (bottom right)
 
 - One dark pill: the connection dot inside it, left of the text
-  `N queued` (`N` = the joiner's own undelivered comments).
+  `N queued` (`N` = the joiner's own undelivered comments), plus local
+  sending and refused counts when present.
 - Dot colours: green `#2f9e44` connected, amber `#e8a33d` reconnecting,
   grey `#9a958e` share unreachable or a status line set. Comments not sent
   go out again whenever the joiner is connected to the share, status line
@@ -45,10 +46,13 @@ command only reminds the agent and never changes delivery status.
   collapse.
 - The joiner's own comments, newest first. Each row: what it points at
   (the element's short selector, or `page` for a page comment), relative
-  time (`3 min ago`), state (`queued`, `delivered` in green, `not sent` in
-  red with a `send again` button, `sent earlier` for one queued under a
-  joiner that has since started over, whose delivery this one cannot
-  follow), then the comment text.
+  time (`3 min ago`), state and comment text. `sending` shows a spinner
+  (a static ring with reduced motion), then changes to `queued` or green
+  `delivered`. `not sent` is red and keeps automatic retry and `send again`.
+  `refused` shows the reason in red with `edit` and `discard`. Editing
+  returns to the original page and target when available. `sent earlier`
+  means the comment was queued or its send was interrupted under an earlier
+  joiner key, so its delivery cannot be followed.
 - Only the joiner's own comments; other people's comments are never shown.
 
 ## Comment dialog
@@ -60,19 +64,33 @@ command only reminds the agent and never changes delivery status.
   the same target with the text, until it is sent or cancelled. If the
   target is gone, the dialog says "The element is gone; this will be a page
   comment." and sends it as one (after further reloads too). A comment sent
-  is the list's from then on (`sending`), never a draft again. While it is
-  on its way the dialog stays (Escape and outside clicks wait for the
-  joiner's answer); refused, it is the dialog's again, and a draft.
+  is the list's from then on. The dialog closes after the tab saves the
+  outbox entry and any files. Sending clears the draft outline and browser
+  selection, as does cancelling. There is no toast while sending. The
+  usual queued and connection-failure toasts appear when the first send
+  finishes.
 
 - Use the paperclip, paste files, or drop them into the dialog to attach up
   to four files of up to 8 MiB each. Each chip shows the name and size and
   has a remove button. Comment text is optional while a file is attached.
-- Files upload when the comment is submitted. An upload error leaves the
-  dialog open with the selected files. After upload, the outbox keeps the
-  attachment references with the comment across reconnects and reloads.
-  If an attachment is evicted before the comment queues, the page reports
-  the failure. Reloading a draft before upload completes asks you to
-  reselect the files or explicitly continue without them.
+- The tab saves newly attached files to IndexedDB and uploads them in the
+  background through the existing joiner endpoint, one at a time. The
+  joiner verifies the share's content address. The comment goes out only
+  after all uploads succeed. A reload resumes the outbox under the same
+  comment ref and reuses each completed attachment ref. Connection failures,
+  timeouts and a busy joiner or share leave the comment available for
+  automatic retry. A definitive refusal, such as full attachment storage
+  or an evicted file, can be edited using the saved files. Reloading that
+  edit keeps its link to the refused comment and restores the original
+  attachments still in the draft. Files newly added to a draft must be
+  reselected after reload, or you can explicitly continue without them.
+- The browser keeps files for up to 20 comments per origin and prunes
+  records older than seven days on page load and when saving files. It
+  deletes the bytes when the share accepts the comment or the comment is
+  discarded. An acceptance receipt stays for seven days so a duplicated
+  tab can recognize that the comment was queued. A joiner restart
+  interrupts pending uploads. The browser retains their files but does
+  not resend under the new key automatically.
 
 ## Edit mode
 
@@ -341,9 +359,11 @@ comment when there is no selection.
 
 The list labels PDF comments by page number. Hover or focus a comment row
 to show its anchor in blue. Sending or cancelling clears the draft outline
-and browser text selection. When the PDF changes in a live
-share, the viewer keeps the same text at the same height when it finds a
-clear match nearby, even if the text moves to another page. Otherwise it
+and browser text selection. While the dialog is open, its single draft
+outline follows the page through scrolling, zoom and live rebuilds. When
+the PDF changes in a live share, the viewer keeps the same text at the
+same height when it finds a clear match nearby, even if the text moves
+to another page. Otherwise it
 restores the page and scroll position. Zoom stays in place, and scrolling
 during the search takes precedence. The outbox and any open dialog stay
 in place. Box positions refer to the layout at the time of review and may

@@ -26,6 +26,7 @@ export const OUTBOX_KEY = "jamparty-outbox-v1";
 /** The key of the joiner this tab last heard from. */
 export const JOINER_KEY = "jamparty-joiner-key-v1";
 export const DRAFT_KEY = "jamparty-draft-v1";
+export const EDIT_REF_KEY = "jamparty-edit-ref-v1";
 /** The cookie that keeps the settings changed in this share's pages. */
 export const SETTINGS_COOKIE = "jamparty-settings-v1";
 export const MAX_OUTBOX = 20;

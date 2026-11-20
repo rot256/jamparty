@@ -20,6 +20,12 @@ function isResourceId(value: unknown): value is string {
   return typeof value === "string" && value.length === 69 && /^sha3:[0-9a-f]{64}$/.test(value);
 }
 
+export class UploadError extends Error {
+  constructor(message: string, readonly transient: boolean) {
+    super(message);
+  }
+}
+
 export async function upload(file: File): Promise<Attachment> {
   const reply = await fetch(UPLOAD_URL, {
     method: "POST",
@@ -27,14 +33,18 @@ export async function upload(file: File): Promise<Attachment> {
     redirect: "error",
     body: file,
   }).catch(() => null);
-  if (reply !== null) {
-    const result: unknown = await reply.json().catch(() => null);
-    if (reply.status === 201 && isRecord(result) && isResourceId(result.id)) {
-      return { type: "file", file: result.id, name: file.name };
-    }
-    if (!reply.ok && isRecord(result) && typeof result.error === "string") {
-      throw new Error(result.error);
-    }
+  if (reply === null) throw new UploadError("Could not reach the joiner.", true);
+  let result: unknown;
+  try {
+    result = JSON.parse(await reply.text());
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw new UploadError("The upload reply was interrupted.", true);
   }
-  throw new Error("Could not upload the attachment. Try again.");
+  if (reply.status === 201 && isRecord(result) && isResourceId(result.id)) {
+    return { type: "file", file: result.id, name: file.name };
+  }
+  const reason = isRecord(result) && typeof result.error === "string" ? result.error : undefined;
+  const transient = [408, 429, 502, 503, 504].includes(reply.status) ||
+    reason === "could not read the attachment";
+  throw new UploadError(reason ?? "Could not upload the attachment.", transient);
 }

@@ -27,6 +27,7 @@ function relativeTime(at: number, now = Date.now()): string {
 function stateText(state: ShownState): string {
   switch (state) {
     case "failed":
+      return "refused";
     case "unsent":
       return "not sent";
     case "sending":
@@ -41,9 +42,11 @@ function stateText(state: ShownState): string {
 }
 
 export class CommentList {
+  private readonly items = new Map<OutboxEntry, HTMLLIElement>();
   private hovered: OutboxEntry | null = null;
   private focused: OutboxEntry | null = null;
   onPreview: (entry: OutboxEntry | null) => void = () => undefined;
+  onEdit: (entry: OutboxEntry) => Promise<void> = () => Promise.resolve();
   private refreshTimer: number | undefined;
   /** Called when the list opens (the control panel closes then). */
   onOpen: () => void = () => undefined;
@@ -104,48 +107,58 @@ export class CommentList {
     connectionText.textContent = `· ${view.text}`;
   }
 
+  private createItem(entry: OutboxEntry): HTMLLIElement {
+    const item = document.createElement("li");
+    if (entry.draft.pdf !== undefined) {
+      item.tabIndex = 0;
+      item.addEventListener("pointerenter", () => {
+        this.hovered = entry;
+        this.onPreview(entry);
+      });
+      item.addEventListener("pointerleave", () => {
+        this.hovered = null;
+        this.onPreview(this.focused?.draft.pdf === undefined ? null : this.focused);
+      });
+    } else {
+      // Focusable from code when an action goes away, without an extra Tab stop.
+      item.tabIndex = -1;
+    }
+    item.addEventListener("focusin", () => {
+      this.focused = entry;
+      if (entry.draft.pdf !== undefined) this.onPreview(entry);
+    });
+    item.addEventListener("focusout", (event) => {
+      if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
+      this.focused = null;
+      this.onPreview(this.hovered);
+    });
+    this.items.set(entry, item);
+    return item;
+  }
+
   render(): void {
     const { outboxList } = this.ui;
     const now = Date.now();
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
-    const previousFocus = this.focused;
-    const root = outboxList.getRootNode();
-    const active = root instanceof Document || root instanceof ShadowRoot ? root.activeElement : null;
-    const againFocused = active instanceof HTMLElement && active.classList.contains("again") &&
-      outboxList.contains(active);
-    this.hovered = this.focused = null;
-    this.onPreview(null);
-    outboxList.replaceChildren(...entries.map((entry) => {
-      const item = document.createElement("li");
+    const active = this.ui.shadow.activeElement;
+    const focusedItem = active?.closest("li");
+    const focusedAction = active instanceof HTMLButtonElement ? active.textContent : null;
+    for (const [entry, item] of this.items) {
+      if (entries.includes(entry)) continue;
+      item.remove();
+      this.items.delete(entry);
+      if (this.hovered === entry || this.focused === entry) {
+        if (this.hovered === entry) this.hovered = null;
+        if (this.focused === entry) this.focused = null;
+        this.onPreview(this.hovered ?? (this.focused?.draft.pdf === undefined ? null : this.focused));
+      }
+    }
+    for (const [index, entry] of entries.entries()) {
+      const item = this.items.get(entry) ?? this.createItem(entry);
+      const atIndex = outboxList.children.item(index);
+      if (atIndex !== item) outboxList.insertBefore(item, atIndex);
       const shown = this.outbox.shown(entry);
       item.dataset.state = shown;
-      if (entry.draft.pdf !== undefined) {
-        item.tabIndex = 0;
-        item.addEventListener("pointerenter", () => {
-          this.hovered = entry;
-          this.onPreview(entry);
-        });
-        item.addEventListener("pointerleave", () => {
-          this.hovered = null;
-          this.onPreview(this.focused?.draft.pdf === undefined ? null : this.focused);
-        });
-      } else {
-        // Focusable from code only, for when its "send again" button goes
-        // away under the focus; no extra Tab stop.
-        item.tabIndex = -1;
-      }
-      // Focus is tracked for every row, so a refresh can restore it. The
-      // latest of hover and focus wins, so a keyboard user sees the row
-      // they moved to even with the pointer resting on another.
-      item.addEventListener("focusin", () => {
-        this.focused = entry;
-        if (entry.draft.pdf !== undefined) this.onPreview(entry);
-      });
-      item.addEventListener("focusout", (event) => {
-        if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
-        this.focused = null;
-        this.onPreview(this.hovered);
-      });
       const row = document.createElement("div");
       row.className = "row";
       const where = document.createElement("span");
@@ -157,15 +170,23 @@ export class CommentList {
       const state = document.createElement("span");
       state.className = "state";
       state.textContent = stateText(shown);
+      if (shown === "sending") {
+        const spinner = document.createElement("span");
+        spinner.className = "sending-indicator";
+        spinner.setAttribute("aria-hidden", "true");
+        state.prepend(spinner);
+      }
       row.append(where, state);
       const text = document.createElement("p");
       text.className = "text";
       text.textContent = entry.draft.comment;
-      item.append(row, text);
-      for (const attachment of entry.draft.attachments ?? []) {
+      item.replaceChildren(row, text);
+      const names = (entry.draft.attachments ?? []).map((file) => file.name);
+      if (entry.uploaded !== true) names.push(...(entry.files ?? []));
+      for (const name of names) {
         const file = document.createElement("p");
         file.className = "text";
-        file.textContent = attachment.name;
+        file.textContent = name;
         item.append(file);
       }
       if (entry.error !== undefined) {
@@ -174,7 +195,20 @@ export class CommentList {
         error.textContent = entry.error;
         item.append(error);
       }
-      if (entry.state === "unsent") {
+      if (entry.state === "failed") {
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "again";
+        edit.textContent = "edit";
+        edit.addEventListener("click", () => { void this.onEdit(entry); });
+        const discard = document.createElement("button");
+        discard.type = "button";
+        discard.className = "again";
+        discard.textContent = "discard";
+        discard.addEventListener("click", () => { this.outbox.discard(entry); });
+        item.append(edit, discard);
+      }
+      if (shown !== "sending" && this.outbox.canResend(entry)) {
         const again = document.createElement("button");
         again.type = "button";
         again.className = "again";
@@ -182,15 +216,11 @@ export class CommentList {
         again.addEventListener("click", () => { void this.outbox.resend(entry); });
         item.append(again);
       }
-      return item;
-    }));
-    if (previousFocus !== null) {
-      const index = entries.indexOf(previousFocus);
-      const item = outboxList.children.item(index);
-      // Keep focus on "send again" while the comment can still be sent again.
-      const again = againFocused ? item?.querySelector<HTMLElement>(".again") : null;
-      if (again instanceof HTMLElement) again.focus({ preventScroll: true });
-      else if (item instanceof HTMLElement) item.focus({ preventScroll: true });
+      if (item === focusedItem) {
+        const button = focusedAction === null ? undefined : Array.from(item.querySelectorAll("button"))
+          .find((candidate) => candidate.textContent === focusedAction);
+        (button ?? item).focus({ preventScroll: true });
+      }
     }
   }
 }
