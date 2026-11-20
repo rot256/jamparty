@@ -61,7 +61,9 @@ export function install(pdf?: PdfViewer): void {
   };
   const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref));
   const dialog = new CommentDialog(ui, outbox);
-  const list = new CommentList(ui, outbox);
+  const list = new CommentList(ui, outbox, (answer) => answers.renderBody(answer));
+  answers.onHistory = (history) => { list.setAnswers(history); };
+  answers.historyTarget = (id) => list.answerTarget(id);
   // The panel takes its keys before the page and the `/` handler below.
   const panel = new Panel(ui, changeSettings);
   panel.onClearAnswers = () => { answers.clear(); };
@@ -71,7 +73,10 @@ export function install(pdf?: PdfViewer): void {
   );
   const layer = new CursorLayer(ui);
   const editMode = pdf === undefined ? new EditMode(ui, dialog) : null;
-  pdf?.bind(ui, dialog);
+  pdf?.bind(ui, dialog, () => {
+    panel.close();
+    list.close();
+  });
   if (editMode !== null) {
     dialog.onOpen = () => { editMode.clearHover(); };
     editMode.onPagePress = () => {
@@ -109,8 +114,14 @@ export function install(pdf?: PdfViewer): void {
       list.close();
     }
   };
-  list.onOpen = () => { panel.close(); };
-  panel.onOpen = () => { list.close(); };
+  list.onOpen = () => {
+    panel.close();
+    pdf?.closeOutline();
+  };
+  panel.onOpen = () => {
+    list.close();
+    pdf?.closeOutline();
+  };
   outbox.onChange = () => {
     list.render();
     pdf?.showComments(outbox.entries);
@@ -199,8 +210,7 @@ export function install(pdf?: PdfViewer): void {
     you = hello.link.you?.key ?? null;
     outbox.setKey(you);
     showMine(hello.mine);
-    answers.keepDismissed(hello.answers);
-    for (const answer of hello.answers) answers.add(answer);
+    answers.sync(hello.answers);
     restoreDraft();
     showSettings(hello.settings);
     showPeople(hello.people);
@@ -256,7 +266,7 @@ export function install(pdf?: PdfViewer): void {
         answers.remove(slice.id);
         break;
       case "answer":
-        answers.add(slice);
+        answers.receive(slice);
         break;
       case "cursor":
         if (slice.url === url && slice.key !== you) layer.update(slice.key, slice.position);
@@ -295,7 +305,7 @@ export function install(pdf?: PdfViewer): void {
     if (event.shiftKey || event.composedPath().includes(ui.host)) return;
     if (!(event.target instanceof Element)) return;
     if (pdf !== undefined) {
-      if (pdf.commentOnSelection(event)) event.preventDefault();
+      if (pdf.commentAtPointer(event)) event.preventDefault();
       return;
     }
     event.preventDefault();
@@ -306,7 +316,7 @@ export function install(pdf?: PdfViewer): void {
     if (!commenting()) return;
     if (!(event instanceof MouseEvent) || event.shiftKey) return;
     const target = event.composedPath().find(
-      (node) => node instanceof HTMLElement && node.classList.contains("agent-message"),
+      (node) => node instanceof HTMLElement && node.matches(".agent-message, .agent-reply"),
     );
     if (!(target instanceof HTMLElement) || !target.dataset.messageId) return;
     event.preventDefault();

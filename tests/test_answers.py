@@ -54,7 +54,7 @@ def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> No
         textarea = overlay(page, "textarea")
         textarea.press_sequentially("About the answer")
         _ = page.reload()
-        # Answers come with the first status: the draft waits for them.
+        # The draft still targets the reply from the snapshot without a popup.
         expect(textarea).to_have_value("About the answer")
         label = overlay(page, "#dialog-label")
         expect(label).to_have_text("Comment on agent response:")
@@ -67,9 +67,12 @@ def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> No
 
         # An answer dismissed meanwhile is gone: the reply goes to the page,
         # and says so, however often the page reloads.
-        answer.click(button="right")
+        expect(answer).to_have_count(0)
+        overlay(page, "#pill").click()
+        reply = overlay(page, "#answer-list .agent-reply")
+        reply.click(button="right")
         textarea.press_sequentially("On a dismissed answer")
-        message_id = answer.get_attribute("data-message-id")
+        message_id = reply.get_attribute("data-message-id")
         assert message_id is not None
         _ = page.evaluate(
             "(id) => sessionStorage.setItem('jamparty-dismissed-v1', JSON.stringify([id]))",
@@ -87,6 +90,91 @@ def test_a_draft_on_an_answer_comes_back_on_it(tmp_path: Path, page: Page) -> No
         [record] = recv_all(tmp_path)
         assert record["comment"] == "On a dismissed answer"
         assert record["selector"] == ""
+
+
+def test_late_answers_are_quietly_listed(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        comment_on_intro(page, "First comment")
+        comment_on_intro(page, "Second comment")
+        expect(overlay(page, "#badge")).to_have_text("2 queued")
+        first, second = recv_all(tmp_path)
+        assert first["comment"] == "First comment"
+        assert second["comment"] == "Second comment"
+        _ = page.goto("about:blank")
+
+        _ = jamparty(
+            tmp_path, "send", "A **specific** reply.", "--anchor", str(first["id"])
+        )
+        _ = jamparty(tmp_path, "send", "Another reply.", "--anchor", str(second["id"]))
+        _ = jamparty(tmp_path, "send", "Earlier announcement.")
+        _ = jamparty(tmp_path, "send", "Later announcement.")
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        bubbles = overlay(page, ".agent-message")
+        expect(bubbles).to_have_count(0)
+        overlay(page, "#pill").click()
+        rows = overlay(page, "#outbox-list > li")
+        first_row = rows.filter(has_text="First comment")
+        second_row = rows.filter(has_text="Second comment")
+        expect(first_row.locator(".agent-reply strong")).to_have_text("specific")
+        expect(second_row.locator(".agent-reply")).to_have_text("Another reply.")
+        expect(overlay(page, "#answer-list .agent-reply")).to_have_text(
+            ["Later announcement.", "Earlier announcement."]
+        )
+        overlay(page, "#collapse").click()
+
+        _ = jamparty(tmp_path, "send", "Live answer.")
+        expect(bubbles).to_have_count(1)
+        expect(bubbles).to_contain_text("Live answer.")
+        _ = page.reload()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        expect(bubbles).to_have_count(0)
+        overlay(page, "#pill").click()
+        expect(overlay(page, "#answer-list .agent-reply").first).to_have_text(
+            "Live answer."
+        )
+
+        _ = page.goto("about:blank")
+        _ = jamparty(tmp_path, "send", "Pick one", "--choice", "Yes", "--choice", "No")
+        _ = page.goto(joined.url)
+        expect(bubbles).to_have_count(1)
+        expect(bubbles.get_by_role("button", name="Yes")).to_be_visible()
+
+
+def test_answer_catchup_on_browser_reconnect(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(tmp_path, "send", "Already shown.")
+        bubbles = overlay(page, ".agent-message")
+        expect(bubbles).to_have_count(1)
+        tap.hold.add("answer")
+        _ = jamparty(tmp_path, "send", "Missed during reconnect.")
+        waiting(page, "answer for the next snapshot", lambda: bool(tap.held))
+        tap.sockets[0].close()
+        tap.hold.clear()
+        waiting(page, "reconnected socket", lambda: len(tap.sockets) == 2)
+        overlay(page, "#pill").click()
+        expect(overlay(page, "#answer-list .agent-reply").first).to_have_text(
+            "Missed during reconnect."
+        )
+        expect(bubbles).to_have_count(1)
+        expect(bubbles).to_contain_text("Already shown.")
+        overlay(page, "#collapse").click()
+        _ = jamparty(tmp_path, "send", "Received live again.")
+        expect(bubbles).to_have_count(2)
+        expect(bubbles.filter(has_text="Received live again.")).to_be_visible()
 
 
 def test_addressing_by_key(tmp_path: Path, browser: Browser) -> None:

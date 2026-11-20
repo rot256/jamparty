@@ -4,6 +4,7 @@ import http.client
 import json
 import socket
 import time
+from errno import EADDRINUSE
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import cast
@@ -143,27 +144,36 @@ def test_the_joiner_serves_on_the_dev_servers_port(tmp_path: Path, page: Page) -
 
 
 def test_a_taken_port_falls_back_with_a_note(tmp_path: Path, page: Page) -> None:
-    with upstream_server(DEV_HOST) as upstream:
-        port = urlsplit(upstream).port
-        assert port is not None
-        with socket.socket(socket.AF_INET) as taken:
-            # Something else here has the dev server's port.
-            taken.bind(("127.0.0.1", port))
-            taken.listen()
-            with (
-                share(tmp_path, "proxy", upstream) as shared,
-                join_process(tmp_path, shared, shared.token) as process,
-            ):
-                note = process.wait_for("jamparty: port ")
-                assert note.startswith(f"{port} is in use here; serving on "), note
-                assert "Live reload" in note
-                url = process.wait_for("jamparty: open ")
-                served = urlsplit(url).port
-                assert served is not None and served != port
-                assert note.startswith(f"{port} is in use here; serving on {served}.")
-                _ = page.goto(url)
-                expect(page.locator("h1")).to_have_text("Fixture page")
-                expect(page.locator("#jamparty")).to_be_attached()
+    for attempt in range(5):
+        with upstream_server(DEV_HOST) as upstream:
+            port = urlsplit(upstream).port
+            assert port is not None
+            with socket.socket(socket.AF_INET) as taken:
+                # Something else here has the dev server's port.
+                try:
+                    taken.bind(("127.0.0.1", port))
+                except OSError as error:
+                    if error.errno != EADDRINUSE or attempt == 4:
+                        raise
+                    continue
+                taken.listen()
+                with (
+                    share(tmp_path, "proxy", upstream) as shared,
+                    join_process(tmp_path, shared, shared.token) as process,
+                ):
+                    note = process.wait_for("jamparty: port ")
+                    assert note.startswith(f"{port} is in use here; serving on "), note
+                    assert "Live reload" in note
+                    url = process.wait_for("jamparty: open ")
+                    served = urlsplit(url).port
+                    assert served is not None and served != port
+                    assert note.startswith(
+                        f"{port} is in use here; serving on {served}."
+                    )
+                    _ = page.goto(url)
+                    expect(page.locator("h1")).to_have_text("Fixture page")
+                    expect(page.locator("#jamparty")).to_be_attached()
+                return
 
 
 def test_the_dev_server_sees_its_own_origin(tmp_path: Path, page: Page) -> None:

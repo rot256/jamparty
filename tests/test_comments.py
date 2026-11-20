@@ -591,11 +591,14 @@ def test_list_times_and_dialog_titles(tmp_path: Path, page: Page) -> None:
         overlay(page, "#pill").click()
         where = overlay(page, "#outbox-list li .where")
         expect(where).to_have_text("#intro · just now")
-        page.clock.fast_forward(61_000)
+        # The clock jump also trips the socket's idle watchdog.
+        with page.expect_websocket():
+            page.clock.fast_forward(61_000)
         expect(where).to_have_text("#intro · 1 min ago")
         overlay(page, "#collapse").click()
 
-        # A comment on an answer.
+        # A comment on an answer received after reconnect.
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         _ = jamparty(tmp_path, "send", "An answer.")
         answer = overlay(page, ".agent-message")
         expect(answer).to_contain_text("An answer.")

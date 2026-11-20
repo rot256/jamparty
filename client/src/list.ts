@@ -4,6 +4,7 @@
 
 import { AGENT_TARGET_PREFIX } from "./config";
 import type { ConnectionView } from "./connection";
+import type { Answer } from "./generated/api";
 import type { Outbox, OutboxEntry, ShownState } from "./outbox";
 import type { Ui } from "./ui";
 
@@ -43,6 +44,7 @@ function stateText(state: ShownState): string {
 
 export class CommentList {
   private readonly items = new Map<OutboxEntry, HTMLLIElement>();
+  private replies = new Map<string, { answer: Answer; node: HTMLElement }>();
   private hovered: OutboxEntry | null = null;
   private focused: OutboxEntry | null = null;
   onPreview: (entry: OutboxEntry | null) => void = () => undefined;
@@ -54,6 +56,7 @@ export class CommentList {
   constructor(
     private readonly ui: Ui,
     private readonly outbox: Outbox,
+    private readonly renderBody: (answer: Answer) => HTMLElement,
   ) {
     ui.pill.addEventListener("click", () => { this.toggle(); });
     ui.listHeader.addEventListener("click", () => { this.close(); });
@@ -107,6 +110,26 @@ export class CommentList {
     connectionText.textContent = `· ${view.text}`;
   }
 
+  setAnswers(answers: readonly Answer[]): void {
+    const replies = new Map<string, { answer: Answer; node: HTMLElement }>();
+    for (const answer of answers) {
+      let node = this.replies.get(answer.id)?.node;
+      if (node === undefined) {
+        node = document.createElement("article");
+        node.className = "agent-reply";
+        node.dataset.messageId = answer.id;
+        node.append(this.renderBody(answer));
+      }
+      replies.set(answer.id, { answer, node });
+    }
+    this.replies = replies;
+    this.render();
+  }
+
+  answerTarget(id: string): HTMLElement | null {
+    return this.replies.get(id)?.node ?? null;
+  }
+
   private createItem(entry: OutboxEntry): HTMLLIElement {
     const item = document.createElement("li");
     if (entry.draft.pdf !== undefined) {
@@ -137,11 +160,27 @@ export class CommentList {
   }
 
   render(): void {
-    const { outboxList } = this.ui;
+    const { outboxList, answerList } = this.ui;
     const now = Date.now();
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
     const active = this.ui.shadow.activeElement;
-    const focusedItem = active?.closest("li");
+    const focusedReply = active instanceof HTMLElement && active.closest(".agent-reply") !== null;
+    const focusedItem = active?.closest("#outbox-list > li");
+    const ownComments = new Set(entries.map((entry) => entry.id));
+    const byComment = new Map<string, HTMLElement[]>();
+    const general: HTMLLIElement[] = [];
+    for (const { answer, node } of Array.from(this.replies.values()).reverse()) {
+      const id = answer.replyTo;
+      if (id !== undefined && ownComments.has(id)) {
+        const replies = byComment.get(id) ?? [];
+        replies.push(node);
+        byComment.set(id, replies);
+      } else {
+        const item = document.createElement("li");
+        item.append(node);
+        general.push(item);
+      }
+    }
     const focusedAction = active instanceof HTMLButtonElement ? active.textContent : null;
     for (const [entry, item] of this.items) {
       if (entries.includes(entry)) continue;
@@ -216,11 +255,14 @@ export class CommentList {
         again.addEventListener("click", () => { void this.outbox.resend(entry); });
         item.append(again);
       }
-      if (item === focusedItem) {
+      if (entry.id !== null) item.append(...(byComment.get(entry.id) ?? []));
+      if (!focusedReply && item === focusedItem) {
         const button = focusedAction === null ? undefined : Array.from(item.querySelectorAll("button"))
           .find((candidate) => candidate.textContent === focusedAction);
         (button ?? item).focus({ preventScroll: true });
       }
     }
+    answerList.replaceChildren(...general);
+    if (focusedReply && active.isConnected) active.focus({ preventScroll: true });
   }
 }

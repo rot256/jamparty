@@ -1,8 +1,6 @@
-// The agent's answers: shown bottom right, or next to the element of the
-// comment they answer when that is on this page; dismissed ones stay
-// dismissed for the session. At most MAX_ANSWERS are shown, as many as
-// the joiner keeps, the oldest going first; dismissals are kept only of
-// answers the joiner still has, and at most as many.
+// The agent's answers: live arrivals and open questions can pop up.
+// Recent replies also appear in the comment list. Popups that were
+// dismissed stay dismissed for the session.
 
 import { samePage } from "./capture";
 import { AGENT_TARGET_PREFIX, DISMISSED_KEY } from "./config";
@@ -42,6 +40,9 @@ function loadDismissed(): Set<string> {
 
 export class Answers {
   private readonly shown = new Map<string, Shown>();
+  private readonly recent = new Map<string, Answer>();
+  onHistory: (answers: readonly Answer[]) => void = () => undefined;
+  historyTarget: (id: string) => HTMLElement | null = () => null;
   private readonly dismissed = loadDismissed();
   private placementFrame: number | undefined;
   private timeoutSeconds = 0;
@@ -70,29 +71,66 @@ export class Answers {
   /** The element a selector names: on the page, or one of the answers. */
   targetFor(selector: string): Element | null {
     if (selector.startsWith(AGENT_TARGET_PREFIX)) {
-      return this.node(selector.slice(AGENT_TARGET_PREFIX.length));
+      const id = selector.slice(AGENT_TARGET_PREFIX.length);
+      return this.node(id) ?? (this.dismissed.has(id) ? null : this.historyTarget(id));
     }
     return document.querySelector(selector);
   }
 
-  /**
-   * The answers the joiner has now (its hello): dismissals of others are
-   * forgotten, since those answers do not come back.
-   */
-  keepDismissed(answers: readonly Answer[]): void {
-    const held = new Set(answers.map((answer) => answer.id));
-    for (const id of this.shown.keys()) if (!held.has(id)) this.remove(id);
+  /** A new or reconnected tab sees cached replies quietly. */
+  sync(answers: readonly Answer[]): void {
+    this.recent.clear();
+    for (const answer of answers) this.recent.set(answer.id, answer);
+    for (const id of this.shown.keys()) if (!this.recent.has(id)) this.remove(id);
     let changed = false;
-    for (const id of [...this.dismissed]) {
-      if (!held.has(id)) {
+    for (const id of this.dismissed) {
+      if (!this.recent.has(id)) {
         this.dismissed.delete(id);
         changed = true;
       }
     }
     if (changed) this.persistDismissed();
+    for (const answer of answers) {
+      if (answer.choices.length > 0) this.show(answer);
+    }
+    this.publishHistory();
   }
 
-  add(answer: Answer): void {
+  receive(answer: Answer): void {
+    if (this.recent.has(answer.id)) return;
+    this.recent.set(answer.id, answer);
+    if (this.recent.size > MAX_ANSWERS) {
+      const oldest = this.recent.keys().next();
+      if (!oldest.done) this.recent.delete(oldest.value);
+    }
+    if (answer.live || answer.choices.length > 0) this.show(answer);
+    this.publishHistory();
+  }
+
+  private publishHistory(): void {
+    this.onHistory(Array.from(this.recent.values()).filter((answer) => answer.choices.length === 0));
+  }
+
+  renderBody(answer: Answer): HTMLDivElement {
+    const body = document.createElement("div");
+    body.className = "agent-body";
+    // Rendered by the joiner with the restricted Markdown renderer.
+    body.innerHTML = answer.html;
+    for (const link of body.querySelectorAll("a")) {
+      const href = link.getAttribute("href") ?? "";
+      if (!href.toLowerCase().startsWith("jamparty:")) {
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+      }
+    }
+    body.addEventListener("click", (event) => {
+      const link = event.target instanceof Element ? event.target.closest("a") : null;
+      if (link) this.followElementLink(link, event);
+    });
+    return body;
+  }
+
+  private show(answer: Answer): void {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
     // The oldest go first (a Map keeps the order answers came in).
     for (const [id, shown] of this.shown) {
@@ -113,10 +151,7 @@ export class Answers {
     to.className = "agent-meta agent-to";
     to.textContent = "to you";
     to.hidden = !answer.toYou;
-    const body = document.createElement("div");
-    body.className = "agent-body";
-    // Rendered by the joiner with the restricted Markdown renderer.
-    body.innerHTML = answer.html;
+    const body = this.renderBody(answer);
     const unavailable = document.createElement("div");
     unavailable.className = "agent-unavailable";
     unavailable.textContent = "Target unavailable";
@@ -171,17 +206,6 @@ export class Answers {
       });
     }
 
-    for (const link of body.querySelectorAll("a")) {
-      const href = link.getAttribute("href") ?? "";
-      if (!href.toLowerCase().startsWith("jamparty:")) {
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-      }
-    }
-    body.addEventListener("click", (event) => {
-      const link = event.target instanceof Element ? event.target.closest("a") : null;
-      if (link) this.followElementLink(link, event);
-    });
     close.addEventListener("click", () => {
       this.shown.get(answer.id)?.stopTimer();
       this.dismissed.add(answer.id);
@@ -202,6 +226,7 @@ export class Answers {
 
   /** The share resolved this question; no session dismissal is needed. */
   remove(id: string): void {
+    this.recent.delete(id);
     const shown = this.shown.get(id);
     shown?.stopTimer();
     shown?.node.remove();

@@ -5,6 +5,7 @@ import type { PDFOperatorList } from "pdfjs-dist/types/src/display/api";
 import { parsePdfAnchor, type PdfAnchor } from "./pdf-anchor";
 import { detectPdfBlocks, readRuns, type PdfBlock } from "./pdf-blocks";
 import { linesFor, type Bounds, type Run } from "./pdf-layout";
+import { destinationY, type PdfDestination } from "./pdf-outline";
 
 interface Rectangle {
   left: number;
@@ -48,7 +49,7 @@ export class PdfPage {
   private operators: PDFOperatorList | undefined;
   private runs: Run[] | undefined;
   private blocks: PdfBlock[] | undefined;
-  private blockRequest: { controller: AbortController; promise: Promise<void> } | undefined;
+  private blockRequest: { controller: AbortController; promise: Promise<boolean> } | undefined;
 
   constructor(
     readonly number: number,
@@ -91,8 +92,8 @@ export class PdfPage {
     }
   }
 
-  resize(zoom: number | "fit", available: number): void {
-    const scale = zoom === "fit" ? available / this.natural.width : zoom * 96 / 72;
+  resize(available: number): void {
+    const scale = available / this.natural.width;
     this.viewport = this.natural.clone({ scale });
     this.element.style.width = `${this.viewport.width}px`;
     this.element.style.height = `${this.viewport.height}px`;
@@ -108,6 +109,11 @@ export class PdfPage {
     this.operators = undefined;
     this.content.replaceChildren();
     delete this.element.dataset.rendered;
+  }
+
+  rerender(): void {
+    this.clear();
+    this.render();
   }
 
   render(): void {
@@ -128,7 +134,7 @@ export class PdfPage {
     const viewport = this.viewport;
     const canvas = document.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
-    const ratio = Math.min(devicePixelRatio, 4096 / viewport.width, 4096 / viewport.height,
+    const ratio = Math.min(devicePixelRatio * (window.visualViewport?.scale ?? 1), 4096 / viewport.width, 4096 / viewport.height,
       Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height)));
     canvas.width = Math.max(1, Math.floor(viewport.width * ratio));
     canvas.height = Math.max(1, Math.floor(viewport.height * ratio));
@@ -191,7 +197,7 @@ export class PdfPage {
       .sort((a, b) => a.top - b.top);
   }
 
-  prepareBlocks(): Promise<void> | undefined {
+  prepareBlocks(): Promise<boolean> | undefined {
     const page = this.page;
     if (this.blocks !== undefined || !this.visible || this.element.dataset.rendered !== "true" || page === null) return;
     if (this.blockRequest !== undefined) return this.blockRequest.promise;
@@ -201,18 +207,22 @@ export class PdfPage {
       if (!controller.signal.aborted) this.blocks = blocks;
     }).catch(() => {
       if (!controller.signal.aborted) this.blocks = [];
-    }).finally(() => {
+    }).then(() => {
       if (this.blockRequest?.controller === controller) this.blockRequest = undefined;
+      return !controller.signal.aborted;
     });
     this.blockRequest = { controller, promise };
     return promise;
   }
 
-  blockAt(x: number, y: number): { anchor: PdfAnchor; text: string | null } | undefined {
-    if (this.blocks === undefined || this.element.dataset.rendered !== "true") return;
+  pdfPointAt(x: number, y: number): [number, number] | undefined {
     const rect = this.element.getBoundingClientRect();
     if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return;
-    const [px, py] = this.viewport.convertToPdfPoint(x - rect.left, y - rect.top) as [number, number];
+    return this.viewport.convertToPdfPoint(x - rect.left, y - rect.top) as [number, number];
+  }
+
+  blockAt([px, py]: [number, number]): { anchor: PdfAnchor; text: string | null } | undefined {
+    if (this.blocks === undefined || this.element.dataset.rendered !== "true") return;
     let best: PdfBlock | undefined;
     let area = Infinity;
     for (const block of this.blocks) {
@@ -226,6 +236,15 @@ export class PdfPage {
     if (best === undefined) return;
     const anchor = this.pdfAnchor(best.bounds);
     return anchor === undefined ? undefined : { anchor, text: best.text };
+  }
+
+  destinationY(destination: PdfDestination): number | undefined {
+    return this.page === null ? undefined : destinationY(this.natural, destination);
+  }
+
+  pointAnchor([px, py]: [number, number]): PdfAnchor | undefined {
+    const radius = 8 / this.viewport.userUnit;
+    return this.pdfAnchor([px - radius, py - radius, px + radius, py + radius]);
   }
 
   anchor(rect: Rectangle): PdfAnchor | undefined {

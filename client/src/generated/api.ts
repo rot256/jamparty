@@ -93,6 +93,10 @@ export type Choices = Array<string>;
 
 export type Answer = { id: CommentId, html: string, 
 /**
+ * The ID of the comment it answers.
+ */
+replyTo?: CommentId, 
+/**
  * The selector of the comment it answers.
  */
 anchor?: CommentSelector, 
@@ -104,7 +108,11 @@ page?: CommentPage,
  * Addressed to this joiner alone (`jamparty send --to`, or an answer to
  * its comment); the page says so.
  */
-toYou: boolean, choices: Choices, };
+toYou: boolean, choices: Choices, 
+/**
+ * Arrived after the share's admission replay.
+ */
+live: boolean, };
 
 export type Link = { 
 /**

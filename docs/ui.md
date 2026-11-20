@@ -224,8 +224,14 @@ text. Rows:
 - `jamparty send --anchor <comment id> "…"` without `--to` addresses the
   comment's author by default; `--to all` (or no anchor and no `--to`)
   sends it to everyone.
-- A page shows at most as many answers as its joiner keeps (100), the
-  oldest going first, and remembers dismissals only of those.
+- Live answers appear as bubbles. Answers missed while the page was closed
+  or disconnected appear in the comment list without a popup. Replies to
+  your comments appear under their comment. Other replies appear below the
+  comments, newest first. The joiner keeps up to 100 recent answers.
+- Dismissing an ordinary reply bubble keeps the reply in the list.
+  Multiple-choice questions only appear as bubbles. A dismissed question
+  stays hidden for the tab session. Open, undismissed questions pop up on
+  load or reconnect.
 - The recipient's answer bubble shows a small `to you` line above the text
   (in the answer-meta style, `#7b3221`, 11 px, bold).
 - The `jamparty agent` guides describe `--to`.
@@ -342,20 +348,37 @@ from the start URL.
 ## PDF viewer
 
 Opening a `.pdf` URL in the main browser tab opens the joiner's PDF viewer.
-Use the page field to jump to a page and the zoom menu to change its scale.
+The viewer opens with just the pages and the jamparty command bar.
+Pages fit the window width up to a maximum of 960 pixels. Use the browser’s
+zoom controls to magnify them. Scrolling briefly shows the current page and
+page count. Loading, updating and errors appear in the same corner, away
+from the command bar.
+
+When a PDF has an outline, the sections button beside the pen opens it.
+Expand a section to see its subsections. The current section is highlighted, and clicking a
+section scrolls to its destination and closes the panel. Escape or a click
+outside also closes the panel. On rebuild, the viewer refreshes the outline
+and keeps matching sections expanded. The button appears only while the PDF
+has outline entries.
+
 As with other pages from a share, a complex or hostile PDF can slow down
 or crash the viewer tab.
 Select text and right-click the selection or press `/` to comment on it.
-The pen switches to block selection and box drawing. Hover over a block to
-outline it in blue, then click to comment on its bounds and quote its text.
+With comment mode on and no text selected, right-click a page to comment
+on the block under the pointer or on the point you clicked.
+With the pen on, hover over a block to outline it in blue, then click to
+comment on its bounds and quote its text. Click elsewhere on the page
+for a point comment. A point comment uses a 16-point square centred at
+the pointer and clipped to the page, with no quoted text.
+The gutter has no PDF content to anchor to. Clicking there leaves the
+dialog closed. Use `/` with no selection for a document comment.
+
 The viewer estimates paragraphs, headings, display lines and image bounds
 from the page layout. It skips PDF structure trees to avoid parsing and
-transferring an unbounded tree on hover.
-Drag across any part of a page to draw a box, including over blocks. Use
-a box for vector drawings the viewer cannot identify as a block. The pen
-stays active until clicked again or you press Escape with the dialog closed.
-Turn it off to select text directly. You can still use `/` for a document
-comment when there is no selection.
+transferring an unbounded tree on hover. Drag across any part of a page
+to draw a box, including over blocks. The pen stays active until clicked
+again or you press Escape with the dialog closed. Turn it off to select
+text directly.
 
 The list labels PDF comments by page number. Hover or focus a comment row
 to show its anchor in blue. Sending or cancelling clears the draft outline
@@ -364,7 +387,7 @@ outline follows the page through scrolling, zoom and live rebuilds. When
 the PDF changes in a live share, the viewer keeps the same text at the
 same height when it finds a clear match nearby, even if the text moves
 to another page. Otherwise it
-restores the page and scroll position. Zoom stays in place, and scrolling
+restores the page and scroll position. Resizing the window keeps the same reading position, and scrolling
 during the search takes precedence. The outbox and any open dialog stay
 in place. Box positions refer to the layout at the time of review and may
 point to different content after a rebuild.

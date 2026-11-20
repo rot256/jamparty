@@ -3,13 +3,16 @@
 from base64 import b64decode
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from playwright.sync_api import Page, Route, expect
 from support import SocketTap, jamparty, join, overlay, recv_all, share, waiting
 
 
-def fixture_pdf(label: str, padding: int = 0) -> bytes:
+def fixture_pdf(
+    label: str, padding: int = 0, *, outline_child: str | None = None
+) -> bytes:
     """Two letter-size pages with PDF-standard Helvetica and a valid xref."""
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -25,6 +28,22 @@ def fixture_pdf(label: str, padding: int = 0) -> bytes:
         stream = f"BT /F1 24 Tf 72 648 Td ({text}) Tj ET".encode()
         objects.append(
             f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
+        )
+    if outline_child is not None:
+        objects[0] = (
+            b"<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R "
+            b"/Dests << /appendix [4 0 R /XYZ null 560 null] >> >>"
+        )
+        objects.extend(
+            [
+                b"<< /Type /Outlines /First 9 0 R /Last 10 0 R /Count 3 >>",
+                b"<< /Title (Introduction) /Parent 8 0 R /Next 10 0 R /Dest [3 0 R /Fit] >>",
+                (
+                    b"<< /Title (Analysis) /Parent 8 0 R /Prev 9 0 R /First 11 0 R "
+                    b"/Last 11 0 R /Count 1 /Dest [4 0 R /Fit] >>"
+                ),
+                f"<< /Title ({outline_child}) /Parent 10 0 R /Dest /appendix >>".encode(),
+            ]
         )
     return make_pdf(objects, padding)
 
@@ -57,6 +76,12 @@ def make_pdf(objects: list[bytes], padding: int = 0) -> bytes:
     return bytes(pdf)
 
 
+def scroll_to_page(page: Page, number: int) -> None:
+    sheet = page.locator(f"#jamparty-pdf-page-{number}")
+    _ = sheet.evaluate("node => node.scrollIntoView()")
+    expect(sheet).to_have_attribute("data-rendered", "true")
+
+
 def expect_selection_cleared(page: Page) -> None:
     expect(
         page.locator(".pdf-draft, .pdf-drag, .pdf-block-hover, .pdf-comment")
@@ -79,6 +104,130 @@ def send_comment(page: Page, message: str) -> None:
     )
 
 
+def test_pdf_fits_and_keeps_reading_position(tmp_path: Path, page: Page) -> None:
+    pdf = tmp_path / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page"))
+    page.emulate_media(reduced_motion="reduce")
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        scroll_to_page(page, 2)
+        sheet = page.get_by_role("region", name="Page 2")
+        indicator = page.locator("#pdf-position")
+        _ = page.evaluate("window.scrollBy(0, 200)")
+        expect(indicator).to_have_text("2 / 2")
+        expect(indicator).to_be_visible()
+
+        page.set_viewport_size({"width": 360, "height": 720})
+        expect(sheet).to_have_css("width", "328px")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        bounds = sheet.bounding_box()
+        assert bounds is not None
+        assert bounds["width"] == pytest.approx(328, abs=1)
+        assert (12 - bounds["y"]) / bounds["height"] == pytest.approx(
+            200 / (960 * 792 / 612), abs=0.004
+        )
+        assert page.evaluate(
+            "document.documentElement.scrollWidth === document.documentElement.clientWidth"
+        )
+        expect(indicator).to_be_hidden()
+
+
+def test_pdf_outline(tmp_path: Path, page: Page) -> None:
+    site = tmp_path / "build"
+    site.mkdir()
+    pdf = site / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page", outline_child="<b>Appendix</b>"))
+    _ = (site / "index.html").write_text("<h1>Start page</h1>")
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#edit")).to_be_visible()
+        expect(overlay(page, "#pdf-outline")).to_have_count(0)
+        _ = page.goto(f"{joined.url.rstrip('/')}/paper.pdf")
+        sections = overlay(page, "#pdf-outline")
+        panel = overlay(page, "#pdf-sections")
+        expect(sections).to_be_visible()
+        expect(panel).to_be_hidden()
+        sections.click()
+
+        intro = panel.get_by_role("button", name="Introduction")
+        analysis = panel.get_by_role("button", name="Analysis", exact=True)
+        appendix = panel.get_by_role("button", name="<b>Appendix</b>")
+        disclosure = panel.get_by_role("button", name="Subsections of Analysis")
+        expect(sections).to_have_attribute("aria-expanded", "true")
+        expect(intro).to_have_attribute("aria-current", "location")
+        expect(appendix).to_be_hidden()
+        analysis.click()
+        expect(panel).to_be_hidden()
+        expect(page.locator("#pdf-position")).to_have_text("2 / 2")
+
+        sections.click()
+        expect(analysis).to_have_attribute("aria-current", "location")
+        disclosure.click()
+        appendix.click()
+        expect(panel).to_be_hidden()
+        sheet = page.get_by_role("region", name="Page 2")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        bounds = sheet.bounding_box()
+        assert bounds is not None
+        assert (12 - bounds["y"]) / bounds["height"] == pytest.approx(
+            232 / 792, abs=0.002
+        )
+        sections.click()
+        expect(appendix).to_have_attribute("aria-current", "location")
+
+        updated = site / "paper.tmp"
+        _ = updated.write_bytes(
+            fixture_pdf("Second page", outline_child="Revised appendix")
+        )
+        _ = updated.replace(pdf)
+        expect(panel.get_by_role("button", name="Revised appendix")).to_be_visible()
+        expect(disclosure).to_have_attribute("aria-expanded", "true")
+        expect(panel).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(panel).to_be_hidden()
+        expect(sections).to_be_focused()
+
+        sections.click()
+        overlay(page, "#gear").click()
+        expect(panel).to_be_hidden()
+        expect(overlay(page, "#panel")).to_be_visible()
+        sections.click()
+        expect(overlay(page, "#panel")).to_be_hidden()
+        page.mouse.click(10, 100)
+        expect(panel).to_be_hidden()
+
+        sections.click()
+        _ = updated.write_bytes(fixture_pdf("No outline"))
+        _ = updated.replace(pdf)
+        expect(sections).to_be_hidden()
+        expect(panel).to_be_hidden()
+        _ = updated.write_bytes(fixture_pdf("Outline again", outline_child="Appendix"))
+        _ = updated.replace(pdf)
+        expect(sections).to_be_visible()
+        expect(panel).to_be_hidden()
+
+
+def test_pdf_without_outline(tmp_path: Path, page: Page) -> None:
+    pdf = tmp_path / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page"))
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(page.locator("#jamparty-pdf-page-1")).to_have_attribute(
+            "data-rendered", "true"
+        )
+        expect(overlay(page, "#pdf-outline")).to_be_hidden()
+        expect(overlay(page, "#pdf-sections")).to_be_hidden()
+
+
 def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
     site = tmp_path / "build"
     site.mkdir()
@@ -88,6 +237,7 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         share(tmp_path, "serve", str(site)) as shared,
         join(tmp_path, shared) as joined,
     ):
+        page.set_viewport_size({"width": 848, "height": 720})
         url = f"{joined.url.rstrip('/')}/paper.PDF?review=1"
         response = page.goto(url)
         assert response is not None
@@ -97,10 +247,7 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
             "data-rendered", "true"
         )
 
-        page.locator("#pdf-zoom").select_option("1")
-        jump = page.locator("#pdf-page")
-        jump.fill("2")
-        jump.press("Tab")
+        scroll_to_page(page, 2)
         sheet = page.locator("#jamparty-pdf-page-2")
         expect(sheet).to_have_attribute("data-rendered", "true")
         expect(sheet.locator(".textLayer span")).to_have_text("Second page")
@@ -170,8 +317,6 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         _ = updated.write_bytes(fixture_pdf("Rebuilt page"))
         _ = updated.replace(pdf)
         expect(sheet.locator(".textLayer span")).to_have_text("Rebuilt page")
-        expect(jump).to_have_value("2")
-        expect(page.locator("#pdf-zoom")).to_have_value("1")
         assert float(page.evaluate("window.scrollY")) == pytest.approx(scroll, abs=2)
         expect(sheet.locator(".pdf-comment")).to_have_count(0)
         rebuilt = sheet.bounding_box()
@@ -185,7 +330,7 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         assert block_record["selectedText"] == "Rebuilt page"
 
         overlay(page, "#edit").click()
-        # Keep the draft marker through a document swap, zoom and scroll.
+        # Keep the draft marker through a document swap, resize and scroll.
         _ = sheet.locator(".textLayer span").evaluate("""node => {
           const range = document.createRange();
           range.selectNodeContents(node);
@@ -204,25 +349,16 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         _ = updated.replace(pdf)
         expect(sheet.locator(".textLayer span")).to_have_text("Third version")
         expect(page.locator(".pdf-draft")).to_have_count(1)
-        _ = page.locator("#pdf-zoom").evaluate("""select => {
-          select.value = "0.75";
-          select.dispatchEvent(new Event("change"));
-        }""")
+        page.set_viewport_size({"width": 644, "height": 720})
         _ = page.evaluate("window.scrollBy(0, 75)")
         expect(sheet.locator(".pdf-draft")).to_have_count(1)
         expect(field).to_have_value("Keep this draft")
         field.press("Escape")
         expect_selection_cleared(page)
-        for number in ("6", "2"):
-            jump.fill(number)
-            jump.press("Tab")
-            expect(page.locator(f"#jamparty-pdf-page-{number}")).to_have_attribute(
-                "data-rendered", "true"
-            )
-            if number == "6":
+        for number in (6, 2):
+            scroll_to_page(page, number)
+            if number == 6:
                 expect(sheet).not_to_have_attribute("data-rendered", "true")
-            # Typing in the page field moves the selection there, so only
-            # the viewer's own marks are checked.
             expect(
                 page.locator(".pdf-comment, .pdf-draft, .pdf-drag, .pdf-block-hover")
             ).to_have_count(0)
@@ -291,6 +427,141 @@ def test_pdf_dialog_clears_draft(
         expect_selection_cleared(page)
 
 
+@pytest.mark.parametrize("button", ["left", "right"])
+def test_pdf_click_comments(
+    tmp_path: Path, page: Page, button: Literal["left", "right"]
+) -> None:
+    pdf = tmp_path / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page"))
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        page.set_viewport_size({"width": 848, "height": 720})
+        _ = page.goto(joined.url)
+        sheet = page.locator("#jamparty-pdf-page-1")
+        text = sheet.locator(".textLayer span")
+        expect(text).to_have_text("First page")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        if button == "left":
+            overlay(page, "#edit").click()
+
+        bounds = sheet.bounding_box()
+        assert bounds is not None
+        x, y = bounds["x"], bounds["y"]
+        # At 100% zoom this is (4.5, 192) PDF points from the upper left.
+        if button == "left":
+            page.mouse.move(x + 5, y + 256)
+            page.mouse.down()
+            page.mouse.move(x + 6, y + 256)
+            page.mouse.up()
+        else:
+            page.mouse.click(x + 6, y + 256, button=button)
+        send_comment(page, "Review this point.")
+        [point] = recv_all(tmp_path)
+        assert point["pdf"] == {
+            "page": 1,
+            "box": {"x0": 0, "y0": 184, "x1": 12.5, "y1": 200},
+        }
+        assert "selectedText" not in point
+
+        block = text.bounding_box()
+        assert block is not None
+        page.mouse.click(
+            block["x"] + 5, block["y"] + block["height"] / 2, button=button
+        )
+        send_comment(page, "Review this block.")
+        [record] = recv_all(tmp_path)
+        assert record["selectedText"] == "First page"
+        anchor = record["pdf"]
+        assert isinstance(anchor, dict)
+        assert anchor["page"] == 1
+        block_bounds = anchor["box"]
+        assert isinstance(block_bounds, dict)
+        assert block_bounds["x0"] == 72
+        assert block_bounds["x1"] > 130
+
+        if button == "left":
+            # Place the gap between pages in the viewport.
+            _ = sheet.evaluate(
+                "node => window.scrollBy(0, node.getBoundingClientRect().bottom - 300)"
+            )
+            bounds = sheet.bounding_box()
+            assert bounds is not None
+            page.mouse.click(bounds["x"] + 100, bounds["y"] + bounds["height"] + 6)
+            expect(overlay(page, "#jamparty-dialog")).to_be_hidden()
+            expect(page.locator(".pdf-draft")).to_have_count(0)
+
+
+@pytest.mark.parametrize("button", ["left", "right"])
+@pytest.mark.parametrize("target", ["block", "point"])
+def test_pdf_click_comments_while_scrolling(
+    tmp_path: Path, page: Page, button: Literal["left", "right"], target: str
+) -> None:
+    pdf = tmp_path / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page"))
+    # Hold the next PDF.js text request after the initial render.
+    page.add_init_script("""
+        const post = Worker.prototype.postMessage;
+        Worker.prototype.postMessage = function (message, ...args) {
+            if (window.holdPdfText && message.action === "GetTextContent") {
+                window.holdPdfText = false;
+                window.releasePdfText = () => post.call(this, message, ...args);
+                return;
+            }
+            return post.call(this, message, ...args);
+        };
+    """)
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        page.set_viewport_size({"width": 848, "height": 720})
+        _ = page.goto(joined.url)
+        sheet = page.locator("#jamparty-pdf-page-1")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        if button == "left":
+            overlay(page, "#edit").click()
+        _ = page.evaluate("window.holdPdfText = true")
+
+        if target == "block":
+            bounds = sheet.locator(".textLayer span").bounding_box()
+            assert bounds is not None
+            x = bounds["x"] + 5
+            y = bounds["y"] + bounds["height"] / 2
+        else:
+            bounds = sheet.bounding_box()
+            assert bounds is not None
+            x, y = bounds["x"] + 6, bounds["y"] + 256
+        page.mouse.click(x, y, button=button)
+        _ = page.wait_for_function("typeof window.releasePdfText === 'function'")
+        expect(overlay(page, "#jamparty-dialog")).to_be_hidden()
+        _ = page.evaluate("""
+            () => new Promise(resolve => {
+                window.addEventListener("scroll", () => resolve(window.scrollY), { once: true });
+                window.scrollBy(0, 100);
+            })
+        """)
+        _ = page.evaluate("window.releasePdfText()")
+
+        send_comment(page, "Review the original location.")
+        [record] = recv_all(tmp_path)
+        if target == "block":
+            assert record["selectedText"] == "First page"
+            anchor = record["pdf"]
+            assert isinstance(anchor, dict)
+            assert anchor["page"] == 1
+            box = anchor["box"]
+            assert isinstance(box, dict)
+            assert box["x0"] == 72
+        else:
+            assert "selectedText" not in record
+            assert record["pdf"] == {
+                "page": 1,
+                "box": {"x0": 0, "y0": 184, "x1": 12.5, "y1": 200},
+            }
+
+
 def test_rotated_pdf_anchors(tmp_path: Path, page: Page) -> None:
     site = tmp_path / "build"
     site.mkdir()
@@ -313,8 +584,8 @@ def test_rotated_pdf_anchors(tmp_path: Path, page: Page) -> None:
         share(tmp_path, "serve", str(site)) as shared,
         join(tmp_path, shared) as joined,
     ):
+        page.set_viewport_size({"width": 685, "height": 720})
         _ = page.goto(f"{joined.url.rstrip('/')}/rotated.pdf")
-        page.locator("#pdf-zoom").select_option("1")
         sheet = page.locator("#jamparty-pdf-page-1")
         expect(sheet).to_have_attribute("data-rendered", "true")
         box = sheet.bounding_box()
@@ -585,15 +856,11 @@ def test_pdf_pages_load_on_demand(tmp_path: Path, page: Page) -> None:
         expect(page.locator("#jamparty-pdf-page-1")).to_have_attribute(
             "data-rendered", "true"
         )
-        expect(page.locator("#pdf-count")).to_have_text("of 100")
+        expect(page.locator(".pdf-page")).to_have_count(100)
         requests = page.locator("html").get_attribute("data-pdf-pages")
         assert requests is not None and "89" not in requests.split(",")
-        jump = page.locator("#pdf-page")
-        jump.fill("90")
-        jump.press("Tab")
-        expect(page.locator("#jamparty-pdf-page-90")).to_have_attribute(
-            "data-rendered", "true"
-        )
+        scroll_to_page(page, 90)
+        expect(page.locator("#pdf-position")).to_have_text("90 / 100")
         requests = page.locator("html").get_attribute("data-pdf-pages")
         assert requests is not None and "89" in requests.split(",")
 
@@ -601,11 +868,11 @@ def test_pdf_pages_load_on_demand(tmp_path: Path, page: Page) -> None:
         updated = site / "long.tmp"
         _ = updated.write_bytes(blank_pdf(101))
         _ = updated.replace(site / "long.pdf")
-        expect(page.locator("#pdf-count")).to_have_text("of 101")
+        expect(page.locator(".pdf-page")).to_have_count(101)
         expect(page.locator("#jamparty-pdf-page-90")).to_have_attribute(
             "data-rendered", "true"
         )
-        expect(jump).to_have_value("90")
+        expect(page.locator("#pdf-position")).to_have_text("90 / 101")
         requests = page.locator("html").get_attribute("data-pdf-pages")
         assert requests is not None
         assert "89" in requests.split(",") and "49" not in requests.split(",")
@@ -615,7 +882,7 @@ def test_pdf_pages_load_on_demand(tmp_path: Path, page: Page) -> None:
         expect(page.locator("#pdf-status")).to_have_text(
             "This PDF exceeds the 1000-page viewer limit."
         )
-        expect(page.locator("#pdf-count")).to_have_text("of 101")
+        expect(page.locator(".pdf-page")).to_have_count(101)
 
 
 def test_pdf_evicts_rendered_images(tmp_path: Path, page: Page) -> None:
@@ -663,13 +930,10 @@ def test_pdf_evicts_rendered_images(tmp_path: Path, page: Page) -> None:
         join(tmp_path, shared) as joined,
     ):
         _ = page.goto(f"{joined.url.rstrip('/')}/images.pdf")
-        jump = page.locator("#pdf-page")
         root = page.locator("html")
         for number in (1, 6, 1):
-            jump.fill(str(number))
-            jump.press("Tab")
+            scroll_to_page(page, number)
             sheet = page.locator(f"#jamparty-pdf-page-{number}")
-            expect(sheet).to_have_attribute("data-rendered", "true")
             assert sheet.locator("canvas").evaluate(
                 """canvas => Array.from(canvas.getContext('2d')
                     .getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data)"""
@@ -772,10 +1036,9 @@ def test_pdf_block_selection(tmp_path: Path, page: Page, tagged: bool) -> None:
         share(tmp_path, "serve", str(site)) as shared,
         join(tmp_path, shared) as joined,
     ):
+        page.set_viewport_size({"width": 632, "height": 720})
         _ = page.goto(f"{joined.url.rstrip('/')}/blocks.pdf")
         sheet = page.locator("#jamparty-pdf-page-1")
-        expect(sheet).to_have_attribute("data-rendered", "true")
-        page.locator("#pdf-zoom").select_option("0.75")
         expect(sheet).to_have_attribute("data-rendered", "true")
         box = sheet.bounding_box()
         assert box is not None
@@ -892,16 +1155,14 @@ def test_pdf_rebuild_reading_position(tmp_path: Path, page: Page, change: str) -
         share(tmp_path, "serve", str(site)) as shared,
         join(tmp_path, shared) as joined,
     ):
+        page.set_viewport_size({"width": 848, "height": 720})
         _ = page.goto(f"{joined.url.rstrip('/')}/reading.pdf")
-        page.locator("#pdf-zoom").select_option("1")
-        jump = page.locator("#pdf-page")
-        jump.fill(str(old_page))
-        jump.press("Tab")
+        scroll_to_page(page, old_page)
         sheet = page.locator(f"#jamparty-pdf-page-{old_page}")
         expect(sheet).to_have_attribute("data-rendered", "true")
         line = sheet.get_by_text(title, exact=True)
         _ = line.evaluate(
-            "line => window.scrollBy(0, line.getBoundingClientRect().top - 68)"
+            "line => window.scrollBy(0, line.getBoundingClientRect().top - 20)"
         )
         before = line.bounding_box()
         assert before is not None
@@ -931,16 +1192,18 @@ def test_pdf_rebuild_reading_position(tmp_path: Path, page: Page, change: str) -
                 revised_title if change == "page" else title, exact=True
             )
             expect(moved).to_be_visible()
-            expect(jump).to_have_value(destination)
+            expect(page.locator("#pdf-position")).to_have_text(
+                f"{destination} / {len(pages)}"
+            )
             after = moved.bounding_box()
             assert after is not None
             assert after["y"] == pytest.approx(before["y"], abs=2)
         elif change == "shrink":
-            expect(page.locator("#pdf-count")).to_have_text("of 10")
+            expect(page.locator(".pdf-page")).to_have_count(10)
             expect(page.locator("#jamparty-pdf-page-10")).to_have_attribute(
                 "data-rendered", "true"
             )
-            expect(jump).to_have_value("10")
+            expect(page.locator("#pdf-position")).to_have_text("10 / 10")
         elif change == "delete":
             expect(sheet.get_by_text("The original line was removed.")).to_be_visible()
             assert float(page.evaluate("window.scrollY")) == pytest.approx(

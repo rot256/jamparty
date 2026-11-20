@@ -5,6 +5,7 @@ import { samePage, selectedTextFor } from "./capture";
 import type { CommentDialog } from "./dialog";
 import type { OutboxEntry } from "./outbox";
 import type { PdfAnchor } from "./pdf-anchor";
+import { PdfOutline } from "./pdf-outline";
 import { PdfPage, placeRectangle, rectangle } from "./pdf-page";
 import { findReadingPosition } from "./pdf-reading-position";
 import type { Ui } from "./ui";
@@ -12,7 +13,6 @@ import type { Ui } from "./ui";
 interface ViewPosition {
   page: number;
   y: number;
-  x: number;
   offset?: number;
 }
 
@@ -26,6 +26,7 @@ interface Drag {
 }
 
 const DRAG_THRESHOLD = 3;
+const READING_EDGE = 12;
 
 const MAX_PDF_BYTES = 128 * 1024 * 1024;
 const MAX_PDF_PAGES = 1000;
@@ -67,10 +68,8 @@ async function readPdf(response: Response): Promise<Uint8Array> {
 
 export class PdfViewer {
   private readonly container = document.querySelector<HTMLElement>("#pdf-pages");
-  private readonly pageInput = document.querySelector<HTMLInputElement>("#pdf-page");
-  private readonly zoomInput = document.querySelector<HTMLSelectElement>("#pdf-zoom");
   private readonly status = document.querySelector<HTMLElement>("#pdf-status");
-  private readonly count = document.querySelector<HTMLElement>("#pdf-count");
+  private readonly indicator = document.querySelector<HTMLElement>("#pdf-position");
   private readonly pages = new Map<Element, PdfPage>();
   private readonly byNumber = new Map<number, PdfPage>();
   private readonly visible = new Set<PdfPage>();
@@ -92,15 +91,18 @@ export class PdfViewer {
   private requestedRevision = 0;
   private displayedRevision: number | null = null;
   private request: AbortController | null = null;
-  private zoom: number | "fit" = "fit";
+  private width = this.availableWidth();
+  private pixelRatio = this.renderRatio();
+  private indicatorTimer: number | undefined;
   private preview: OutboxEntry | null = null;
   private comments: readonly OutboxEntry[] = [];
+  private outline: PdfOutline | undefined;
   private dialog: CommentDialog | null = null;
   private drawing = false;
   private drag: Drag | null = null;
   private readonly hover = document.createElement("div");
   private hoverPoint: { page: PdfPage; x: number; y: number } | undefined;
-  private hoverRequest: Promise<void> | undefined;
+  private hoverRequest: Promise<boolean> | undefined;
   private gesture = 0;
   private draftMarker: { anchor: PdfAnchor; node: HTMLDivElement } | null = null;
   private readingRestore: { position: ViewPosition; x: number; y: number } | undefined;
@@ -108,34 +110,58 @@ export class PdfViewer {
 
   constructor() {
     GlobalWorkerOptions.workerSrc = "/_jamparty/pdf-worker.js";
-    this.pageInput?.addEventListener("change", () => {
-      const page = this.pageInput;
-      if (page === null) return;
-      const number = Math.max(1, Math.min(this.pages.size, Math.trunc(page.valueAsNumber) || 1));
-      this.byNumber.get(number)?.element.scrollIntoView({ block: "start", inline: "nearest" });
-      page.valueAsNumber = number;
-    });
-    this.zoomInput?.addEventListener("change", () => {
-      const value = this.zoomInput?.value;
-      const position = this.position();
-      this.readingRestore = undefined;
-      this.zoom = value === "fit" ? value : Number(value);
-      this.resize(position);
-    });
-    window.addEventListener("resize", () => {
-      this.readingRestore = undefined;
-      if (this.zoom === "fit") this.resize(this.position());
-    });
+    window.addEventListener("resize", this.updateViewport);
+    window.visualViewport?.addEventListener("resize", this.updateViewport);
+    this.watchResolution();
     window.addEventListener("scroll", () => {
       this.activeReadingRestore();
       this.scrollFrame ??= requestAnimationFrame(() => {
         this.scrollFrame = undefined;
-        if (this.pageInput !== null && document.activeElement !== this.pageInput) {
-          this.pageInput.valueAsNumber = this.position().page;
-        }
+        if (this.pages.size === 0) return;
+        this.updateIndicator();
+        this.indicator?.setAttribute("data-scrolling", "");
+        clearTimeout(this.indicatorTimer);
+        this.indicatorTimer = window.setTimeout(() => {
+          this.indicator?.removeAttribute("data-scrolling");
+        }, 1500);
       });
     }, { passive: true });
   }
+
+  private updateIndicator(): void {
+    const { page, y } = this.position();
+    if (this.indicator !== null) {
+      this.indicator.textContent = `${page} / ${this.pages.size}`;
+    }
+    this.outline?.update(page, y + 0.001, (destination) =>
+      this.byNumber.get(destination.page)?.destinationY(destination));
+
+  }
+
+  private renderRatio(): number {
+    return devicePixelRatio * (window.visualViewport?.scale ?? 1);
+  }
+
+  private watchResolution(): void {
+    matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener("change", () => {
+      this.updateViewport();
+      this.watchResolution();
+    }, { once: true });
+  }
+
+  private readonly updateViewport = (): void => {
+    const width = this.availableWidth();
+    const ratio = this.renderRatio();
+    if (width !== this.width) {
+      const position = this.position();
+      this.width = width;
+      this.readingRestore = undefined;
+      this.resize(position);
+    } else if (ratio !== this.pixelRatio) {
+      for (const page of this.visible) page.rerender();
+    }
+    this.pixelRatio = ratio;
+  };
 
   requestRevision(revision: number): void {
     if (revision <= this.requestedRevision) return;
@@ -195,10 +221,11 @@ export class PdfViewer {
           const page = this.byNumber.get(number);
           if (page === undefined || this.document !== loading) return;
           const position = this.activeReadingRestore() ?? this.position();
-          page.resize(this.zoom, this.availableWidth());
+          page.resize(this.width);
           this.drawComments();
           page.render();
           this.restorePosition(position);
+          this.updateIndicator();
         }, () => {
           if (this.hoverPoint?.page.number === number && this.document === loading) this.updateHover();
         });
@@ -210,6 +237,7 @@ export class PdfViewer {
       this.loading = null;
       this.document = loading;
       this.replacePages(pages, position);
+      this.outline?.setDocument(pdf);
       this.displayedRevision = revision;
       if (previous !== null) void previous.destroy();
       if (this.status !== null) this.status.textContent = "";
@@ -237,12 +265,12 @@ export class PdfViewer {
     const moved = (): boolean => window.scrollX !== x || window.scrollY !== y;
     const onScroll = (): void => { if (moved()) scroll.abort(); };
     window.addEventListener("scroll", onScroll, { passive: true });
-    const match = await findReadingPosition(page, this.scrollEdge(), pages,
+    const match = await findReadingPosition(page, READING_EDGE, pages,
       AbortSignal.any([signal, scroll.signal]))
       .catch(() => undefined)
       .finally(() => { window.removeEventListener("scroll", onScroll); });
     if (scroll.signal.aborted || moved()) return this.position();
-    return match === undefined ? position : { ...match, x: position.x };
+    return match ?? position;
   }
 
   private replacePages(pages: PdfPage[], position: ViewPosition): void {
@@ -263,16 +291,11 @@ export class PdfViewer {
     this.container?.replaceChildren(...this.pages.keys());
     this.resize(position);
     for (const page of this.pages.keys()) this.observer.observe(page);
-    if (this.count !== null) this.count.textContent = `of ${pages.length}`;
-    if (this.pageInput !== null) {
-      this.pageInput.max = String(pages.length);
-      this.pageInput.valueAsNumber = Math.min(position.page, pages.length);
-      this.pageInput.disabled = pages.length === 0;
-    }
+    this.updateIndicator();
   }
 
   private position(): ViewPosition {
-    const top = this.scrollEdge();
+    const top = READING_EDGE;
     // Page boxes are laid out from top to bottom with a fixed gap.
     let low = 1;
     let high = this.pages.size;
@@ -283,16 +306,11 @@ export class PdfViewer {
       else high = middle;
     }
     const rect = this.byNumber.get(low)?.element.getBoundingClientRect();
-    if (rect === undefined) return { page: 1, y: 0, x: 0 };
+    if (rect === undefined) return { page: 1, y: 0 };
     return {
       page: low,
       y: (top - rect.top) / rect.height,
-      x: Math.max(0, -rect.left / rect.width),
     };
-  }
-
-  private scrollEdge(): number {
-    return (document.querySelector("nav")?.getBoundingClientRect().bottom ?? 0) + 12;
   }
 
   private availableWidth(): number {
@@ -302,8 +320,7 @@ export class PdfViewer {
   private resize(position: ViewPosition): void {
     this.clearHover();
     this.gesture++;
-    const available = this.availableWidth();
-    for (const page of this.pages.values()) page.resize(this.zoom, available);
+    for (const page of this.pages.values()) page.resize(this.width);
     this.drawComments();
     for (const page of this.visible) page.render();
     this.restorePosition(position);
@@ -322,8 +339,7 @@ export class PdfViewer {
     const rect = this.byNumber.get(Math.min(position.page, this.pages.size))
       ?.element.getBoundingClientRect();
     if (rect !== undefined) {
-      window.scrollBy(position.x === 0 ? -window.scrollX : rect.left + position.x * rect.width,
-        rect.top + position.y * rect.height - this.scrollEdge() - (position.offset ?? 0));
+      window.scrollBy(0, rect.top + position.y * rect.height - READING_EDGE - (position.offset ?? 0));
       if (position.offset !== undefined) {
         // Unmeasured pages can resize above the matched line after the swap.
         // Keep targeting that line until the reader moves.
@@ -369,11 +385,20 @@ export class PdfViewer {
     }
   }
 
-  bind(ui: Ui, dialog: CommentDialog): void {
+  closeOutline(): void {
+    this.outline?.close();
+  }
+
+  bind(ui: Ui, dialog: CommentDialog, onOutlineOpen: () => void): void {
     this.dialog = dialog;
+    this.outline = new PdfOutline(ui, (page, y) => {
+      const position = { page, y, offset: 0 };
+      this.restorePosition(position);
+      this.updateIndicator();
+    }, () => { this.updateIndicator(); }, onOutlineOpen);
     this.hover.className = "pdf-block-hover";
-    ui.edit.setAttribute("aria-label", "Select a PDF block or draw a box");
-    ui.edit.title = "Select a PDF block or draw a box";
+    ui.edit.setAttribute("aria-label", "Comment on the PDF or draw a box");
+    ui.edit.title = "Comment on the PDF or draw a box";
     const setDrawing = (on: boolean): void => {
       this.drawing = on;
       ui.edit.setAttribute("aria-pressed", String(on));
@@ -386,6 +411,7 @@ export class PdfViewer {
     };
     ui.edit.addEventListener("click", () => { setDrawing(!this.drawing); });
     dialog.onOpen = ({ pdf: anchor }) => {
+      this.closeOutline();
       this.clearHover();
       if (anchor === undefined) return;
       const node = document.createElement("div");
@@ -399,16 +425,16 @@ export class PdfViewer {
       this.clearHover();
     };
     document.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape" || !this.drawing || dialog.open) return;
+      if (event.key !== "Escape" || event.defaultPrevented || !this.drawing || dialog.open) return;
       event.preventDefault();
       setDrawing(false);
     }, true);
     this.container?.addEventListener("pointerdown", (event) => {
       if (!this.drawing || dialog.open || !event.isPrimary || event.button !== 0) return;
+      this.gesture++;
       const page = this.pageFor(event.target);
       if (page === undefined) return;
       event.preventDefault();
-      this.gesture++;
       this.clearHover();
       page.element.setPointerCapture(event.pointerId);
       const outline = document.createElement("div");
@@ -431,7 +457,6 @@ export class PdfViewer {
     window.addEventListener("blur", () => { this.clearHover(); });
     window.addEventListener("scroll", () => {
       this.clearHover();
-      this.gesture++;
     }, { passive: true });
     this.container?.addEventListener("lostpointercapture", (event) => {
       if (this.drag?.id === event.pointerId) this.cancelDrag();
@@ -442,7 +467,7 @@ export class PdfViewer {
       this.moveDrag(event);
       this.cancelDrag();
       if (!drag.moved) {
-        this.selectBlock(drag.page, event.clientX, event.clientY);
+        this.selectAt(drag.page, event.clientX, event.clientY);
         return;
       }
       const anchor = drag.page.anchor(rectangle(drag.x, drag.y, event.clientX, event.clientY));
@@ -459,7 +484,8 @@ export class PdfViewer {
     const point = this.hoverPoint;
     if (point === undefined) return;
     const { page, x, y } = point;
-    const block = page.blockAt(x, y);
+    const pdfPoint = page.pdfPointAt(x, y);
+    const block = pdfPoint === undefined ? undefined : page.blockAt(pdfPoint);
     if (block === undefined) this.hover.remove();
     else page.mark(this.hover, block.anchor, page.element);
     const pending = page.prepareBlocks();
@@ -472,16 +498,21 @@ export class PdfViewer {
     });
   }
 
-  private selectBlock(page: PdfPage, x: number, y: number): void {
+  private selectAt(page: PdfPage, x: number, y: number): void {
+    const point = page.pdfPointAt(x, y);
+    if (point === undefined) return;
     const gesture = this.gesture;
     const select = (): void => {
       if (gesture !== this.gesture || !page.element.isConnected) return;
-      const block = page.blockAt(x, y);
-      if (block !== undefined) this.openComment(block.anchor, block.text, x, y);
+      const block = page.blockAt(point);
+      const anchor = block?.anchor ?? page.pointAnchor(point);
+      if (anchor !== undefined) this.openComment(anchor, block?.text ?? null, x, y);
     };
     const pending = page.prepareBlocks();
     if (pending === undefined) select();
-    else void pending.then(select);
+    else void pending.then((completed) => {
+      if (completed) select();
+    });
   }
 
   private pageFor(target: unknown): PdfPage | undefined {
@@ -509,6 +540,14 @@ export class PdfViewer {
     this.drag = null;
     drag.outline.remove();
     if (drag.page.element.hasPointerCapture(drag.id)) drag.page.element.releasePointerCapture(drag.id);
+  }
+
+  commentAtPointer(event: MouseEvent): boolean {
+    const page = this.pageFor(event.target);
+    if (page === undefined) return false;
+    this.gesture++;
+    if (!this.commentOnSelection(event)) this.selectAt(page, event.clientX, event.clientY);
+    return true;
   }
 
   commentOnSelection(event?: MouseEvent): boolean {
