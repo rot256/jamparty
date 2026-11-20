@@ -10,7 +10,7 @@ from test_answers import without_answer_timeout
 from test_pdf import fixture_pdf
 
 
-def drag(page: Page, handle: Locator, dx: int, dy: int) -> None:
+def start_drag(page: Page, handle: Locator, dx: int, dy: int) -> None:
     box = handle.bounding_box()
     assert box is not None
     x = box["x"] + box["width"] / 3
@@ -18,7 +18,77 @@ def drag(page: Page, handle: Locator, dx: int, dy: int) -> None:
     page.mouse.move(x, y)
     page.mouse.down()
     page.mouse.move(x + dx, y + dy, steps=8)
+
+
+def drag(page: Page, handle: Locator, dx: int, dy: int) -> None:
+    start_drag(page, handle, dx, dy)
     page.mouse.up()
+
+
+def expect_position(surface: Locator, x: float, y: float) -> None:
+    node = surface.element_handle()
+    try:
+        _ = surface.page.wait_for_function(
+            """({ node, x, y }) => {
+                const rect = node.getBoundingClientRect();
+                return Math.abs(rect.x - x) < 1 && Math.abs(rect.y - y) < 1;
+            }""",
+            arg={"node": node, "x": x, "y": y},
+        )
+    finally:
+        node.dispose()
+
+
+def cancel_drag(
+    page: Page, surface: Locator, handle: Locator, dx: int, dy: int
+) -> None:
+    start = surface.bounding_box()
+    assert start is not None
+    capture_handle = (
+        handle.locator("..") if handle.get_attribute("id") == "dialog-label" else handle
+    )
+    _ = capture_handle.evaluate("""node => {
+        node.addEventListener("pointerdown", event => {
+            node.dataset.testPointer = event.pointerId;
+        }, { once: true });
+    }""")
+    start_drag(page, handle, dx, dy)
+    expect_position(surface, start["x"] + dx, start["y"] + dy)
+    capture = "node => node.hasPointerCapture(Number(node.dataset.testPointer))"
+    assert capture_handle.evaluate(capture)
+    page.keyboard.press("Escape")
+    expect_position(surface, start["x"], start["y"])
+    assert not capture_handle.evaluate(capture)
+    page.mouse.move(10, 10)
+    page.mouse.up()
+    expect_position(surface, start["x"], start["y"])
+
+
+def move_with_keys(surface: Locator, next_focus: Locator) -> None:
+    move = surface.get_by_role("button", name="Move", exact=True)
+    expect(move).to_be_focused()
+    expect(move).to_have_css("outline-width", "2px")
+    start = surface.bounding_box()
+    assert start is not None
+    x, y = start["x"], start["y"]
+    move.press("ArrowLeft")
+    expect_position(surface, x - 16, y)
+    move.press("Shift+ArrowUp")
+    expect_position(surface, x - 16, y - 64)
+    move.press("Escape")
+    expect_position(surface, x, y)
+    move.press("ArrowLeft")
+    move.press("Enter")
+    expect_position(surface, x - 16, y)
+    move.press("ArrowLeft")
+    move.press("Escape")
+    expect_position(surface, x - 16, y)
+    move.press("ArrowUp")
+    next_focus.focus()
+    move.focus()
+    move.press("ArrowLeft")
+    move.press("Escape")
+    expect_position(surface, x - 16, y - 16)
 
 
 def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
@@ -56,15 +126,28 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
             "#name-dialog",
             "#jamparty-dialog",
         )
-        for selector in surfaces:
-            node = overlay(page, selector)
-            expect(node).to_have_css("background-color", "rgb(22, 22, 22)")
-            assert node.evaluate(
-                "(node) => getComputedStyle(node).fontFamily"
-            ).startswith("system-ui")
-        assert host.evaluate("(node) => getComputedStyle(node).fontFamily").startswith(
-            "system-ui"
+        computed = """node => {
+            const { color, backgroundColor, fontFamily } = getComputedStyle(node);
+            return [color, backgroundColor, fontFamily];
+        }"""
+        baseline = [overlay(page, selector).evaluate(computed) for selector in surfaces]
+        for _, background, font in baseline:
+            assert background == "rgb(22, 22, 22)"
+            assert font.startswith("system-ui")
+        _ = page.add_style_tag(
+            content="""
+            #jamparty {
+                --jp-text: transparent;
+                --jp-surface: lime;
+                --jp-font: monospace;
+                font: 32px Georgia, serif;
+            }
+        """
         )
+        expect(host).to_have_css("font-size", "32px")
+        assert [
+            overlay(page, selector).evaluate(computed) for selector in surfaces
+        ] == baseline
         _ = page.reload()
         expect(host).to_have_attribute("data-theme", "dark")
         expect(pill).to_have_css("background-color", "rgb(22, 22, 22)")
@@ -88,8 +171,8 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
 
         page.keyboard.press("/")
         field = overlay(page, "textarea")
-        field.fill("A draft whose position I can change.")
         expect(field).to_be_focused()
+        field.fill("A draft whose position I can change.")
         assert field.evaluate("(node) => getComputedStyle(node).fontFamily").startswith(
             "system-ui"
         )
@@ -98,6 +181,12 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
         expect(field).to_have_css("outline-width", "2px")
         expect(field).to_have_css("border-top-color", "rgba(0, 0, 0, 0)")
         dialog = overlay(page, "#jamparty-dialog")
+        cancel_drag(page, dialog, dialog.locator("#dialog-label"), -120, -80)
+        expect(dialog).to_be_visible()
+        expect(field).to_have_value("A draft whose position I can change.")
+        field.press("Shift+Tab")
+        move_with_keys(dialog, field)
+        field.focus()
         before = dialog.bounding_box()
         drag(page, overlay(page, "#dialog-label"), -170, -100)
         after = dialog.bounding_box()
@@ -184,6 +273,9 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
 
         check_link()
         original = link.get_attribute("d")
+        cancel_drag(page, answer, heading, 0, -80)
+        expect(link).to_have_attribute("d", original or "")
+        expect(answer).to_have_class("agent-message has-anchor")
         drag(page, heading, 0, -130)
         expect(link).not_to_have_attribute("d", original or "")
         moved = answer.bounding_box()
@@ -226,3 +318,41 @@ def test_page_comment_reply_has_no_missing_target(tmp_path: Path, page: Page) ->
         drag(page, answer.locator(".agent-header"), -100, -100)
         expect(answer).to_have_class("agent-message manually-placed")
         expect(answer.locator(".agent-unavailable")).to_be_hidden()
+
+
+def test_answer_keyboard_move_and_reveal(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "index.html"
+    _ = path.write_text(
+        '<main style="padding: 240px 40px 900px">'
+        '<h1 id="intro" style="width: 350px">Introduction</h1></main>'
+    )
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path,
+            "send",
+            "--at",
+            "#intro",
+            "--page",
+            "/index.html",
+            "See the intro.",
+        )
+        answer = overlay(page, ".agent-message")
+        expect(answer).to_have_attribute("tabindex", "0")
+        link = overlay(page, ".agent-anchor-line")
+        original = link.get_attribute("d")
+        answer.focus()
+        answer.press("Tab")
+        move_with_keys(answer, answer)
+        expect(link).not_to_have_attribute("d", original or "")
+        for key in ("Enter", "Space"):
+            _ = page.evaluate("window.scrollTo(0, 650)")
+            expect(page.locator("#intro")).not_to_be_in_viewport()
+            answer.focus()
+            answer.press(key)
+            expect(page.locator("#intro")).to_be_in_viewport()

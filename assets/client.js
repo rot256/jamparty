@@ -291,38 +291,107 @@ function fitPosition({ x, y }, width, height) {
     y: clamp(y, view.top, view.bottom - height)
   };
 }
-function dragBy(handle, surface, move) {
+var directions = {
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 }
+};
+function moveBy(handle, surface, move, savePlacement, before) {
+  const button = document.createElement("button");
+  button.className = "move-control";
+  button.type = "button";
+  button.setAttribute("aria-label", "Move");
+  button.title = "Move with arrow keys";
+  button.innerHTML = '<svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 3h0m4 0h0M4 7h0m4 0h0m-4 4h0m4 0h0"/></svg>';
+  handle.insertBefore(button, before ?? null);
   let drag;
+  let keyboard;
+  let restore;
+  const end = () => {
+    const id = drag?.id;
+    drag = void 0;
+    keyboard = void 0;
+    restore = void 0;
+    delete handle.dataset.dragging;
+    window.removeEventListener("keydown", escape, true);
+    if (id !== void 0 && handle.hasPointerCapture(id)) handle.releasePointerCapture(id);
+  };
+  function escape(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    restore?.();
+    end();
+  }
+  const begin = () => {
+    restore = savePlacement();
+    window.addEventListener("keydown", escape, true);
+  };
   handle.addEventListener("pointerdown", (event) => {
     if (!event.isPrimary || event.button !== 0 || drag !== void 0 || event.target instanceof Element && event.target.closest("button, a")) return;
-    const rect = surface.getBoundingClientRect();
+    end();
     drag = {
       id: event.pointerId,
       start: { x: event.clientX, y: event.clientY },
-      offset: { x: event.clientX - rect.left, y: event.clientY - rect.top },
+      rect: surface.getBoundingClientRect(),
       moved: false
     };
     event.preventDefault();
     handle.setPointerCapture(event.pointerId);
+    begin();
   });
   handle.addEventListener("pointermove", (event) => {
     if (drag?.id !== event.pointerId) return;
-    if (!drag.moved && Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y) < 4) return;
+    const x = event.clientX - drag.start.x;
+    const y = event.clientY - drag.start.y;
+    if (!drag.moved && Math.hypot(x, y) < 4) return;
     drag.moved = true;
     handle.dataset.dragging = "";
-    move(fitPosition(
-      { x: event.clientX - drag.offset.x, y: event.clientY - drag.offset.y },
-      surface.offsetWidth,
-      surface.offsetHeight
-    ));
+    move({ x: drag.rect.left + x, y: drag.rect.top + y }, drag.rect.width);
   });
   handle.addEventListener("click", (event) => {
     if (event.target === handle) event.stopPropagation();
   });
-  handle.addEventListener("lostpointercapture", () => {
-    drag = void 0;
-    delete handle.dataset.dragging;
+  handle.addEventListener("lostpointercapture", (event) => {
+    if (drag?.id === event.pointerId) end();
   });
+  const moveWithKeys = (event) => {
+    if (drag !== void 0 || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || !event.composedPath().includes(button)) return;
+    const direction = Object.hasOwn(directions, event.key) ? directions[event.key] : void 0;
+    if (direction === void 0 && (event.key !== "Enter" || keyboard === void 0)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (direction === void 0) {
+      end();
+      return;
+    }
+    if (keyboard === void 0) {
+      const rect2 = surface.getBoundingClientRect();
+      keyboard = { point: { x: rect2.left, y: rect2.top }, rect: rect2 };
+      begin();
+    }
+    const { point, rect } = keyboard;
+    const step = event.shiftKey ? 64 : 16;
+    keyboard.point = fitPosition(
+      { x: point.x + step * direction.x, y: point.y + step * direction.y },
+      rect.width,
+      rect.height
+    );
+    move(keyboard.point, rect.width);
+  };
+  const stopListening = () => {
+    window.removeEventListener("keydown", moveWithKeys, true);
+    if (keyboard !== void 0) end();
+  };
+  button.addEventListener("focus", () => {
+    window.addEventListener("keydown", moveWithKeys, true);
+  });
+  button.addEventListener("blur", stopListening);
+  return () => {
+    stopListening();
+    end();
+  };
 }
 
 // client/src/config.ts
@@ -748,18 +817,19 @@ var Answers = class {
       target,
       localAnchor,
       hasPlace: entry !== void 0,
-      heightAt
+      heightAt,
+      dropped: void 0,
+      endMove: moveBy(header, node, (point, width) => {
+        shown.dropped = { point, width: shown.dropped?.width ?? width };
+        this.schedulePlacement();
+      }, () => {
+        const previous = shown.dropped;
+        return () => {
+          shown.dropped = previous;
+          this.schedulePlacement();
+        };
+      }, close)
     };
-    dragBy(header, node, (point) => {
-      if (shown.dropped === void 0) {
-        const rect = node.getBoundingClientRect();
-        node.style.width = `${rect.width}px`;
-        node.classList.add("manually-placed");
-      }
-      shown.dropped = point;
-      this.positionMoved(shown);
-      this.schedulePlacement();
-    });
     this.shown.set(answer.id, shown);
     this.schedulePlacement();
   }
@@ -768,6 +838,7 @@ var Answers = class {
     if (this.recent.get(id)?.choices.length) this.recent.delete(id);
     const shown = this.shown.get(id);
     shown?.stopTimer?.();
+    shown?.endMove();
     shown?.node.remove();
     shown?.wrapper.remove();
     shown?.link.remove();
@@ -881,7 +952,6 @@ var Answers = class {
     let hovered;
     const fixed = /* @__PURE__ */ new Map();
     for (const entry of this.shown.values()) {
-      if (entry.dropped !== void 0) fixed.set(entry, this.positionMoved(entry));
       const local = entry.localAnchor();
       const target = entry.target();
       cards.set(entry.node, entry);
@@ -894,7 +964,15 @@ var Answers = class {
         entry.node.removeAttribute("aria-label");
       }
       if (target !== void 0) anchored.set(entry, target);
-      else this.placeGeneral(entry, local);
+      if (entry.dropped !== void 0) {
+        fixed.set(entry, this.positionMoved(entry.node, entry.dropped));
+      } else if (entry.node.classList.contains("manually-placed")) {
+        entry.node.classList.remove("manually-placed");
+        for (const property of ["left", "top", "width", "max-width", "max-height"]) {
+          entry.node.style.removeProperty(property);
+        }
+      }
+      if (target === void 0) this.placeGeneral(entry, local);
     }
     const preview = this.historyPreview;
     if (preview !== void 0) {
@@ -1010,17 +1088,17 @@ var Answers = class {
       if (entry.stopTimer === void 0) this.startTimer(entry);
     }
   }
-  positionMoved(entry) {
-    const { node, dropped } = entry;
-    if (dropped !== void 0) {
-      const view = answerViewport();
-      node.style.maxWidth = `${view.right - view.left}px`;
-      node.style.maxHeight = `${view.bottom - view.top}px`;
-      const point = fitPosition(dropped, node.offsetWidth, node.offsetHeight);
-      node.style.left = `${point.x}px`;
-      node.style.top = `${point.y}px`;
-    }
-    return node.getBoundingClientRect();
+  positionMoved(node, dropped) {
+    const view = answerViewport();
+    node.classList.add("manually-placed");
+    node.style.width = `${dropped.width}px`;
+    node.style.maxWidth = `${view.right - view.left}px`;
+    node.style.maxHeight = `${view.bottom - view.top}px`;
+    const { width, height } = node.getBoundingClientRect();
+    const point = fitPosition(dropped.point, width, height);
+    node.style.left = `${point.x}px`;
+    node.style.top = `${point.y}px`;
+    return { left: point.x, top: point.y, right: point.x + width, bottom: point.y + height };
   }
   placeGeneral(entry, unavailable) {
     if (entry.unavailable.hidden === unavailable) entry.unavailable.hidden = !unavailable;
@@ -1847,9 +1925,15 @@ var CommentDialog = class {
     this.ui = ui;
     this.outbox = outbox;
     const { dialog, form, textarea, cancel } = ui;
-    dragBy(ui.dialogLabel, dialog, (point) => {
+    const endMove = moveBy(ui.dialogHeader, dialog, (point) => {
       this.dropped = point;
       this.place();
+    }, () => {
+      const previous = this.dropped;
+      return () => {
+        this.dropped = previous;
+        this.place();
+      };
     });
     new ResizeObserver(() => {
       if (dialog.open) this.place();
@@ -1908,6 +1992,7 @@ var CommentDialog = class {
       if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) this.dismiss();
     });
     dialog.addEventListener("close", () => {
+      endMove();
       this.stopTracking();
       ui.highlight.style.display = "none";
     });
@@ -3313,11 +3398,14 @@ var dark = `
     --jp-shadow: 0 8px 24px rgb(0 0 0 / 26%);
   `;
 var styles = `
-  :host {
+  :host { all: initial; }
+
+  #overlay-root {
     all: initial;
+    display: contents;
     color-scheme: light;
     --jp-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-family: var(--jp-font) !important;
+    font-family: var(--jp-font);
     --jp-surface: #fff;
     --jp-field: #f6f7fa;
     --jp-hover: #e9edf4;
@@ -3346,9 +3434,9 @@ var styles = `
     font-size: 13px;
   }
 
-  :host([data-theme="dark"]) { ${dark} }
+  :host([data-theme="dark"]) #overlay-root { ${dark} }
   @media (prefers-color-scheme: dark) {
-    :host(:not([data-theme="light"])) { ${dark} }
+    :host(:not([data-theme="light"])) #overlay-root { ${dark} }
   }
 
   *, *::before, *::after { box-sizing: border-box; }
@@ -3931,12 +4019,28 @@ var styles = `
     margin: -2px -6px 2px 0;
   }
 
-  :is(.agent-header, #dialog-label) {
+  :is(.agent-header, #dialog-header) {
     cursor: grab;
     touch-action: none;
     user-select: none;
   }
   [data-dragging] { cursor: grabbing; }
+
+  .move-control {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 21px;
+    height: 21px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--jp-muted);
+  }
+
+  .move-control:hover { background: var(--jp-hover); }
+  .move-control:focus-visible { outline: 2px solid var(--jp-focus); }
 
   .agent-dismiss {
     flex: none;
@@ -4003,7 +4107,15 @@ var styles = `
     line-height: 1.3;
   }
 
-  #dialog-label { font-size: 14px; }
+  #dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  #dialog-label { font-size: 14px; margin: 0; flex: 1; }
 
   #selection-preview {
     margin: 0 0 10px;
@@ -4174,7 +4286,6 @@ var GEAR_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 
 var PEN_ICON = `<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5M3 21l5-1L21 7a2.1 2.1 0 0 0-5-5L3 15z"></path></svg>`;
 var PAPERCLIP_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-9 9a5 5 0 0 1-7-7l10-10a3.5 3.5 0 0 1 5 5L10 18a1.5 1.5 0 0 1-2-2l9-9"></path></svg>`;
 var MARKUP = `
-  <style>${styles}</style>
   <div id="cursors" aria-hidden="true"></div>
   <div id="highlight" aria-hidden="true"></div>
   <div id="edit-highlight" aria-hidden="true"></div>
@@ -4255,12 +4366,14 @@ var MARKUP = `
   </div>
   <dialog id="jamparty-dialog" aria-labelledby="dialog-label">
     <form>
-      <label id="dialog-label" for="comment">Comment:</label>
+      <header id="dialog-header">
+        <label id="dialog-label" for="comment">Comment:</label>
+      </header>
       <div id="selection-preview" hidden>
         <div id="selection-label">Selected text</div>
         <blockquote id="selection-text"></blockquote>
       </div>
-      <textarea id="comment" name="comment" maxlength="${MAX_COMMENT}" required></textarea>
+      <textarea id="comment" name="comment" autofocus maxlength="${MAX_COMMENT}" required></textarea>
       <ul id="attachments" aria-label="Attachments" hidden></ul>
       <input id="attachment-input" type="file" multiple hidden>
       <div id="missing-attachments" hidden>
@@ -4333,6 +4446,7 @@ var Ui = class _Ui {
   agentGeneral;
   agentAnchored;
   dialog;
+  dialogHeader;
   dialogLabel;
   form;
   selectionPreview;
@@ -4359,7 +4473,7 @@ var Ui = class _Ui {
     const host = document.createElement("div");
     host.id = HOST_ID;
     const shadow = host.attachShadow({ mode: "open" });
-    shadow.innerHTML = MARKUP;
+    shadow.innerHTML = `<style>${styles}</style><div id="overlay-root">${MARKUP}</div>`;
     document.body.append(host);
     return new _Ui(host, shadow);
   }
@@ -4408,6 +4522,7 @@ var Ui = class _Ui {
     this.agentGeneral = find("#agent-general", HTMLDivElement);
     this.agentAnchored = find("#agent-anchored", HTMLDivElement);
     this.dialog = find("#jamparty-dialog", HTMLDialogElement);
+    this.dialogHeader = find("#dialog-header", HTMLElement);
     this.dialogLabel = find("#dialog-label", HTMLLabelElement);
     this.form = find("#jamparty-dialog form", HTMLFormElement);
     this.selectionPreview = find("#selection-preview", HTMLDivElement);

@@ -3,7 +3,7 @@
 // written is kept as a draft (see draft.ts) and comes back after a reload;
 // once sent, it is the outbox's (sent again under its ref if need be).
 
-import { dragBy, fitPosition } from "./drag";
+import { moveBy, fitPosition } from "./drag";
 import type { Point } from "./drag";
 import { type Captured, captureTarget, capturePageTarget } from "./capture";
 import { AGENT_TARGET_PREFIX } from "./config";
@@ -51,9 +51,15 @@ export class CommentDialog {
     private readonly outbox: Outbox,
   ) {
     const { dialog, form, textarea, cancel } = ui;
-    dragBy(ui.dialogLabel, dialog, (point) => {
+    const endMove = moveBy(ui.dialogHeader, dialog, (point) => {
       this.dropped = point;
       this.place();
+    }, () => {
+      const previous = this.dropped;
+      return () => {
+        this.dropped = previous;
+        this.place();
+      };
     });
     new ResizeObserver(() => {
       if (dialog.open) this.place();
@@ -110,6 +116,7 @@ export class CommentDialog {
       ) this.dismiss();
     });
     dialog.addEventListener("close", () => {
+      endMove();
       this.stopTracking();
       ui.highlight.style.display = "none";
     });

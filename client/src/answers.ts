@@ -5,7 +5,7 @@ import { parsePlaceAnchor, placeElement } from "./answer-anchor";
 import { answerViewport, drawAnswerLink, nearestSide, placeAnswer, SVG_NS } from "./answer-placement";
 import type { Box, Placement } from "./answer-placement";
 import { samePage } from "./capture";
-import { dragBy, fitPosition } from "./drag";
+import { moveBy, fitPosition } from "./drag";
 import type { Point } from "./drag";
 import { AGENT_TARGET_PREFIX, DISMISSED_KEY } from "./config";
 import { MAX_ANSWERS } from "./generated/api";
@@ -18,7 +18,8 @@ interface Shown {
   wrapper: HTMLElement;
   marker: HTMLElement;
   link: SVGGElement;
-  dropped?: Point;
+  dropped: { point: Point; width: number } | undefined;
+  endMove: () => void;
   unavailable: HTMLElement;
   show: HTMLAnchorElement | null;
   target: () => Element | undefined;
@@ -432,17 +433,18 @@ export class Answers {
     };
     const shown: Shown = {
       node, wrapper, marker, link, unavailable, show, target, localAnchor, hasPlace: entry !== undefined, heightAt,
+      dropped: undefined,
+      endMove: moveBy(header, node, (point, width) => {
+        shown.dropped = { point, width: shown.dropped?.width ?? width };
+        this.schedulePlacement();
+      }, () => {
+        const previous = shown.dropped;
+        return () => {
+          shown.dropped = previous;
+          this.schedulePlacement();
+        };
+      }, close),
     };
-    dragBy(header, node, (point) => {
-      if (shown.dropped === undefined) {
-        const rect = node.getBoundingClientRect();
-        node.style.width = `${rect.width}px`;
-        node.classList.add("manually-placed");
-      }
-      shown.dropped = point;
-      this.positionMoved(shown);
-      this.schedulePlacement();
-    });
     this.shown.set(answer.id, shown);
     this.schedulePlacement();
   }
@@ -452,6 +454,7 @@ export class Answers {
     if (this.recent.get(id)?.choices.length) this.recent.delete(id);
     const shown = this.shown.get(id);
     shown?.stopTimer?.();
+    shown?.endMove();
     shown?.node.remove();
     shown?.wrapper.remove();
     shown?.link.remove();
@@ -564,7 +567,6 @@ export class Answers {
     let hovered: Element | undefined;
     const fixed = new Map<Shown, Box>();
     for (const entry of this.shown.values()) {
-      if (entry.dropped !== undefined) fixed.set(entry, this.positionMoved(entry));
       const local = entry.localAnchor();
       const target = entry.target();
       cards.set(entry.node, entry);
@@ -577,7 +579,15 @@ export class Answers {
         entry.node.removeAttribute("aria-label");
       }
       if (target !== undefined) anchored.set(entry, target);
-      else this.placeGeneral(entry, local);
+      if (entry.dropped !== undefined) {
+        fixed.set(entry, this.positionMoved(entry.node, entry.dropped));
+      } else if (entry.node.classList.contains("manually-placed")) {
+        entry.node.classList.remove("manually-placed");
+        for (const property of ["left", "top", "width", "max-width", "max-height"]) {
+          entry.node.style.removeProperty(property);
+        }
+      }
+      if (target === undefined) this.placeGeneral(entry, local);
     }
 
     const preview = this.historyPreview;
@@ -711,17 +721,17 @@ export class Answers {
     }
   }
 
-  private positionMoved(entry: Shown): Box {
-    const { node, dropped } = entry;
-    if (dropped !== undefined) {
-      const view = answerViewport();
-      node.style.maxWidth = `${view.right - view.left}px`;
-      node.style.maxHeight = `${view.bottom - view.top}px`;
-      const point = fitPosition(dropped, node.offsetWidth, node.offsetHeight);
-      node.style.left = `${point.x}px`;
-      node.style.top = `${point.y}px`;
-    }
-    return node.getBoundingClientRect();
+  private positionMoved(node: HTMLElement, dropped: NonNullable<Shown["dropped"]>): Box {
+    const view = answerViewport();
+    node.classList.add("manually-placed");
+    node.style.width = `${dropped.width}px`;
+    node.style.maxWidth = `${view.right - view.left}px`;
+    node.style.maxHeight = `${view.bottom - view.top}px`;
+    const { width, height } = node.getBoundingClientRect();
+    const point = fitPosition(dropped.point, width, height);
+    node.style.left = `${point.x}px`;
+    node.style.top = `${point.y}px`;
+    return { left: point.x, top: point.y, right: point.x + width, bottom: point.y + height };
   }
 
   private placeGeneral(entry: Shown, unavailable: boolean): void {

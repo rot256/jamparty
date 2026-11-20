@@ -18,11 +18,14 @@ const dark = `
   `;
 
 export const styles = `
-  :host {
+  :host { all: initial; }
+
+  #overlay-root {
     all: initial;
+    display: contents;
     color-scheme: light;
     --jp-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-family: var(--jp-font) !important;
+    font-family: var(--jp-font);
     --jp-surface: #fff;
     --jp-field: #f6f7fa;
     --jp-hover: #e9edf4;
@@ -51,9 +54,9 @@ export const styles = `
     font-size: 13px;
   }
 
-  :host([data-theme="dark"]) { ${dark} }
+  :host([data-theme="dark"]) #overlay-root { ${dark} }
   @media (prefers-color-scheme: dark) {
-    :host(:not([data-theme="light"])) { ${dark} }
+    :host(:not([data-theme="light"])) #overlay-root { ${dark} }
   }
 
   *, *::before, *::after { box-sizing: border-box; }
@@ -636,12 +639,28 @@ export const styles = `
     margin: -2px -6px 2px 0;
   }
 
-  :is(.agent-header, #dialog-label) {
+  :is(.agent-header, #dialog-header) {
     cursor: grab;
     touch-action: none;
     user-select: none;
   }
   [data-dragging] { cursor: grabbing; }
+
+  .move-control {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 21px;
+    height: 21px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--jp-muted);
+  }
+
+  .move-control:hover { background: var(--jp-hover); }
+  .move-control:focus-visible { outline: 2px solid var(--jp-focus); }
 
   .agent-dismiss {
     flex: none;
@@ -708,7 +727,15 @@ export const styles = `
     line-height: 1.3;
   }
 
-  #dialog-label { font-size: 14px; }
+  #dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  #dialog-label { font-size: 14px; margin: 0; flex: 1; }
 
   #selection-preview {
     margin: 0 0 10px;

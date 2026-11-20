@@ -13,34 +13,115 @@ export function fitPosition({ x, y }: Point, width: number, height: number): Poi
   };
 }
 
-export function dragBy(handle: HTMLElement, surface: HTMLElement, move: (point: Point) => void): void {
-  let drag: { id: number; offset: Point; start: Point; moved: boolean } | undefined;
+const directions: Readonly<Record<string, Point>> = {
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 },
+};
+
+/** Adds pointer dragging and a keyboard move control. Returns a cleanup for an active move. */
+export function moveBy(
+  handle: HTMLElement,
+  surface: HTMLElement,
+  move: (point: Point, width: number) => void,
+  savePlacement: () => () => void,
+  before?: HTMLElement,
+): () => void {
+  const button = document.createElement("button");
+  button.className = "move-control";
+  button.type = "button";
+  button.setAttribute("aria-label", "Move");
+  button.title = "Move with arrow keys";
+  button.innerHTML = '<svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 3h0m4 0h0M4 7h0m4 0h0m-4 4h0m4 0h0"/></svg>';
+  handle.insertBefore(button, before ?? null);
+
+  let drag: { id: number; start: Point; rect: DOMRect; moved: boolean } | undefined;
+  let keyboard: { point: Point; rect: DOMRect } | undefined;
+  let restore: (() => void) | undefined;
+
+  const end = (): void => {
+    const id = drag?.id;
+    drag = undefined;
+    keyboard = undefined;
+    restore = undefined;
+    delete handle.dataset.dragging;
+    window.removeEventListener("keydown", escape, true);
+    if (id !== undefined && handle.hasPointerCapture(id)) handle.releasePointerCapture(id);
+  };
+  function escape(event: KeyboardEvent): void {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    restore?.();
+    end();
+  }
+  const begin = (): void => {
+    restore = savePlacement();
+    window.addEventListener("keydown", escape, true);
+  };
+
   handle.addEventListener("pointerdown", (event) => {
     if (!event.isPrimary || event.button !== 0 || drag !== undefined ||
         (event.target instanceof Element && event.target.closest("button, a"))) return;
-    const rect = surface.getBoundingClientRect();
+    end();
     drag = {
       id: event.pointerId,
       start: { x: event.clientX, y: event.clientY },
-      offset: { x: event.clientX - rect.left, y: event.clientY - rect.top },
+      rect: surface.getBoundingClientRect(),
       moved: false,
     };
     event.preventDefault();
     handle.setPointerCapture(event.pointerId);
+    begin();
   });
   handle.addEventListener("pointermove", (event) => {
     if (drag?.id !== event.pointerId) return;
-    if (!drag.moved && Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y) < 4) return;
+    const x = event.clientX - drag.start.x;
+    const y = event.clientY - drag.start.y;
+    if (!drag.moved && Math.hypot(x, y) < 4) return;
     drag.moved = true;
     handle.dataset.dragging = "";
-    move(fitPosition({ x: event.clientX - drag.offset.x, y: event.clientY - drag.offset.y },
-      surface.offsetWidth, surface.offsetHeight));
+    move({ x: drag.rect.left + x, y: drag.rect.top + y }, drag.rect.width);
   });
   handle.addEventListener("click", (event) => {
     if (event.target === handle) event.stopPropagation();
   });
-  handle.addEventListener("lostpointercapture", () => {
-    drag = undefined;
-    delete handle.dataset.dragging;
+  handle.addEventListener("lostpointercapture", (event) => {
+    if (drag?.id === event.pointerId) end();
   });
+
+  const moveWithKeys = (event: KeyboardEvent): void => {
+    if (drag !== undefined || event.isComposing || event.altKey || event.ctrlKey || event.metaKey ||
+        !event.composedPath().includes(button)) return;
+    const direction = Object.hasOwn(directions, event.key) ? directions[event.key] : undefined;
+    if (direction === undefined && (event.key !== "Enter" || keyboard === undefined)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (direction === undefined) {
+      end();
+      return;
+    }
+    if (keyboard === undefined) {
+      const rect = surface.getBoundingClientRect();
+      keyboard = { point: { x: rect.left, y: rect.top }, rect };
+      begin();
+    }
+    const { point, rect } = keyboard;
+    const step = event.shiftKey ? 64 : 16;
+    keyboard.point = fitPosition({ x: point.x + step * direction.x, y: point.y + step * direction.y },
+      rect.width, rect.height);
+    move(keyboard.point, rect.width);
+  };
+  const stopListening = (): void => {
+    window.removeEventListener("keydown", moveWithKeys, true);
+    if (keyboard !== undefined) end();
+  };
+  // Focused move controls take arrows before configurable page-wide shortcuts.
+  button.addEventListener("focus", () => { window.addEventListener("keydown", moveWithKeys, true); });
+  button.addEventListener("blur", stopListening);
+  return () => {
+    stopListening();
+    end();
+  };
 }

@@ -14,7 +14,6 @@ const PEN_ICON = `<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24
 const PAPERCLIP_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-9 9a5 5 0 0 1-7-7l10-10a3.5 3.5 0 0 1 5 5L10 18a1.5 1.5 0 0 1-2-2l9-9"></path></svg>`;
 
 const MARKUP = `
-  <style>${styles}</style>
   <div id="cursors" aria-hidden="true"></div>
   <div id="highlight" aria-hidden="true"></div>
   <div id="edit-highlight" aria-hidden="true"></div>
@@ -95,12 +94,14 @@ const MARKUP = `
   </div>
   <dialog id="jamparty-dialog" aria-labelledby="dialog-label">
     <form>
-      <label id="dialog-label" for="comment">Comment:</label>
+      <header id="dialog-header">
+        <label id="dialog-label" for="comment">Comment:</label>
+      </header>
       <div id="selection-preview" hidden>
         <div id="selection-label">Selected text</div>
         <blockquote id="selection-text"></blockquote>
       </div>
-      <textarea id="comment" name="comment" maxlength="${MAX_COMMENT}" required></textarea>
+      <textarea id="comment" name="comment" autofocus maxlength="${MAX_COMMENT}" required></textarea>
       <ul id="attachments" aria-label="Attachments" hidden></ul>
       <input id="attachment-input" type="file" multiple hidden>
       <div id="missing-attachments" hidden>
@@ -174,6 +175,7 @@ export class Ui {
   readonly agentGeneral: HTMLDivElement;
   readonly agentAnchored: HTMLDivElement;
   readonly dialog: HTMLDialogElement;
+  readonly dialogHeader: HTMLElement;
   readonly dialogLabel: HTMLLabelElement;
   readonly form: HTMLFormElement;
   readonly selectionPreview: HTMLDivElement;
@@ -201,7 +203,7 @@ export class Ui {
     const host = document.createElement("div");
     host.id = HOST_ID;
     const shadow = host.attachShadow({ mode: "open" });
-    shadow.innerHTML = MARKUP;
+    shadow.innerHTML = `<style>${styles}</style><div id="overlay-root">${MARKUP}</div>`;
     document.body.append(host);
     return new Ui(host, shadow);
   }
@@ -251,6 +253,7 @@ export class Ui {
     this.agentGeneral = find("#agent-general", HTMLDivElement);
     this.agentAnchored = find("#agent-anchored", HTMLDivElement);
     this.dialog = find("#jamparty-dialog", HTMLDialogElement);
+    this.dialogHeader = find("#dialog-header", HTMLElement);
     this.dialogLabel = find("#dialog-label", HTMLLabelElement);
     this.form = find("#jamparty-dialog form", HTMLFormElement);
     this.selectionPreview = find("#selection-preview", HTMLDivElement);

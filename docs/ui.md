@@ -72,7 +72,10 @@ command only reminds the agent and never changes delivery status.
 
 - The text area shows one blue focus ring. Queue comment uses the primary
   blue button, with Cancel alongside. Drag the title with a pointer or
-  touch to move the dialog. It stays within the viewport for that edit.
+  touch to move the dialog. With focus on **Move**, arrow keys move it by
+  16 pixels (64 with Shift). Enter or moving focus keeps the placement.
+  Escape during a keyboard move or a drag restores the previous placement
+  and keeps the draft open. The dialog stays within the viewport for that edit.
 - Use the paperclip, paste files, or drop them into the dialog to attach up
   to four files of up to 8 MiB each. Each chip shows the name and size and
   has a remove button. Comment text is optional while a file is attached.
@@ -244,7 +247,8 @@ bar.
   target. A thin blue brace spans the target's edge facing the card,
   separated from the text. A curved line connects the brace's tip to a dot
   on the card. Hover or focus a card to darken its connector and tint its
-  target. Drag a card by its top row to move it with a pointer or touch.
+  target. Drag a card by its top row to move it with a pointer or touch,
+  or use the **Move** button with the same keys as in the comment dialog.
   It keeps its viewport position while scrolling, and its connector follows
   the target. This position lasts until dismissal or reload. On another
   page, place answers open in the general answer corner with a **Show** link.
