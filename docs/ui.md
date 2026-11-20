@@ -71,8 +71,9 @@ command only reminds the agent and never changes delivery status.
   finishes.
 
 - The text area shows one blue focus ring. Queue comment uses the primary
-  blue button, with Cancel alongside. Drag the title with a pointer or
-  touch to move the dialog. With focus on **Move**, arrow keys move it by
+  blue button, with Cancel alongside. Drag the shaded header with a pointer
+  or touch to move the dialog. With focus on the leading **Move** grip,
+  arrow keys move it by
   16 pixels (64 with Shift). Enter or moving focus keeps the placement.
   Escape during a keyboard move or a drag restores the previous placement
   and keeps the draft open. The dialog stays within the viewport for that edit.
@@ -247,8 +248,9 @@ bar.
   target. A thin blue brace spans the target's edge facing the card,
   separated from the text. A curved line connects the brace's tip to a dot
   on the card. Hover or focus a card to darken its connector and tint its
-  target. Drag a card by its top row to move it with a pointer or touch,
-  or use the **Move** button with the same keys as in the comment dialog.
+  target. Drag a card by its shaded header to move it with a pointer or
+  touch, or use the leading **Move** grip with the same keys as in the
+  comment dialog.
   Cards attached to places or comments keep their offset from the target.
   The card, brace and connector scroll with the target and go out of view
   with it. A manually chosen offset lasts until dismissal or reload, with

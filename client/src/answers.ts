@@ -491,7 +491,7 @@ export class Answers {
           shown.dropped = previous;
           this.schedulePlacement();
         };
-      }, close, () => {
+      }, () => {
         const rect = shown.placed?.target.getBoundingClientRect();
         return rect === undefined ? undefined : { x: rect.left, y: rect.top };
       }),

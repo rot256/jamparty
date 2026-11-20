@@ -164,10 +164,18 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
 
         _ = jamparty(tmp_path, "send", "A new answer.")
         answer = overlay(page, ".agent-message")
+        header = answer.locator(".agent-header")
+        grip = header.get_by_role("button", name="Move", exact=True)
+        expect(header.locator(":scope > :first-child")).to_have_attribute(
+            "aria-label", "Move"
+        )
+        expect(grip).to_have_css("width", "21px")
+        expect(header).to_have_css("background-color", "rgb(240, 243, 247)")
         expect(answer).to_have_css("background-color", "rgb(255, 255, 255)")
         gear.click()
         overlay(page, "button[data-theme=dark]").click()
         expect(answer).to_have_css("background-color", "rgb(22, 22, 22)")
+        expect(header).to_have_css("background-color", "rgb(36, 39, 45)")
         gear.click()
 
         page.keyboard.press("/")
@@ -182,6 +190,11 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
         expect(field).to_have_css("outline-width", "2px")
         expect(field).to_have_css("border-top-color", "rgba(0, 0, 0, 0)")
         dialog = overlay(page, "#jamparty-dialog")
+        title_bar = dialog.locator("#dialog-header")
+        expect(title_bar).to_have_css("background-color", "rgb(36, 39, 45)")
+        expect(title_bar.locator(":scope > :first-child")).to_have_attribute(
+            "aria-label", "Move"
+        )
         cancel_drag(page, dialog, dialog.locator("#dialog-label"), -120, -80)
         expect(dialog).to_be_visible()
         expect(field).to_have_value("A draft whose position I can change.")

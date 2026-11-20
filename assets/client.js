@@ -294,14 +294,14 @@ var directions = {
   ArrowUp: { x: 0, y: -1 },
   ArrowDown: { x: 0, y: 1 }
 };
-function moveBy(handle, surface, move, savePlacement, before, anchorOrigin) {
+function moveBy(handle, surface, move, savePlacement, anchorOrigin) {
   const button = document.createElement("button");
   button.className = "move-control";
   button.type = "button";
   button.setAttribute("aria-label", "Move");
   button.title = "Move with arrow keys";
   button.innerHTML = '<svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 3h0m4 0h0M4 7h0m4 0h0m-4 4h0m4 0h0"/></svg>';
-  handle.insertBefore(button, before ?? null);
+  handle.prepend(button);
   let drag;
   let keyboard;
   let restore;
@@ -326,7 +326,9 @@ function moveBy(handle, surface, move, savePlacement, before, anchorOrigin) {
     window.addEventListener("keydown", escape, true);
   };
   handle.addEventListener("pointerdown", (event) => {
-    if (!event.isPrimary || event.button !== 0 || drag !== void 0 || event.target instanceof Element && event.target.closest("button, a")) return;
+    const control = event.target instanceof Element ? event.target.closest("button, a") : null;
+    if (!event.isPrimary || event.button !== 0 || drag !== void 0 || control !== null && control !== button) return;
+    if (control === button) button.focus({ preventScroll: true });
     end();
     drag = {
       id: event.pointerId,
@@ -871,7 +873,7 @@ var Answers = class {
           shown.dropped = previous;
           this.schedulePlacement();
         };
-      }, close, () => {
+      }, () => {
         const rect = shown.placed?.target.getBoundingClientRect();
         return rect === void 0 ? void 0 : { x: rect.left, y: rect.top };
       })
@@ -3493,6 +3495,7 @@ var PageSocket = class {
 var dark = `
     color-scheme: dark;
     --jp-surface: #161616;
+    --jp-surface-header: #24272d;
     --jp-field: #202124;
     --jp-hover: #303338;
     --jp-border: #474b52;
@@ -3517,6 +3520,7 @@ var styles = `
     --jp-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-family: var(--jp-font);
     --jp-surface: #fff;
+    --jp-surface-header: #f0f3f7;
     --jp-field: #f6f7fa;
     --jp-hover: #e9edf4;
     --jp-border: #d5dbe5;
@@ -4127,16 +4131,17 @@ var styles = `
     outline-offset: 2px;
   }
 
-  .agent-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 21px;
-    gap: 6px;
-    margin: -2px -6px 2px 0;
-  }
+  .agent-header { margin: -7px -12px 8px; }
+  #dialog-header { margin: -14px -14px 12px; }
 
   :is(.agent-header, #dialog-header) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--jp-border);
+    border-radius: calc(var(--jp-radius) - 1px) calc(var(--jp-radius) - 1px) 0 0;
+    background: var(--jp-surface-header);
     cursor: grab;
     touch-action: none;
     user-select: none;
@@ -4154,9 +4159,12 @@ var styles = `
     border-radius: 4px;
     background: transparent;
     color: var(--jp-muted);
+    cursor: inherit;
   }
-
-  .move-control:hover { background: var(--jp-hover); }
+  .move-control:is(:hover, :focus-visible) {
+    background: var(--jp-hover);
+    color: var(--jp-text);
+  }
   .move-control:focus-visible { outline: 2px solid var(--jp-focus); }
 
   .agent-dismiss {
@@ -4222,14 +4230,6 @@ var styles = `
     margin-bottom: 8px;
     font-weight: 700;
     line-height: 1.3;
-  }
-
-  #dialog-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    margin-bottom: 8px;
   }
 
   #dialog-label { font-size: 14px; margin: 0; flex: 1; }

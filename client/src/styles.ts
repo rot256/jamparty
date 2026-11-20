@@ -2,6 +2,7 @@
 const dark = `
     color-scheme: dark;
     --jp-surface: #161616;
+    --jp-surface-header: #24272d;
     --jp-field: #202124;
     --jp-hover: #303338;
     --jp-border: #474b52;
@@ -27,6 +28,7 @@ export const styles = `
     --jp-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-family: var(--jp-font);
     --jp-surface: #fff;
+    --jp-surface-header: #f0f3f7;
     --jp-field: #f6f7fa;
     --jp-hover: #e9edf4;
     --jp-border: #d5dbe5;
@@ -637,16 +639,17 @@ export const styles = `
     outline-offset: 2px;
   }
 
-  .agent-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 21px;
-    gap: 6px;
-    margin: -2px -6px 2px 0;
-  }
+  .agent-header { margin: -7px -12px 8px; }
+  #dialog-header { margin: -14px -14px 12px; }
 
   :is(.agent-header, #dialog-header) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--jp-border);
+    border-radius: calc(var(--jp-radius) - 1px) calc(var(--jp-radius) - 1px) 0 0;
+    background: var(--jp-surface-header);
     cursor: grab;
     touch-action: none;
     user-select: none;
@@ -664,9 +667,12 @@ export const styles = `
     border-radius: 4px;
     background: transparent;
     color: var(--jp-muted);
+    cursor: inherit;
   }
-
-  .move-control:hover { background: var(--jp-hover); }
+  .move-control:is(:hover, :focus-visible) {
+    background: var(--jp-hover);
+    color: var(--jp-text);
+  }
   .move-control:focus-visible { outline: 2px solid var(--jp-focus); }
 
   .agent-dismiss {
@@ -732,14 +738,6 @@ export const styles = `
     margin-bottom: 8px;
     font-weight: 700;
     line-height: 1.3;
-  }
-
-  #dialog-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    margin-bottom: 8px;
   }
 
   #dialog-label { font-size: 14px; margin: 0; flex: 1; }

@@ -26,7 +26,6 @@ export function moveBy(
   surface: HTMLElement,
   move: (point: Point, width: number) => void,
   savePlacement: () => () => void,
-  before?: HTMLElement,
   anchorOrigin?: () => Point | undefined,
 ): () => void {
   const button = document.createElement("button");
@@ -35,7 +34,7 @@ export function moveBy(
   button.setAttribute("aria-label", "Move");
   button.title = "Move with arrow keys";
   button.innerHTML = '<svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 3h0m4 0h0M4 7h0m4 0h0m-4 4h0m4 0h0"/></svg>';
-  handle.insertBefore(button, before ?? null);
+  handle.prepend(button);
 
   let drag: { id: number; start: Point; rect: DOMRect; moved: boolean } | undefined;
   let keyboard: { point: Point; rect: DOMRect } | undefined;
@@ -63,8 +62,10 @@ export function moveBy(
   };
 
   handle.addEventListener("pointerdown", (event) => {
+    const control = event.target instanceof Element ? event.target.closest("button, a") : null;
     if (!event.isPrimary || event.button !== 0 || drag !== undefined ||
-        (event.target instanceof Element && event.target.closest("button, a"))) return;
+        (control !== null && control !== button)) return;
+    if (control === button) button.focus({ preventScroll: true });
     end();
     drag = {
       id: event.pointerId,
