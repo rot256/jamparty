@@ -271,20 +271,27 @@ async fn path_access(requested: &RequestedPath, root: &Path) -> Result<Access, R
     if !requested.is_directory {
         return Ok(Access::Redirect(directory_url(&requested.path)));
     }
-    match visible_entry(&path.join("index.html"), root).await {
-        Ok(Some((_, metadata))) if metadata.is_file() => Ok(Access::File),
+    match visible_child(&path, "index.html", root).await {
+        Ok(Some((_, metadata))) if metadata.is_file() => return Ok(Access::File),
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {}
+        Err(error) => return access_error(error),
+    }
+    // A directory that cannot be read is refused alike for GET and HEAD.
+    match fs::read_dir(&path).await {
         Ok(_) => Ok(Access::Listing(path)),
-        Err(error) if error.kind() == ErrorKind::PermissionDenied => Ok(Access::Listing(path)),
         Err(error) => access_error(error),
     }
 }
 
-/// Resolve visible entries before anyone opens them, including index files.
-pub(crate) async fn visible_entry(
-    path: &Path,
+/// Resolve the visible entry `name` in `directory`, a resolved directory of
+/// the share, before anyone opens it.
+pub(crate) async fn visible_child(
+    directory: &Path,
+    name: &str,
     root: &Path,
 ) -> io::Result<Option<(PathBuf, std::fs::Metadata)>> {
-    match checked_visible_entry(path, root).await {
+    match resolve(directory, Path::new(name), root).await {
         Err(error) if is_missing_path_error(&error) => Ok(None),
         result => result,
     }
@@ -297,13 +304,22 @@ async fn checked_visible_entry(
     let Ok(relative) = path.strip_prefix(root) else {
         return Ok(None);
     };
+    resolve(root, relative, root).await
+}
+
+/// Resolves `relative` beneath `base`, a resolved directory of the share.
+async fn resolve(
+    base: &Path,
+    relative: &Path,
+    root: &Path,
+) -> io::Result<Option<(PathBuf, std::fs::Metadata)>> {
     if has_hidden_component(relative) {
         return Ok(None);
     }
     // Resolve one component at a time, so a prefix leading out of the share
     // ends the lookup before anything beneath it is touched: nothing in an
     // excluded directory can answer differently by existing or not.
-    let mut path = root.to_path_buf();
+    let mut path = base.to_path_buf();
     for component in relative.components() {
         path.push(component);
         path = fs::canonicalize(&path).await?;
@@ -527,6 +543,31 @@ mod tests {
             get(&files, "/private.txt").await.status(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[tokio::test]
+    async fn unreadable_directories_are_refused_for_get_and_head() {
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let locked = root.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("child.txt"), "private").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let files = Files::new(root, None);
+
+        for method in [Method::GET, Method::HEAD] {
+            let request = Request::builder()
+                .method(&method)
+                .uri("/locked/")
+                .body(())
+                .unwrap();
+            let response = files.handle(request, Revision::default()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method}");
+        }
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[tokio::test]

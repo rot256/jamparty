@@ -14,7 +14,7 @@ use tokio::fs;
 
 use crate::{
     adapters::http::{AppBody, full_body},
-    share::files::{directory_url, encode_name, visible_entry},
+    share::files::{directory_url, encode_name, visible_child},
 };
 
 const MAX_ENTRIES: usize = 1_000;
@@ -58,7 +58,7 @@ async fn render(
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        let metadata = match visible_entry(&entry.path(), root).await {
+        let metadata = match visible_child(directory, &name, root).await {
             Ok(Some((_, metadata))) => metadata,
             Ok(None) => continue,
             Err(error) if error.kind() == ErrorKind::PermissionDenied => continue,
