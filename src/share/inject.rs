@@ -31,6 +31,25 @@ pub(crate) enum ClientMode {
     Live(Revision),
 }
 
+/// A missing static page stays subscribed so a later build can bring it back.
+pub(super) fn missing_page(method: &Method, revision: Revision) -> Response<AppBody> {
+    let body = if *method == Method::HEAD {
+        Bytes::new()
+    } else {
+        Bytes::from_static(
+            b"<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
+              <title>Page not found</title><body><h1>Page not found</h1></body></html>",
+        )
+    };
+    let mut response = Response::new(full_body(body));
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        header::HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    append_client(response, method, ClientMode::Live(revision))
+}
+
 pub(crate) async fn maybe_inject_client(
     response: Response<AppBody>,
     request_method: &Method,

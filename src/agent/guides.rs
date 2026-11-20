@@ -6,7 +6,7 @@ use clap::ValueEnum;
 pub(crate) const OVERVIEW: &str = "\
 jamparty shares a site with people who join from their own machine.
 
-  jamparty serve <dir>      share a static directory
+  jamparty serve <path>      share a file or static directory
   jamparty proxy <url>      share a running dev server
   jamparty join <token>     join a share
 
@@ -31,8 +31,7 @@ pub(crate) enum Kind {
     Other,
 }
 
-const SOURCES: &str =
-    "     jamparty serve <dir>      a static directory (pages reload when files change)
+const SOURCES: &str = "     jamparty serve <path>      a file or static directory with live reload
      jamparty proxy <url>      a running dev server, e.g. http://127.0.0.1:5173
 ";
 
@@ -43,10 +42,14 @@ const PREFER_SERVE: &str =
      hugo build --watch --destination <dir>
      vite build --watch --outDir <dir>
      npx @11ty/eleventy --watch --output=<dir>
-   For a LaTeX review, run `latexmk -pdf -pvc -synctex=1 -outdir=build paper.tex`
-   and share the build directory with `jamparty serve build`. Reviewers open
-   /paper.pdf in the joiner's browser. Keep the matching .synctex.gz for
-   source lookup when the PDF is regenerated.
+   For a LaTeX review, run these in separate terminals:
+     latexmk -pdf -pvc -view=none -synctex=1 -outdir=build paper.tex
+     jamparty serve build/paper.pdf
+   The joiner's start URL opens the PDF viewer. Latexmk tracks multi-file
+   projects, including \\input/\\include files, bibliography, and images.
+   Keep the matching SyncTeX output so `synctex edit` can report the included
+   source file and line. Share the PDF alone to keep build outputs such as
+   .log, .fls, and .synctex.gz private, as they can contain absolute paths.
    Proxy a dev server only when the site needs one (a backend, server-side
    rendering, or a tool that cannot build into a directory).
 ";
@@ -145,7 +148,7 @@ pub(crate) fn guide(kind: Kind) -> String {
             "jamparty for T3 Code",
             "\
 1. From the project directory, start the share as a background process:
-     jamparty serve <dir> -- t3 thread send \"$T3CODE_THREAD_ID\" -
+     jamparty serve <path> -- t3 thread send \"$T3CODE_THREAD_ID\" -
      jamparty proxy <url> -- t3 thread send \"$T3CODE_THREAD_ID\" -
    From a subagent, pass the top-level thread's id instead of your own.
    `t3 thread send` reads stdin and exits once the message is queued;
@@ -180,7 +183,7 @@ pub(crate) fn guide(kind: Kind) -> String {
             "jamparty for Codex",
             "\
 1. From the project directory, start the share so it outlives the command,
-   e.g. `nohup jamparty serve <dir> > \"${TMPDIR:-/tmp}/jamparty.log\" 2>&1 &`,
+   e.g. `nohup jamparty serve <path> > \"${TMPDIR:-/tmp}/jamparty.log\" 2>&1 &`,
    then read the log for the token:
 ",
             "\
@@ -247,7 +250,7 @@ mod tests {
         }
         let t3 = guide(Kind::T3);
         for needle in [
-            "jamparty serve <dir> -- t3 thread send \"$T3CODE_THREAD_ID\" -",
+            "jamparty serve <path> -- t3 thread send \"$T3CODE_THREAD_ID\" -",
             "jamparty proxy <url> -- t3 thread send",
             "top-level thread's id",
             "new turn",
@@ -263,6 +266,6 @@ mod tests {
         assert!(guide(Kind::Claude).contains("run_in_background"));
         assert!(guide(Kind::Other).contains("jamparty recv"));
         // The example commands stay indented under their step.
-        assert!(guide(Kind::Other).contains("\n     jamparty serve <dir>  "));
+        assert!(guide(Kind::Other).contains("\n     jamparty serve <path>  "));
     }
 }

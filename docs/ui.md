@@ -314,6 +314,13 @@ refused before parsing the rest. The NDJSON `version` remains 1.
 - Comment mode default: on (current behaviour) or off (opt in). Keep on
   until decided.
 
+## Static shares
+
+A shared directory opens its `index.html` when available. Otherwise it opens a
+file listing with links to subdirectories and files. The overlay and live
+reload work on listings as on other pages. A single-file share opens that file
+from the start URL.
+
 ## PDF viewer
 
 Opening a `.pdf` URL in the main browser tab opens the joiner's PDF viewer.
