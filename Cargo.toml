@@ -9,9 +9,10 @@ readme = "README.md"
 keywords = ["browser", "cli", "development", "feedback", "proxy"]
 categories = ["command-line-utilities", "development-tools", "web-programming::http-server"]
 publish = ["crates-io"]
-include = ["/assets", "/src", "/LICENSE", "/README.md"]
+include = ["/build.rs", "/assets", "/src", "/LICENSE", "/README.md"]
 
 [dependencies]
+brotli-decompressor = "5.0.3"
 bs58 = { version = "0.5.1", default-features = false }
 bytes = "1.12.1"
 clap = { version = "4.6.6", features = ["derive"] }
@@ -61,3 +62,13 @@ fn_params_excessive_bools = "warn"
 indexing_slicing = "warn"
 must_use_candidate = "warn"
 wildcard_enum_match_arm = "warn"
+
+[build-dependencies]
+brotli = "=8.0.4"
+
+# Quality 11 is expensive with an unoptimized build dependency.
+[profile.dev.package.brotli]
+opt-level = 3
+
+[profile.release.package.brotli]
+opt-level = 3
