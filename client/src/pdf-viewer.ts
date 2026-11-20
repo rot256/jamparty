@@ -5,6 +5,7 @@ import { samePage, selectedTextFor } from "./capture";
 import type { CommentDialog } from "./dialog";
 import type { OutboxEntry } from "./outbox";
 import type { PdfAnchor } from "./pdf-anchor";
+import { PdfOutline } from "./pdf-outline";
 import { PdfPage, placeRectangle, rectangle } from "./pdf-page";
 import { findReadingPosition } from "./pdf-reading-position";
 import type { Ui } from "./ui";
@@ -95,6 +96,7 @@ export class PdfViewer {
   private indicatorTimer: number | undefined;
   private preview: OutboxEntry | null = null;
   private comments: readonly OutboxEntry[] = [];
+  private outline: PdfOutline | undefined;
   private dialog: CommentDialog | null = null;
   private drawing = false;
   private drag: Drag | null = null;
@@ -127,9 +129,13 @@ export class PdfViewer {
   }
 
   private updateIndicator(): void {
+    const { page, y } = this.position();
     if (this.indicator !== null) {
-      this.indicator.textContent = `${this.position().page} / ${this.pages.size}`;
+      this.indicator.textContent = `${page} / ${this.pages.size}`;
     }
+    this.outline?.update(page, y + 0.001, (destination) =>
+      this.byNumber.get(destination.page)?.destinationY(destination));
+
   }
 
   private renderRatio(): number {
@@ -219,6 +225,7 @@ export class PdfViewer {
           this.drawComments();
           page.render();
           this.restorePosition(position);
+          this.updateIndicator();
         }, () => {
           if (this.hoverPoint?.page.number === number && this.document === loading) this.updateHover();
         });
@@ -230,6 +237,7 @@ export class PdfViewer {
       this.loading = null;
       this.document = loading;
       this.replacePages(pages, position);
+      this.outline?.setDocument(pdf);
       this.displayedRevision = revision;
       if (previous !== null) void previous.destroy();
       if (this.status !== null) this.status.textContent = "";
@@ -377,8 +385,17 @@ export class PdfViewer {
     }
   }
 
-  bind(ui: Ui, dialog: CommentDialog): void {
+  closeOutline(): void {
+    this.outline?.close();
+  }
+
+  bind(ui: Ui, dialog: CommentDialog, onOutlineOpen: () => void): void {
     this.dialog = dialog;
+    this.outline = new PdfOutline(ui, (page, y) => {
+      const position = { page, y, offset: 0 };
+      this.restorePosition(position);
+      this.updateIndicator();
+    }, () => { this.updateIndicator(); }, onOutlineOpen);
     this.hover.className = "pdf-block-hover";
     ui.edit.setAttribute("aria-label", "Comment on the PDF or draw a box");
     ui.edit.title = "Comment on the PDF or draw a box";
@@ -394,6 +411,7 @@ export class PdfViewer {
     };
     ui.edit.addEventListener("click", () => { setDrawing(!this.drawing); });
     dialog.onOpen = ({ pdf: anchor }) => {
+      this.closeOutline();
       this.clearHover();
       if (anchor === undefined) return;
       const node = document.createElement("div");
@@ -407,7 +425,7 @@ export class PdfViewer {
       this.clearHover();
     };
     document.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape" || !this.drawing || dialog.open) return;
+      if (event.key !== "Escape" || event.defaultPrevented || !this.drawing || dialog.open) return;
       event.preventDefault();
       setDrawing(false);
     }, true);

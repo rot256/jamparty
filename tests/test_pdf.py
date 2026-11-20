@@ -10,7 +10,9 @@ from playwright.sync_api import Page, Route, expect
 from support import SocketTap, jamparty, join, overlay, recv_all, share, waiting
 
 
-def fixture_pdf(label: str, padding: int = 0) -> bytes:
+def fixture_pdf(
+    label: str, padding: int = 0, *, outline_child: str | None = None
+) -> bytes:
     """Two letter-size pages with PDF-standard Helvetica and a valid xref."""
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -26,6 +28,22 @@ def fixture_pdf(label: str, padding: int = 0) -> bytes:
         stream = f"BT /F1 24 Tf 72 648 Td ({text}) Tj ET".encode()
         objects.append(
             f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
+        )
+    if outline_child is not None:
+        objects[0] = (
+            b"<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R "
+            b"/Dests << /appendix [4 0 R /XYZ null 560 null] >> >>"
+        )
+        objects.extend(
+            [
+                b"<< /Type /Outlines /First 9 0 R /Last 10 0 R /Count 3 >>",
+                b"<< /Title (Introduction) /Parent 8 0 R /Next 10 0 R /Dest [3 0 R /Fit] >>",
+                (
+                    b"<< /Title (Analysis) /Parent 8 0 R /Prev 9 0 R /First 11 0 R "
+                    b"/Last 11 0 R /Count 1 /Dest [4 0 R /Fit] >>"
+                ),
+                f"<< /Title ({outline_child}) /Parent 10 0 R /Dest /appendix >>".encode(),
+            ]
         )
     return make_pdf(objects, padding)
 
@@ -114,6 +132,99 @@ def test_pdf_fits_and_keeps_reading_position(tmp_path: Path, page: Page) -> None
             "document.documentElement.scrollWidth === document.documentElement.clientWidth"
         )
         expect(indicator).to_be_hidden()
+
+
+def test_pdf_outline(tmp_path: Path, page: Page) -> None:
+    site = tmp_path / "build"
+    site.mkdir()
+    pdf = site / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page", outline_child="<b>Appendix</b>"))
+    _ = (site / "index.html").write_text("<h1>Start page</h1>")
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#edit")).to_be_visible()
+        expect(overlay(page, "#pdf-outline")).to_have_count(0)
+        _ = page.goto(f"{joined.url.rstrip('/')}/paper.pdf")
+        sections = overlay(page, "#pdf-outline")
+        panel = overlay(page, "#pdf-sections")
+        expect(sections).to_be_visible()
+        expect(panel).to_be_hidden()
+        sections.click()
+
+        intro = panel.get_by_role("button", name="Introduction")
+        analysis = panel.get_by_role("button", name="Analysis", exact=True)
+        appendix = panel.get_by_role("button", name="<b>Appendix</b>")
+        disclosure = panel.get_by_role("button", name="Subsections of Analysis")
+        expect(sections).to_have_attribute("aria-expanded", "true")
+        expect(intro).to_have_attribute("aria-current", "location")
+        expect(appendix).to_be_hidden()
+        analysis.click()
+        expect(panel).to_be_hidden()
+        expect(page.locator("#pdf-position")).to_have_text("2 / 2")
+
+        sections.click()
+        expect(analysis).to_have_attribute("aria-current", "location")
+        disclosure.click()
+        appendix.click()
+        expect(panel).to_be_hidden()
+        sheet = page.get_by_role("region", name="Page 2")
+        expect(sheet).to_have_attribute("data-rendered", "true")
+        bounds = sheet.bounding_box()
+        assert bounds is not None
+        assert (12 - bounds["y"]) / bounds["height"] == pytest.approx(
+            232 / 792, abs=0.002
+        )
+        sections.click()
+        expect(appendix).to_have_attribute("aria-current", "location")
+
+        updated = site / "paper.tmp"
+        _ = updated.write_bytes(
+            fixture_pdf("Second page", outline_child="Revised appendix")
+        )
+        _ = updated.replace(pdf)
+        expect(panel.get_by_role("button", name="Revised appendix")).to_be_visible()
+        expect(disclosure).to_have_attribute("aria-expanded", "true")
+        expect(panel).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(panel).to_be_hidden()
+        expect(sections).to_be_focused()
+
+        sections.click()
+        overlay(page, "#gear").click()
+        expect(panel).to_be_hidden()
+        expect(overlay(page, "#panel")).to_be_visible()
+        sections.click()
+        expect(overlay(page, "#panel")).to_be_hidden()
+        page.mouse.click(10, 100)
+        expect(panel).to_be_hidden()
+
+        sections.click()
+        _ = updated.write_bytes(fixture_pdf("No outline"))
+        _ = updated.replace(pdf)
+        expect(sections).to_be_hidden()
+        expect(panel).to_be_hidden()
+        _ = updated.write_bytes(fixture_pdf("Outline again", outline_child="Appendix"))
+        _ = updated.replace(pdf)
+        expect(sections).to_be_visible()
+        expect(panel).to_be_hidden()
+
+
+def test_pdf_without_outline(tmp_path: Path, page: Page) -> None:
+    pdf = tmp_path / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page"))
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(page.locator("#jamparty-pdf-page-1")).to_have_attribute(
+            "data-rendered", "true"
+        )
+        expect(overlay(page, "#pdf-outline")).to_be_hidden()
+        expect(overlay(page, "#pdf-sections")).to_be_hidden()
 
 
 def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:

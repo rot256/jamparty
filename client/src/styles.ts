@@ -67,7 +67,7 @@ export const styles = `
   .dot[data-state="amber"] { background: #e8a33d; }
   .dot[data-state="grey"] { background: #9a958e; }
 
-  #gear, #edit {
+  #gear, #edit, #pdf-outline {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -82,7 +82,8 @@ export const styles = `
     cursor: pointer;
   }
 
-  #gear[aria-expanded="true"] { background: #2a2a2a; }
+  #pdf-outline[hidden] { display: none; }
+  #gear[aria-expanded="true"], #pdf-outline[aria-expanded="true"] { background: #2a2a2a; }
   #edit[aria-pressed="true"] { border-color: #2f80ed; background: #2f80ed; }
 
   #list {
@@ -199,7 +200,7 @@ export const styles = `
   }
 
 
-  #panel {
+  #panel, #pdf-sections {
     position: fixed;
     right: 14px;
     bottom: 58px;
@@ -214,7 +215,37 @@ export const styles = `
     font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
-  #panel[hidden] { display: none; }
+  #panel[hidden], #pdf-sections[hidden] { display: none; }
+
+  #pdf-sections {
+    width: min(320px, calc(100vw - 28px));
+    max-height: min(60vh, calc(100vh - 72px));
+    overflow: auto;
+    padding: 10px;
+  }
+
+  #pdf-sections h2 { margin: 0 6px 6px; font: inherit; font-weight: 600; }
+  #pdf-sections ul { list-style: none; padding: 0; margin: 0; }
+  #pdf-sections li > ul { margin-inline-start: 12px; }
+  .pdf-section-row { display: flex; align-items: flex-start; }
+  .pdf-section-row button {
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    padding: 5px 6px;
+    cursor: pointer;
+  }
+  .pdf-section-link { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .pdf-section-row button:disabled { color: #b8b2a9; cursor: default; }
+  .pdf-section-row button:not(:disabled):hover { background: #2a2a2a; }
+  .pdf-section-row button[aria-current="location"] { background: #263b56; }
+  :is(#pdf-outline, #pdf-sections button):focus-visible {
+    outline: 2px solid #91c4ff;
+    outline-offset: -2px;
+  }
 
   .control {
     display: flex;
@@ -244,13 +275,13 @@ export const styles = `
 
   /* The chosen corner (Panel sets data-corner on the host): what sits at
      the bottom right by default moves to that corner. */
-  :host([data-corner$="left"]) :is(#bar, #list, #panel, #toast, #agent-general) {
+  :host([data-corner$="left"]) :is(#bar, #list, #panel, #pdf-sections, #toast, #agent-general) {
     right: auto;
     left: 14px;
   }
 
   :host([data-corner^="top"]) :is(#bar, #list) { bottom: auto; top: 14px; }
-  :host([data-corner^="top"]) #panel { bottom: auto; top: 58px; }
+  :host([data-corner^="top"]) :is(#panel, #pdf-sections) { bottom: auto; top: 58px; }
   :host([data-corner^="top"]) :is(#toast, #agent-general) { bottom: auto; top: 52px; }
 
   .chip {

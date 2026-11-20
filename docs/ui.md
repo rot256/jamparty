@@ -342,10 +342,19 @@ from the start URL.
 ## PDF viewer
 
 Opening a `.pdf` URL in the main browser tab opens the joiner's PDF viewer.
+The viewer opens with just the pages and the jamparty command bar.
 Pages fit the window width up to a maximum of 960 pixels. Use the browser’s
 zoom controls to magnify them. Scrolling briefly shows the current page and
 page count. Loading, updating and errors appear in the same corner, away
 from the command bar.
+
+When a PDF has an outline, the sections button beside the pen opens it.
+Expand a section to see its subsections. The current section is highlighted, and clicking a
+section scrolls to its destination and closes the panel. Escape or a click
+outside also closes the panel. On rebuild, the viewer refreshes the outline
+and keeps matching sections expanded. The button appears only while the PDF
+has outline entries.
+
 As with other pages from a share, a complex or hostile PDF can slow down
 or crash the viewer tab.
 Select text and right-click the selection or press `/` to comment on it.

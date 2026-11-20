@@ -5,6 +5,7 @@ import type { PDFOperatorList } from "pdfjs-dist/types/src/display/api";
 import { parsePdfAnchor, type PdfAnchor } from "./pdf-anchor";
 import { detectPdfBlocks, readRuns, type PdfBlock } from "./pdf-blocks";
 import { linesFor, type Bounds, type Run } from "./pdf-layout";
+import { destinationY, type PdfDestination } from "./pdf-outline";
 
 interface Rectangle {
   left: number;
@@ -235,6 +236,10 @@ export class PdfPage {
     if (best === undefined) return;
     const anchor = this.pdfAnchor(best.bounds);
     return anchor === undefined ? undefined : { anchor, text: best.text };
+  }
+
+  destinationY(destination: PdfDestination): number | undefined {
+    return this.page === null ? undefined : destinationY(this.natural, destination);
   }
 
   pointAnchor([px, py]: [number, number]): PdfAnchor | undefined {

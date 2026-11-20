@@ -71,7 +71,10 @@ export function install(pdf?: PdfViewer): void {
   );
   const layer = new CursorLayer(ui);
   const editMode = pdf === undefined ? new EditMode(ui, dialog) : null;
-  pdf?.bind(ui, dialog);
+  pdf?.bind(ui, dialog, () => {
+    panel.close();
+    list.close();
+  });
   if (editMode !== null) {
     dialog.onOpen = () => { editMode.clearHover(); };
     editMode.onPagePress = () => {
@@ -109,8 +112,14 @@ export function install(pdf?: PdfViewer): void {
       list.close();
     }
   };
-  list.onOpen = () => { panel.close(); };
-  panel.onOpen = () => { list.close(); };
+  list.onOpen = () => {
+    panel.close();
+    pdf?.closeOutline();
+  };
+  panel.onOpen = () => {
+    list.close();
+    pdf?.closeOutline();
+  };
   outbox.onChange = () => {
     list.render();
     pdf?.showComments(outbox.entries);
