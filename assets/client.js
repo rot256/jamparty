@@ -83,7 +83,9 @@ function placeAnswer(heightAt, view, target, page, occupied) {
     { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - GAP) } }
   ];
   for (const allowClipping of [false, true]) {
-    for (const { side, area } of bands) {
+    let margin;
+    for (const [index, { side, area }] of bands.entries()) {
+      if (index === 2 && page !== void 0 && margin !== void 0) return margin.placement;
       const width = Math.min(MAX_WIDTH, Math.floor(area.right - area.left));
       if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
       const height = heightAt(width);
@@ -121,7 +123,9 @@ function placeAnswer(heightAt, view, target, page, occupied) {
           }
         }
       }
-      if (best !== void 0) return best.placement;
+      if (best === void 0) continue;
+      if (page === void 0 || index >= 2) return best.placement;
+      if (margin === void 0 || best.score < margin.score) margin = best;
     }
   }
   return void 0;
@@ -132,29 +136,51 @@ function drawBox(node, box) {
   node.style.width = `${box.right - box.left}px`;
   node.style.height = `${box.bottom - box.top}px`;
 }
-function drawAnswerLink(marker, line, view, target, { side, box }) {
-  const horizontal = side === "right" || side === "left";
+var SVG_NS = "http://www.w3.org/2000/svg";
+function nearestSide(target, card) {
+  const dx = (card.left + card.right - target.left - target.right) / 2;
+  const dy = (card.top + card.bottom - target.top - target.bottom) / 2;
+  const horizontalGap = Math.max(card.left - target.right, target.left - card.right);
+  const verticalGap = Math.max(card.top - target.bottom, target.top - card.bottom);
+  if (horizontalGap < 0 && verticalGap < 0 ? Math.abs(dx) >= Math.abs(dy) : horizontalGap >= verticalGap) {
+    return dx >= 0 ? "right" : "left";
+  }
+  return dy >= 0 ? "below" : "above";
+}
+function drawAnswerLink(marker, link, view, target, { side, box }) {
   marker.hidden = target.bottom <= view.top || target.top >= view.bottom || target.right <= view.left || target.left >= view.right;
-  line.hidden = marker.hidden;
+  link.toggleAttribute("hidden", marker.hidden);
   if (marker.hidden) return;
-  const edge = {
-    right: { x: target.right + 3, y: box.top + 16 },
-    left: { x: target.left - 3, y: box.top + 16 },
-    below: { x: box.left + 16, y: target.bottom + 3 },
-    above: { x: box.left + 16, y: target.top - 3 }
-  }[side];
-  const x = clamp(edge.x, Math.max(view.left, target.left), Math.min(view.right, target.right));
-  const y = clamp(edge.y, Math.max(view.top, target.top), Math.min(view.bottom, target.bottom));
-  const fromX = horizontal ? edge.x : x;
-  const fromY = horizontal ? y : edge.y;
-  const toX = horizontal ? side === "right" ? box.left : box.right : clamp(x, box.left + 8, box.right - 8);
-  const toY = horizontal ? clamp(y, box.top + 8, box.bottom - 8) : side === "below" ? box.top : box.bottom;
+  const horizontal = side === "right" || side === "left";
+  const sign = side === "right" || side === "below" ? 1 : -1;
+  const edge = { right: target.right, left: target.left, below: target.bottom, above: target.top }[side];
+  const start = horizontal ? target.top : target.left;
+  const end = horizontal ? target.bottom : target.right;
+  const span = end - start;
+  const mid = (start + end) / 2;
+  const base = edge + sign * 7;
+  const destination = { right: box.left, left: box.right, below: box.top, above: box.bottom }[side];
+  const depth = Math.min(9, Math.max(2, (destination - base) * sign - 2), Math.max(4, span / 5));
+  const point = (outward, along2) => horizontal ? `${outward},${along2}` : `${along2},${outward}`;
+  const waist = base + sign * depth / 2;
+  const tip = base + sign * depth;
+  const [brace, curve, dot] = link.children;
+  brace?.setAttribute("d", [
+    `M ${point(base, start)}`,
+    `C ${point(waist, start)} ${point(waist, start + span * 0.14)} ${point(waist, start + span * 0.25)}`,
+    `C ${point(waist, mid - span * 0.08)} ${point(waist, mid)} ${point(tip, mid)}`,
+    `C ${point(waist, mid)} ${point(waist, mid + span * 0.08)} ${point(waist, end - span * 0.25)}`,
+    `C ${point(waist, end - span * 0.14)} ${point(waist, end)} ${point(base, end)}`
+  ].join(" "));
+  const near = horizontal ? box.top : box.left;
+  const far = horizontal ? box.bottom : box.right;
+  const along = clamp(mid, near + 10, far - 10);
+  const bend = (tip + destination) / 2;
+  curve?.setAttribute("d", `M ${point(tip, mid)} C ${point(bend, mid)} ${point(bend, along)} ${point(destination, along)}`);
+  dot?.setAttribute("cx", String(horizontal ? destination : along));
+  dot?.setAttribute("cy", String(horizontal ? along : destination));
   marker.dataset.side = side;
   drawBox(marker, target);
-  line.style.left = `${fromX}px`;
-  line.style.top = `${fromY}px`;
-  line.style.width = `${Math.hypot(toX - fromX, toY - fromY)}px`;
-  line.style.transform = `rotate(${Math.atan2(toY - fromY, toX - fromX)}rad)`;
 }
 
 // client/src/generated/api.ts
@@ -250,6 +276,48 @@ function samePage(page) {
   }
 }
 
+// client/src/drag.ts
+function fitPosition({ x, y }, width, height) {
+  const view = answerViewport();
+  return {
+    x: clamp(x, view.left, view.right - width),
+    y: clamp(y, view.top, view.bottom - height)
+  };
+}
+function dragBy(handle, surface, move) {
+  let drag;
+  handle.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0 || drag !== void 0 || event.target instanceof Element && event.target.closest("button, a")) return;
+    const rect = surface.getBoundingClientRect();
+    drag = {
+      id: event.pointerId,
+      start: { x: event.clientX, y: event.clientY },
+      offset: { x: event.clientX - rect.left, y: event.clientY - rect.top },
+      moved: false
+    };
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (drag?.id !== event.pointerId) return;
+    if (!drag.moved && Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y) < 4) return;
+    drag.moved = true;
+    handle.dataset.dragging = "";
+    move(fitPosition(
+      { x: event.clientX - drag.offset.x, y: event.clientY - drag.offset.y },
+      surface.offsetWidth,
+      surface.offsetHeight
+    ));
+  });
+  handle.addEventListener("click", (event) => {
+    if (event.target === handle) event.stopPropagation();
+  });
+  handle.addEventListener("lostpointercapture", () => {
+    drag = void 0;
+    delete handle.dataset.dragging;
+  });
+}
+
 // client/src/config.ts
 var SCRIPT_URL = new URL(import.meta.url);
 var BASE = new URL("./", SCRIPT_URL);
@@ -291,6 +359,17 @@ var PALETTE = [
 ];
 
 // client/src/answers.ts
+function makeLink() {
+  const link = document.createElementNS(SVG_NS, "g");
+  const brace = document.createElementNS(SVG_NS, "path");
+  brace.classList.add("agent-anchor-brace");
+  const curve = document.createElementNS(SVG_NS, "path");
+  curve.classList.add("agent-anchor-line");
+  const dot = document.createElementNS(SVG_NS, "circle");
+  dot.setAttribute("r", "2.3");
+  link.append(brace, curve, dot);
+  return link;
+}
 var REVEAL_KEY = "jamparty-answer-reveal";
 var REVEAL_TTL_MS = 3e4;
 function takeReveal() {
@@ -329,6 +408,9 @@ var Answers = class {
     this.geometry.observe(ui.bar);
     this.geometry.observe(ui.panel);
     this.geometry.observe(ui.agentGeneral);
+    this.links.classList.add("agent-anchor-layer");
+    this.links.setAttribute("aria-hidden", "true");
+    ui.agentAnchored.prepend(this.links);
     window.visualViewport?.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("scroll", schedule);
     window.addEventListener("resize", schedule);
@@ -489,6 +571,7 @@ var Answers = class {
       this.schedulePlacement();
     });
   }
+  links = document.createElementNS(SVG_NS, "svg");
   show(answer) {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
     for (const id of this.shown.keys()) {
@@ -512,7 +595,10 @@ var Answers = class {
     unavailable.className = "agent-unavailable";
     unavailable.textContent = "Target unavailable";
     unavailable.hidden = true;
-    node.append(close, to, body, unavailable);
+    const header = document.createElement("header");
+    header.className = "agent-header";
+    header.append(to, close);
+    node.append(header, body, unavailable);
     const options = document.createElement("div");
     options.className = "agent-choices";
     for (const choice of answer.choices) {
@@ -599,10 +685,14 @@ var Answers = class {
     const marker = document.createElement("div");
     marker.className = "agent-anchor-marker";
     marker.setAttribute("aria-hidden", "true");
-    const line = document.createElement("div");
-    line.className = "agent-anchor-line";
-    line.setAttribute("aria-hidden", "true");
-    wrapper.append(marker, line);
+    const link = makeLink();
+    link.dataset.answerId = answer.id;
+    wrapper.append(marker);
+    for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
+      node.addEventListener(event, () => {
+        this.schedulePlacement();
+      });
+    }
     const heights = /* @__PURE__ */ new Map();
     const heightAt = (width) => {
       const cached = heights.get(width);
@@ -631,7 +721,7 @@ var Answers = class {
       node,
       wrapper,
       marker,
-      line,
+      link,
       unavailable,
       show,
       target,
@@ -639,6 +729,16 @@ var Answers = class {
       hasPlace: entry !== void 0,
       heightAt
     };
+    dragBy(header, node, (point) => {
+      if (shown.dropped === void 0) {
+        const rect = node.getBoundingClientRect();
+        node.style.width = `${rect.width}px`;
+        node.classList.add("manually-placed");
+      }
+      shown.dropped = point;
+      this.positionMoved(shown);
+      this.schedulePlacement();
+    });
     this.shown.set(answer.id, shown);
     this.schedulePlacement();
   }
@@ -649,6 +749,7 @@ var Answers = class {
     shown?.stopTimer?.();
     shown?.node.remove();
     shown?.wrapper.remove();
+    shown?.link.remove();
     this.shown.delete(id);
     this.prunePlaces();
     this.schedulePlacement();
@@ -757,7 +858,9 @@ var Answers = class {
     const anchored = /* @__PURE__ */ new Map();
     const cards = /* @__PURE__ */ new Map();
     let hovered;
+    const fixed = /* @__PURE__ */ new Map();
     for (const entry of this.shown.values()) {
+      if (entry.dropped !== void 0) fixed.set(entry, this.positionMoved(entry));
       const local = entry.localAnchor();
       const target = entry.target();
       cards.set(entry.node, entry);
@@ -806,6 +909,7 @@ var Answers = class {
       ...this.pdf === void 0 ? [] : document.querySelectorAll("#pdf-feedback > :not(:empty)")
     ];
     const occupied = obstacles.filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible").map((node) => node.getBoundingClientRect());
+    occupied.push(...fixed.values());
     const targets = new Set(anchored.values());
     for (const target of this.observedTargets) if (!targets.has(target)) this.geometry.unobserve(target);
     for (const target of targets) if (!this.observedTargets.has(target)) this.geometry.observe(target);
@@ -822,7 +926,7 @@ var Answers = class {
       if (page !== null) pages.set(target, page.getBoundingClientRect());
     }
     const general = new Map(
-      Array.from(agentGeneral.children, (node) => [node, node.getBoundingClientRect()])
+      Array.from(agentGeneral.children).filter((node) => !node.classList.contains("manually-placed")).map((node) => [node, node.getBoundingClientRect()])
     );
     const pending = new Set(anchored.keys());
     const placements = /* @__PURE__ */ new Map();
@@ -835,7 +939,8 @@ var Answers = class {
       const rect = targetBoxes.get(target);
       const previous = general.get(entry.node);
       general.delete(entry.node);
-      const placement = rect === void 0 ? void 0 : placeAnswer(entry.heightAt, view, rect, pages.get(target), [
+      const moved = fixed.get(entry);
+      const placement = rect === void 0 ? void 0 : moved !== void 0 ? { box: moved, side: nearestSide(rect, moved), maxHeight: view.bottom - view.top } : placeAnswer(entry.heightAt, view, rect, pages.get(target), [
         ...occupied,
         ...general.values(),
         ...Array.from(targetBoxes.values()).filter((box) => box !== rect)
@@ -855,7 +960,7 @@ var Answers = class {
         if (targets.has(entry.node)) targetBoxes.set(entry.node, box);
         return;
       }
-      occupied.push(placement.box);
+      if (moved === void 0) occupied.push(placement.box);
       if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
       placements.set(entry, { rect, placement });
     };
@@ -864,27 +969,50 @@ var Answers = class {
     for (const [entry, { rect, placement }] of placements) {
       entry.unavailable.hidden = true;
       if (entry.show !== null) entry.show.hidden = true;
-      if (entry.node.parentElement !== entry.wrapper) {
+      if (entry.node.parentElement !== entry.wrapper && entry.dropped === void 0) {
         if (entry.node.parentElement === agentGeneral) this.schedulePlacement();
         entry.wrapper.prepend(entry.node);
       }
       if (entry.wrapper.parentElement !== agentAnchored) agentAnchored.append(entry.wrapper);
       const { box, maxHeight } = placement;
-      entry.node.style.left = `${box.left}px`;
-      entry.node.style.top = `${box.top}px`;
-      entry.node.style.width = `${box.right - box.left}px`;
-      entry.node.style.maxHeight = `${maxHeight}px`;
-      drawAnswerLink(entry.marker, entry.line, view, rect, placement);
+      if (entry.dropped === void 0) {
+        entry.node.style.left = `${box.left}px`;
+        entry.node.style.top = `${box.top}px`;
+        entry.node.style.width = `${box.right - box.left}px`;
+        entry.node.style.maxHeight = `${maxHeight}px`;
+      }
+      if (entry.link.parentElement === null) this.links.append(entry.link);
+      const active = entry.node.matches(":hover, :focus-within");
+      entry.link.classList.toggle("active", active);
+      entry.marker.classList.toggle("active", active);
+      drawAnswerLink(entry.marker, entry.link, view, rect, placement);
     }
     for (const entry of this.shown.values()) {
       if (entry.stopTimer === void 0) this.startTimer(entry);
     }
+  }
+  positionMoved(entry) {
+    const { node, dropped } = entry;
+    if (dropped !== void 0) {
+      const view = answerViewport();
+      node.style.maxWidth = `${view.right - view.left}px`;
+      node.style.maxHeight = `${view.bottom - view.top}px`;
+      const point = fitPosition(dropped, node.offsetWidth, node.offsetHeight);
+      node.style.left = `${point.x}px`;
+      node.style.top = `${point.y}px`;
+    }
+    return node.getBoundingClientRect();
   }
   placeGeneral(entry, unavailable) {
     if (entry.unavailable.hidden === unavailable) entry.unavailable.hidden = !unavailable;
     if (entry.show !== null) {
       const hidden = unavailable || !entry.hasPlace && !entry.localAnchor();
       if (entry.show.hidden !== hidden) entry.show.hidden = hidden;
+    }
+    entry.link.remove();
+    if (entry.dropped !== void 0) {
+      entry.marker.hidden = true;
+      return;
     }
     if (entry.node.parentElement === this.ui.agentGeneral) return;
     this.ui.agentGeneral.append(entry.node);
@@ -1450,7 +1578,7 @@ var CursorSender = class {
     };
   }
 };
-var SVG_NS = "http://www.w3.org/2000/svg";
+var SVG_NS2 = "http://www.w3.org/2000/svg";
 var CursorLayer = class {
   constructor(ui) {
     this.ui = ui;
@@ -1517,11 +1645,11 @@ var CursorLayer = class {
     const node = document.createElement("div");
     node.className = "cursor";
     node.dataset.key = key;
-    const svg = document.createElementNS(SVG_NS, "svg");
+    const svg = document.createElementNS(SVG_NS2, "svg");
     svg.setAttribute("width", "16");
     svg.setAttribute("height", "18");
     svg.setAttribute("viewBox", "0 0 16 18");
-    const arrow = document.createElementNS(SVG_NS, "path");
+    const arrow = document.createElementNS(SVG_NS2, "path");
     arrow.setAttribute("d", "M1.5 1.5 L1.5 14.5 L5.2 11.2 L7.8 16.5 L10.2 15.4 L7.7 10.3 L12.8 10.3 Z");
     arrow.setAttribute("stroke", "#ffffff");
     arrow.setAttribute("stroke-width", "1.4");
@@ -1700,6 +1828,13 @@ var CommentDialog = class {
     this.ui = ui;
     this.outbox = outbox;
     const { dialog, form, textarea, cancel } = ui;
+    dragBy(ui.dialogLabel, dialog, (point) => {
+      this.dropped = point;
+      this.place();
+    });
+    new ResizeObserver(() => {
+      if (dialog.open) this.place();
+    }).observe(dialog);
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       void this.submit();
@@ -1766,6 +1901,7 @@ var CommentDialog = class {
   editing;
   originals = [];
   missingFiles = 0;
+  dropped;
   position = { x: 0, y: 0 };
   captured = null;
   /** What the dialog was opened on, which a draft keeps. */
@@ -1958,6 +2094,7 @@ var CommentDialog = class {
   }
   updateHighlight = () => {
     const { highlight, dialog } = this.ui;
+    if (dialog.open) this.place();
     const element = this.captured?.element;
     if (!dialog.open || !element?.isConnected || element.getClientRects().length === 0) {
       highlight.style.display = "none";
@@ -1972,16 +2109,16 @@ var CommentDialog = class {
   };
   stopTracking() {
     window.removeEventListener("resize", this.updateHighlight);
+    window.visualViewport?.removeEventListener("resize", this.updateHighlight);
+    window.visualViewport?.removeEventListener("scroll", this.updateHighlight);
     window.removeEventListener("scroll", this.updateHighlight, true);
   }
   place() {
     const { dialog } = this.ui;
     const { x, y } = this.position;
-    const gap = 12;
-    const width = dialog.offsetWidth;
-    const height = dialog.offsetHeight;
-    dialog.style.left = `${Math.max(gap, Math.min(x + gap, window.innerWidth - width - gap))}px`;
-    dialog.style.top = `${Math.max(gap, Math.min(y + gap, window.innerHeight - height - gap))}px`;
+    const point = fitPosition(this.dropped ?? { x: x + 12, y: y + 12 }, dialog.offsetWidth, dialog.offsetHeight);
+    dialog.style.left = `${point.x}px`;
+    dialog.style.top = `${point.y}px`;
   }
   show(captured, x, y, target) {
     const ui = this.ui;
@@ -1998,6 +2135,7 @@ var CommentDialog = class {
     ui.status.textContent = "";
     ui.reloadNotice.hidden = !this.pendingReload;
     ui.textarea.value = "";
+    this.dropped = void 0;
     this.position = { x, y };
     window.getSelection()?.removeAllRanges();
     ui.dialog.showModal();
@@ -2005,6 +2143,8 @@ var CommentDialog = class {
     this.place();
     this.updateHighlight();
     window.addEventListener("resize", this.updateHighlight);
+    window.visualViewport?.addEventListener("resize", this.updateHighlight);
+    window.visualViewport?.addEventListener("scroll", this.updateHighlight);
     window.addEventListener("scroll", this.updateHighlight, true);
     ui.textarea.focus();
     this.keep();
@@ -3174,8 +3314,9 @@ var styles = `
     --jp-on-accent: #fff;
     --jp-anchor: #2479e9;
     --jp-anchor-active: #1456ad;
-    --jp-tint: rgb(47 128 237 / 10%);
-    --jp-connected: #288337;
+    --jp-tint: rgb(47 128 237 / 8%);
+    --jp-connected: #2f9e44;
+    --jp-switch-on: #288337;
     --jp-reconnecting: #e8a33d;
     --jp-disconnected: #9a958e;
     --jp-cursor-text: #fff;
@@ -3195,7 +3336,7 @@ var styles = `
     display: none;
     z-index: 2147483645;
     border: 2px solid var(--jp-anchor);
-    background: rgb(235 94 40 / 10%);
+    background: var(--jp-tint);
     box-shadow: 0 0 0 1px rgb(255 255 255 / 90%);
     pointer-events: none;
   }
@@ -3205,7 +3346,7 @@ var styles = `
     display: none;
     z-index: 2147483645;
     border: 2px solid var(--jp-anchor);
-    background: rgb(47 128 237 / 8%);
+    background: var(--jp-tint);
     pointer-events: none;
   }
 
@@ -3532,7 +3673,7 @@ var styles = `
     background: var(--jp-muted);
   }
 
-  .switch[aria-checked="true"] { justify-content: flex-end; background: var(--jp-connected); }
+  .switch[aria-checked="true"] { justify-content: flex-end; background: var(--jp-switch-on); }
   .switch[aria-checked="true"]::after { background: var(--jp-field); }
 
   #name-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
@@ -3542,8 +3683,8 @@ var styles = `
     flex-grow: 1;
     min-width: 0;
     padding: 4px 6px;
-    border: 1px solid var(--jp-border);
-    border-radius: 4px;
+    border: 1px solid var(--jp-input-border);
+    border-radius: 5px;
     background: var(--jp-field);
     color: var(--jp-text);
     font: 12px/1.3 var(--jp-font);
@@ -3668,14 +3809,13 @@ var styles = `
     z-index: 2147483644;
     max-width: min(360px, calc(100vw - 28px));
     padding: 9px 11px;
-    border-radius: 5px;
+    border: 1px solid var(--jp-border);
+    border-radius: var(--jp-radius);
     background: var(--jp-surface);
     color: var(--jp-text);
     box-shadow: var(--jp-shadow);
     font: 13px/1.35 var(--jp-font);
   }
-
-  #toast { border: 1px solid var(--jp-border); border-radius: var(--jp-radius); }
 
   #toast[hidden] { display: none; }
 
@@ -3706,7 +3846,7 @@ var styles = `
     position: relative;
     width: min(340px, calc(100vw - 16px));
     max-height: calc(100vh - 16px);
-    padding: 12px 34px 12px 13px;
+    padding: 7px 12px 11px;
     border: 1px solid var(--jp-border);
     border-radius: var(--jp-radius);
     background: var(--jp-surface);
@@ -3719,31 +3859,24 @@ var styles = `
   }
 
   #agent-anchored .agent-message { position: fixed; z-index: 1; }
-  .agent-message[hidden], .agent-anchor-marker[hidden], .agent-anchor-line[hidden] { display: none; }
-  .agent-anchor-marker, .agent-anchor-line { position: fixed; pointer-events: none; }
-  .agent-anchor-marker { border-radius: 2px; }
-  .agent-anchor-marker::before {
-    content: "";
+  #agent-general .manually-placed { position: fixed; }
+  .agent-message[hidden], .agent-anchor-marker[hidden], .agent-anchor-layer g[hidden] { display: none; }
+  .agent-anchor-marker { position: fixed; pointer-events: none; border-radius: 2px; }
+  .agent-anchor-marker.active { background: var(--jp-tint); }
+  .agent-anchor-layer {
     position: absolute;
-    border-radius: 2px;
-    background: var(--jp-anchor);
-    box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    color: var(--jp-anchor);
+    pointer-events: none;
   }
-  .agent-anchor-marker[data-side="right"]::before { inset: 0 -5px 0 auto; width: 4px; }
-  .agent-anchor-marker[data-side="left"]::before { inset: 0 auto 0 -5px; width: 4px; }
-  .agent-anchor-marker[data-side="below"]::before { inset: auto 0 -5px; height: 4px; }
-  .agent-anchor-marker[data-side="above"]::before { inset: -5px 0 auto; height: 4px; }
-  .agent-anchor-line {
-    height: 2px;
-    background: var(--jp-anchor);
-    box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
-    transform-origin: left center;
-    translate: 0 -50%;
-  }
-  .agent-placement > .agent-message:is(:hover, :focus-within) ~ .agent-anchor-marker {
-    background: rgb(47 128 237 / 8%);
-    box-shadow: inset 0 0 0 1px var(--jp-anchor);
-  }
+  .agent-anchor-layer .active { color: var(--jp-anchor-active); }
+  .agent-anchor-layer path { fill: none; stroke: currentColor; stroke-linecap: round; }
+  .agent-anchor-brace { stroke-width: 1.6px; }
+  .agent-anchor-line { stroke-width: 1.4px; opacity: .84; }
+  .agent-anchor-layer circle { fill: currentColor; }
+  .agent-anchor-layer .active .agent-anchor-line { opacity: 1; }
   .agent-message p { margin: 0 0 8px; }
   .agent-message p:last-child { margin-bottom: 0; }
   .agent-message ul, .agent-message ol { margin: 6px 0; padding-left: 22px; }
@@ -3758,12 +3891,27 @@ var styles = `
     outline-offset: 2px;
   }
 
+  .agent-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 21px;
+    gap: 6px;
+    margin: -2px -6px 2px 0;
+  }
+
+  :is(.agent-header, #dialog-label) {
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+  [data-dragging] { cursor: grabbing; }
+
   .agent-dismiss {
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    width: 25px;
-    height: 25px;
+    flex: none;
+    margin-inline-start: auto;
+    width: 21px;
+    height: 21px;
     padding: 0;
     border: 0;
     border-radius: 4px;
@@ -3775,7 +3923,6 @@ var styles = `
   .agent-dismiss:hover, .agent-dismiss:focus-visible { background: var(--jp-hover); }
 
   .agent-meta {
-    margin-bottom: 4px;
     color: var(--jp-muted);
     font-size: 11px;
     font-weight: 700;
@@ -3797,7 +3944,7 @@ var styles = `
     z-index: 2147483641;
     border: 1px solid var(--jp-anchor);
     border-radius: 3px;
-    background: rgb(47 128 237 / 8%);
+    background: var(--jp-tint);
     pointer-events: none;
   }
 

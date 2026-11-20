@@ -6,7 +6,7 @@ export interface Box {
   bottom: number;
 }
 
-type Side = "right" | "left" | "below" | "above";
+export type Side = "right" | "left" | "below" | "above";
 
 interface Band {
   side: Side;
@@ -42,7 +42,7 @@ function overlaps(a: Box, b: Box): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
-function clamp(value: number, lower: number, upper: number): number {
+export function clamp(value: number, lower: number, upper: number): number {
   return Math.max(lower, Math.min(value, upper));
 }
 
@@ -63,7 +63,9 @@ export function placeAnswer(
     { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - GAP) } },
   ];
   for (const allowClipping of [false, true]) {
-    for (const { side, area } of bands) {
+    let margin: { placement: Placement; score: number } | undefined;
+    for (const [index, { side, area }] of bands.entries()) {
+      if (index === 2 && page !== undefined && margin !== undefined) return margin.placement;
       const width = Math.min(MAX_WIDTH, Math.floor(area.right - area.left));
       if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
       const height = heightAt(width);
@@ -107,7 +109,9 @@ export function placeAnswer(
           }
         }
       }
-      if (best !== undefined) return best.placement;
+      if (best === undefined) continue;
+      if (page === undefined || index >= 2) return best.placement;
+      if (margin === undefined || best.score < margin.score) margin = best;
     }
   }
   return undefined;
@@ -120,32 +124,59 @@ function drawBox(node: HTMLElement, box: Box): void {
   node.style.height = `${box.bottom - box.top}px`;
 }
 
+export const SVG_NS = "http://www.w3.org/2000/svg";
+
+export function nearestSide(target: Box, card: Box): Side {
+  const dx = (card.left + card.right - target.left - target.right) / 2;
+  const dy = (card.top + card.bottom - target.top - target.bottom) / 2;
+  const horizontalGap = Math.max(card.left - target.right, target.left - card.right);
+  const verticalGap = Math.max(card.top - target.bottom, target.top - card.bottom);
+  if (horizontalGap < 0 && verticalGap < 0 ? Math.abs(dx) >= Math.abs(dy) : horizontalGap >= verticalGap) {
+    return dx >= 0 ? "right" : "left";
+  }
+  return dy >= 0 ? "below" : "above";
+}
+
 export function drawAnswerLink(
-  marker: HTMLElement, line: HTMLElement, view: Box, target: Box, { side, box }: Placement,
+  marker: HTMLElement, link: SVGGElement, view: Box, target: Box, { side, box }: Placement,
 ): void {
-  const horizontal = side === "right" || side === "left";
   marker.hidden = target.bottom <= view.top || target.top >= view.bottom ||
     target.right <= view.left || target.left >= view.right;
-  line.hidden = marker.hidden;
+  link.toggleAttribute("hidden", marker.hidden);
   if (marker.hidden) return;
 
-  const edge = {
-    right: { x: target.right + 3, y: box.top + 16 },
-    left: { x: target.left - 3, y: box.top + 16 },
-    below: { x: box.left + 16, y: target.bottom + 3 },
-    above: { x: box.left + 16, y: target.top - 3 },
-  }[side];
-  const x = clamp(edge.x, Math.max(view.left, target.left), Math.min(view.right, target.right));
-  const y = clamp(edge.y, Math.max(view.top, target.top), Math.min(view.bottom, target.bottom));
-  const fromX = horizontal ? edge.x : x;
-  const fromY = horizontal ? y : edge.y;
-  const toX = horizontal ? (side === "right" ? box.left : box.right) : clamp(x, box.left + 8, box.right - 8);
-  const toY = horizontal ? clamp(y, box.top + 8, box.bottom - 8) : (side === "below" ? box.top : box.bottom);
+  const horizontal = side === "right" || side === "left";
+  const sign = side === "right" || side === "below" ? 1 : -1;
+  const edge = { right: target.right, left: target.left, below: target.bottom, above: target.top }[side];
+  const start = horizontal ? target.top : target.left;
+  const end = horizontal ? target.bottom : target.right;
+  const span = end - start;
+  const mid = (start + end) / 2;
+  const base = edge + sign * 7;
+  const destination = { right: box.left, left: box.right, below: box.top, above: box.bottom }[side];
+  const depth = Math.min(9, Math.max(2, (destination - base) * sign - 2), Math.max(4, span / 5));
+  // Express the brace in outward/along coordinates, then rotate or mirror
+  // the same four cubics onto the target edge facing the card.
+  const point = (outward: number, along: number): string =>
+    horizontal ? `${outward},${along}` : `${along},${outward}`;
+  const waist = base + sign * depth / 2;
+  const tip = base + sign * depth;
+  const [brace, curve, dot] = link.children;
+  brace?.setAttribute("d", [
+    `M ${point(base, start)}`,
+    `C ${point(waist, start)} ${point(waist, start + span * .14)} ${point(waist, start + span * .25)}`,
+    `C ${point(waist, mid - span * .08)} ${point(waist, mid)} ${point(tip, mid)}`,
+    `C ${point(waist, mid)} ${point(waist, mid + span * .08)} ${point(waist, end - span * .25)}`,
+    `C ${point(waist, end - span * .14)} ${point(waist, end)} ${point(base, end)}`,
+  ].join(" "));
 
+  const near = horizontal ? box.top : box.left;
+  const far = horizontal ? box.bottom : box.right;
+  const along = clamp(mid, near + 10, far - 10);
+  const bend = (tip + destination) / 2;
+  curve?.setAttribute("d", `M ${point(tip, mid)} C ${point(bend, mid)} ${point(bend, along)} ${point(destination, along)}`);
+  dot?.setAttribute("cx", String(horizontal ? destination : along));
+  dot?.setAttribute("cy", String(horizontal ? along : destination));
   marker.dataset.side = side;
   drawBox(marker, target);
-  line.style.left = `${fromX}px`;
-  line.style.top = `${fromY}px`;
-  line.style.width = `${Math.hypot(toX - fromX, toY - fromY)}px`;
-  line.style.transform = `rotate(${Math.atan2(toY - fromY, toX - fromX)}rad)`;
 }

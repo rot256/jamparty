@@ -1,4 +1,3 @@
-import { isTheme } from "./remembered";
 // The control panel behind the gear: the comment mode and cursor
 // switches with their keys (rebindable), the name, and who is here.
 
@@ -12,6 +11,7 @@ import type {
   SettingsChange,
   SettingsOutcome,
 } from "./generated/api";
+import { isTheme } from "./remembered";
 import type { Ui } from "./ui";
 
 type Action = keyof Keys;

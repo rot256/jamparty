@@ -1,6 +1,7 @@
 """The agent's answers: addressed to people, and commented on."""
 
 import json
+import re
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -252,10 +253,12 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
         assert answers(bob_page) == [("Everyone: done.", False), ("Yes, it is.", True)]
         reply = overlay(bob_page, ".agent-placement").filter(has_text="Yes, it is.")
         expect(reply.locator(".agent-anchor-marker")).to_be_visible()
-        expect(reply.locator(".agent-anchor-line")).to_be_visible()
+        expect(overlay(bob_page, ".agent-anchor-line")).to_have_attribute(
+            "d", re.compile("C")
+        )
         to_you = alice_page.locator("#jamparty .agent-to").first
         expect(to_you).to_have_text("to you")
-        expect(to_you).to_have_css("color", "rgb(123, 50, 33)")
+        expect(to_you).to_have_css("color", "rgb(83, 95, 113)")
         expect(to_you).to_have_css("font-size", "11px")
         expect(to_you).to_have_css("font-weight", "700")
 
@@ -741,13 +744,13 @@ def test_show_html_place_on_another_page(tmp_path: Path, page: Page) -> None:
         marker = overlay(page, ".agent-anchor-marker")
         leader = overlay(page, ".agent-anchor-line")
         expect(marker).to_be_visible()
-        expect(leader).to_be_visible()
+        expect(leader).to_have_attribute("d", re.compile("C"))
         expect(marker).to_have_attribute("data-side", "right")
         assert (
-            marker.evaluate(
-                "(node) => getComputedStyle(node, '::before').backgroundColor"
+            overlay(page, ".agent-anchor-brace").evaluate(
+                "(node) => getComputedStyle(node).stroke"
             )
-            == "rgb(40, 104, 182)"
+            == "rgb(36, 121, 233)"
         )
         expect(marker).to_have_css("background-color", "rgba(0, 0, 0, 0)")
         answer.hover()
@@ -855,9 +858,10 @@ def test_nearby_answers_keep_separate_leaders(tmp_path: Path, page: Page) -> Non
                 has_text=f"About {target}."
             )
             marker = group.locator(".agent-anchor-marker")
-            leader = group.locator(".agent-anchor-line")
+            answer_id = group.locator(".agent-message").get_attribute("data-message-id")
+            leader = overlay(page, f'[data-answer-id="{answer_id}"] .agent-anchor-line')
             expect(marker).to_have_attribute("data-side", "right")
-            expect(leader).to_be_visible()
+            expect(leader).to_have_attribute("d", re.compile("C"))
             assert marker.bounding_box() == page.locator(f"#{target}").bounding_box()
             card = group.locator(".agent-message").bounding_box()
             assert card is not None
@@ -936,7 +940,10 @@ def test_reply_marker_follows_parent_after_one_scroll(
         group = overlay(page, ".agent-placement").filter(has_text="Child reply.")
         marker = group.locator(".agent-anchor-marker")
         expect(marker).to_have_attribute("data-side", "right")
-        expect(group.locator(".agent-anchor-line")).to_be_visible()
+        answer_id = group.locator(".agent-message").get_attribute("data-message-id")
+        expect(
+            overlay(page, f'[data-answer-id="{answer_id}"] .agent-anchor-line')
+        ).to_have_attribute("d", re.compile("C"))
         before = parent.bounding_box()
         assert before is not None
         after = cast(
@@ -955,12 +962,14 @@ def test_reply_marker_follows_parent_after_one_scroll(
                         .find(node => node.textContent.includes("Child reply."));
                     const marker = child.querySelector(".agent-anchor-marker");
                     const bounds = parent.getBoundingClientRect();
-                    const leader = child.querySelector(".agent-anchor-line");
+                    const id = child.querySelector(".agent-message").dataset.messageId;
+                    const leader = shadow.querySelector(`[data-answer-id="${id}"] .agent-anchor-line`);
+                    const start = leader.getPointAtLength(0);
                     resolve({
                         parent: bounds.toJSON(),
                         marker: marker.getBoundingClientRect().toJSON(),
-                        leaderAttached: parseFloat(leader.style.left) === bounds.right + 3
-                            && parseFloat(leader.style.top) === bounds.top + 16,
+                        leaderAttached: start.x > bounds.right
+                            && Math.abs(start.y - (bounds.top + bounds.bottom) / 2) < .1,
                     });
                 }));
             }"""
