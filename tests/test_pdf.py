@@ -822,3 +822,26 @@ def test_pdf_rebuild_reading_position(tmp_path: Path, page: Page, change: str) -
             assert float(page.evaluate("window.scrollY")) == pytest.approx(
                 float(scrolled_to), abs=2
             )
+
+
+def test_single_pdf_opens_from_root_and_reloads(tmp_path: Path, page: Page) -> None:
+    site = tmp_path / "build"
+    site.mkdir()
+    pdf = site / "paper #%.pdf"
+    _ = pdf.write_bytes(reading_pdf([(792, 150, ["Old PDF"])]))
+    _ = (site / "paper.log").write_text("Private build log")
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(page).to_have_url(f"{joined.url.rstrip('/')}/paper%20%23%25.pdf")
+        text = page.locator("#jamparty-pdf-page-1 .textLayer")
+        expect(text).to_have_text("Old PDF")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        assert page.request.get(f"{joined.url.rstrip('/')}/paper.log").status == 404
+
+        updated = site / "paper.tmp"
+        _ = updated.write_bytes(reading_pdf([(792, 150, ["Rebuilt PDF"])]))
+        _ = updated.replace(pdf)
+        expect(text).to_have_text("Rebuilt PDF")

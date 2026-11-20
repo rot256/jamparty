@@ -236,7 +236,7 @@ def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:
 def test_bare_jamparty_and_the_agent_guides(tmp_path: Path) -> None:
     overview = jamparty(tmp_path)
     for line in [
-        "jamparty serve <dir>",
+        "jamparty serve <path>",
         "jamparty proxy <url>",
         "jamparty join <token>",
     ]:
@@ -280,3 +280,28 @@ def test_the_joiner_answers_the_client_itself(tmp_path: Path) -> None:
         assert response.getheader("Cache-Control") == "no-store"
         assert response.getheader("Content-Type") == "text/javascript; charset=utf-8"
         assert body == (ROOT / "assets/client.js").read_bytes()
+
+
+def test_directory_listing_navigation_and_reload(tmp_path: Path, page: Page) -> None:
+    site = tmp_path / "site"
+    sub = site / "sub #"
+    sub.mkdir(parents=True)
+    name = 'notes "draft"#?%.html'
+    _ = (sub / name).write_text("<h1>Review notes</h1>")
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(
+            page.get_by_role("heading", name="Index of /", exact=True)
+        ).to_be_visible()
+        page.get_by_role("link", name="sub #/").click()
+        expect(page.get_by_role("heading", name="Index of /sub #")).to_be_visible()
+        expect(page.locator("#jamparty #connection")).to_have_attribute(
+            "data-state", "green"
+        )
+        _ = (sub / "new.txt").write_text("New file")
+        expect(page.get_by_role("link", name="new.txt")).to_be_visible()
+        page.get_by_role("link", name=name).click()
+        expect(page.get_by_role("heading", name="Review notes")).to_be_visible()

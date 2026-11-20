@@ -14,13 +14,18 @@ cargo install --locked jamparty
 
 ```sh
 jamparty serve ./public                     # a static directory
+jamparty serve build/paper.pdf              # a single file
 jamparty proxy http://127.0.0.1:5173        # a running dev server
 jamparty serve ./public -- ./on-comments.sh # nudge when nobody is listening
 jamparty serve ./public -- t3 thread send "$T3CODE_THREAD_ID" -
 ```
 
 Anyone with the printed token can see the site and comment until the
-share stops.
+share stops. Serving a directory exposes its non-dot files and lists each
+directory that has no servable `index.html`. Listings show up to 1,000
+entries and skip names that aren't valid UTF-8. To share a single file,
+choose a regular file with a non-dot, UTF-8 name. The start URL redirects
+to that file.
 
 Comments wait for `jamparty recv`, which prints them as NDJSON and confirms
 delivery. An optional command after `--` receives only a short plain-text
@@ -45,10 +50,19 @@ right-click it, or use the pen button to drag a box around a figure or
 equation. The comment reaches `jamparty recv` with its page number and
 coordinates. See [PDF anchors](docs/delivery.md#pdf-anchors).
 
-For LaTeX, run `latexmk -pdf -pvc -synctex=1 -outdir=build paper.tex` and
-`jamparty serve build`. Open `/paper.pdf` on the joiner URL. Rebuilds keep
-the reviewer's page, scroll position and zoom. The agent can use the
-matching SyncTeX output to look up the source.
+For LaTeX, run these in separate terminals:
+
+```sh
+latexmk -pdf -pvc -view=none -synctex=1 -outdir=build paper.tex
+jamparty serve build/paper.pdf
+```
+
+The joiner's start URL opens the PDF viewer. Rebuilds keep the reviewer's
+reading position and zoom. Multi-file projects work too. Latexmk tracks
+`\input` and `\include` files, bibliography, and images. With the matching
+SyncTeX output, `synctex edit` reports the included source file and line.
+Share the PDF alone to keep the build's `.log`, `.fls`, and `.synctex.gz`
+outputs private. These can contain absolute local paths.
 
 ## Answer (agent)
 
