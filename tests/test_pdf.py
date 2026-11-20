@@ -116,11 +116,12 @@ def test_pdf_fits_and_keeps_reading_position(tmp_path: Path, page: Page) -> None
         scroll_to_page(page, 2)
         sheet = page.get_by_role("region", name="Page 2")
         indicator = page.locator("#pdf-position")
+        _ = page.evaluate("window.scrollBy(0, 200)")
         expect(indicator).to_have_text("2 / 2")
         expect(indicator).to_be_visible()
-        _ = page.evaluate("window.scrollBy(0, 200)")
 
         page.set_viewport_size({"width": 360, "height": 720})
+        expect(sheet).to_have_css("width", "328px")
         expect(sheet).to_have_attribute("data-rendered", "true")
         bounds = sheet.bounding_box()
         assert bounds is not None
