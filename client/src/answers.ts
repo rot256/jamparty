@@ -69,7 +69,7 @@ function loadDismissed(): Set<string> {
 
 export class Answers {
   private readonly shown = new Map<string, Shown>();
-  private readonly sections: HTMLElement | null;
+  private sections: HTMLElement | null = null;
   private readonly places = new Map<string, PlaceTarget>();
   private historyPreview: { id: string; node: HTMLElement } | undefined;
   private readonly recent = new Map<string, Answer>();
@@ -90,12 +90,10 @@ export class Answers {
     private readonly pdf?: PdfViewer,
   ) {
     const schedule = (): void => { this.schedulePlacement(); };
-    this.sections = ui.shadow.querySelector("#pdf-sections");
     this.geometry = new ResizeObserver(schedule);
     this.geometry.observe(ui.list);
     this.geometry.observe(ui.bar);
     this.geometry.observe(ui.panel);
-    if (this.sections !== null) this.geometry.observe(this.sections);
     this.geometry.observe(ui.agentGeneral);
     window.visualViewport?.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("scroll", schedule);
@@ -550,6 +548,11 @@ export class Answers {
     if (hovered !== undefined) this.outline(hovered);
     else if (this.highlightTimer === undefined) this.ui.messageHighlight.style.display = "none";
 
+    // The PDF viewer adds its sections panel after Answers is constructed.
+    if (this.pdf !== undefined && this.sections === null) {
+      this.sections = this.ui.shadow.querySelector("#pdf-sections");
+      if (this.sections !== null) this.geometry.observe(this.sections);
+    }
     const sectionsHeight = this.sections?.offsetHeight ?? 0;
     const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`;
     if (agentGeneral.style.getPropertyValue("--sections-offset") !== sectionsOffset) {

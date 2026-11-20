@@ -324,12 +324,10 @@ var Answers = class {
     const schedule = () => {
       this.schedulePlacement();
     };
-    this.sections = ui.shadow.querySelector("#pdf-sections");
     this.geometry = new ResizeObserver(schedule);
     this.geometry.observe(ui.list);
     this.geometry.observe(ui.bar);
     this.geometry.observe(ui.panel);
-    if (this.sections !== null) this.geometry.observe(this.sections);
     this.geometry.observe(ui.agentGeneral);
     window.visualViewport?.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("scroll", schedule);
@@ -347,7 +345,7 @@ var Answers = class {
   pick;
   pdf;
   shown = /* @__PURE__ */ new Map();
-  sections;
+  sections = null;
   places = /* @__PURE__ */ new Map();
   historyPreview;
   recent = /* @__PURE__ */ new Map();
@@ -791,6 +789,10 @@ var Answers = class {
     }
     if (hovered !== void 0) this.outline(hovered);
     else if (this.highlightTimer === void 0) this.ui.messageHighlight.style.display = "none";
+    if (this.pdf !== void 0 && this.sections === null) {
+      this.sections = this.ui.shadow.querySelector("#pdf-sections");
+      if (this.sections !== null) this.geometry.observe(this.sections);
+    }
     const sectionsHeight = this.sections?.offsetHeight ?? 0;
     const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`;
     if (agentGeneral.style.getPropertyValue("--sections-offset") !== sectionsOffset) {
