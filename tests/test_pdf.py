@@ -1,5 +1,6 @@
 """The joiner's PDF viewer, anchors and live rebuilds."""
 
+import re
 from base64 import b64decode
 from collections.abc import Sequence
 from pathlib import Path
@@ -1317,7 +1318,7 @@ def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) ->
 
         def check_position(*, side: str = "right", outer_margin: bool = False) -> None:
             expect(link_marker).to_have_attribute("data-side", side)
-            expect(leader).to_be_visible()
+            expect(leader).to_have_attribute("d", re.compile("C"))
             sheet_box = sheet.bounding_box()
             mark_box = marker.bounding_box()
             answer_box = answer.bounding_box()

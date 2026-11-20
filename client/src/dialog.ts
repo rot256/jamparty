@@ -3,6 +3,8 @@
 // written is kept as a draft (see draft.ts) and comes back after a reload;
 // once sent, it is the outbox's (sent again under its ref if need be).
 
+import { moveBy, fitPosition } from "./drag";
+import type { Point } from "./drag";
 import { type Captured, captureTarget, capturePageTarget } from "./capture";
 import { AGENT_TARGET_PREFIX } from "./config";
 import { type DraftKind, type DraftTarget, type SavedDraft, clearDraft, loadDraft, saveDraft } from "./draft";
@@ -32,6 +34,7 @@ export class CommentDialog {
   private editing: OutboxEntry | undefined;
   private originals: (File | Attachment)[] = [];
   private missingFiles = 0;
+  private dropped: Point | undefined;
   private position = { x: 0, y: 0 };
   private captured: Captured | null = null;
   /** What the dialog was opened on, which a draft keeps. */
@@ -48,6 +51,19 @@ export class CommentDialog {
     private readonly outbox: Outbox,
   ) {
     const { dialog, form, textarea, cancel } = ui;
+    const endMove = moveBy(ui.dialogHeader, dialog, (point) => {
+      this.dropped = point;
+      this.place();
+    }, () => {
+      const previous = this.dropped;
+      return () => {
+        this.dropped = previous;
+        this.place();
+      };
+    });
+    new ResizeObserver(() => {
+      if (dialog.open) this.place();
+    }).observe(dialog);
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       void this.submit();
@@ -100,6 +116,7 @@ export class CommentDialog {
       ) this.dismiss();
     });
     dialog.addEventListener("close", () => {
+      endMove();
       this.stopTracking();
       ui.highlight.style.display = "none";
     });
@@ -312,6 +329,7 @@ export class CommentDialog {
 
   private readonly updateHighlight = (): void => {
     const { highlight, dialog } = this.ui;
+    if (dialog.open) this.place();
     const element = this.captured?.element;
     if (!dialog.open || !element?.isConnected || element.getClientRects().length === 0) {
       highlight.style.display = "none";
@@ -327,17 +345,20 @@ export class CommentDialog {
 
   private stopTracking(): void {
     window.removeEventListener("resize", this.updateHighlight);
+    window.visualViewport?.removeEventListener("resize", this.updateHighlight);
+    window.visualViewport?.removeEventListener("scroll", this.updateHighlight);
     window.removeEventListener("scroll", this.updateHighlight, true);
   }
 
   private place(): void {
     const { dialog } = this.ui;
     const { x, y } = this.position;
-    const gap = 12;
     const width = dialog.offsetWidth;
-    const height = dialog.offsetHeight;
-    dialog.style.left = `${Math.max(gap, Math.min(x + gap, window.innerWidth - width - gap))}px`;
-    dialog.style.top = `${Math.max(gap, Math.min(y + gap, window.innerHeight - height - gap))}px`;
+    const sideSpace = window.innerWidth - width;
+    const left = sideSpace <= 32 ? sideSpace / 2 : x + 12;
+    const point = fitPosition(this.dropped ?? { x: left, y: y + 12 }, width, dialog.offsetHeight);
+    dialog.style.left = `${point.x}px`;
+    dialog.style.top = `${point.y}px`;
   }
 
   private show(captured: Captured, x: number, y: number, target: DraftTarget): void {
@@ -355,6 +376,7 @@ export class CommentDialog {
     ui.status.textContent = "";
     ui.reloadNotice.hidden = !this.pendingReload;
     ui.textarea.value = "";
+    this.dropped = undefined;
     this.position = { x, y };
     // The quote is already captured. Clear the page range before focus
     // moves to the textarea, and again after the browser restores focus.
@@ -364,6 +386,8 @@ export class CommentDialog {
     this.place();
     this.updateHighlight();
     window.addEventListener("resize", this.updateHighlight);
+    window.visualViewport?.addEventListener("resize", this.updateHighlight);
+    window.visualViewport?.addEventListener("scroll", this.updateHighlight);
     window.addEventListener("scroll", this.updateHighlight, true);
     ui.textarea.focus();
     this.keep();

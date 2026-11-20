@@ -38,6 +38,7 @@ fn settings(cursor: Switch) -> PageSettings {
         comment_mode: Switch::On,
         show_cursor: cursor,
         corner: Corner::BottomRight,
+        theme: Default::default(),
         answer_timeout: Default::default(),
     }
 }

@@ -92,7 +92,7 @@ def test_edit_mode(tmp_path: Path, page: Page) -> None:
         # On: the button turns blue; hovering outlines the element.
         button.click()
         expect(button).to_have_attribute("aria-pressed", "true")
-        expect(button).to_have_css("background-color", "rgb(47, 128, 237)")
+        expect(button).to_have_css("background-color", "rgb(34, 95, 190)")
         intro = page.locator("#intro")
         intro.hover()
         expect(outline).to_be_visible()

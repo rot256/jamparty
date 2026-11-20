@@ -2,9 +2,11 @@
 // Recent replies also appear in the comment list.
 
 import { parsePlaceAnchor, placeElement } from "./answer-anchor";
-import { answerViewport, drawAnswerLink, placeAnswer } from "./answer-placement";
+import { answerViewport, drawAnswerLink, nearestSide, placeAnswer, SVG_NS } from "./answer-placement";
 import type { Box, Placement } from "./answer-placement";
 import { samePage } from "./capture";
+import { moveBy, fitPosition } from "./drag";
+import type { Point } from "./drag";
 import { AGENT_TARGET_PREFIX, DISMISSED_KEY } from "./config";
 import { MAX_ANSWERS } from "./generated/api";
 import type { Answer, CommentOutcome, PlaceAnchor, Submission } from "./generated/api";
@@ -15,7 +17,9 @@ interface Shown {
   node: HTMLElement;
   wrapper: HTMLElement;
   marker: HTMLElement;
-  line: HTMLElement;
+  link: SVGGElement;
+  dropped: { point: Point; width: number } | undefined;
+  endMove: () => void;
   unavailable: HTMLElement;
   show: HTMLAnchorElement | null;
   target: () => Element | undefined;
@@ -30,6 +34,18 @@ interface PlaceTarget {
   here: () => boolean;
   target: () => Element | undefined;
   detach: () => void;
+}
+
+function makeLink(): SVGGElement {
+  const link = document.createElementNS(SVG_NS, "g");
+  const brace = document.createElementNS(SVG_NS, "path");
+  brace.classList.add("agent-anchor-brace");
+  const curve = document.createElementNS(SVG_NS, "path");
+  curve.classList.add("agent-anchor-line");
+  const dot = document.createElementNS(SVG_NS, "circle");
+  dot.setAttribute("r", "2.3");
+  link.append(brace, curve, dot);
+  return link;
 }
 
 const REVEAL_KEY = "jamparty-answer-reveal";
@@ -95,6 +111,9 @@ export class Answers {
     this.geometry.observe(ui.bar);
     this.geometry.observe(ui.panel);
     this.geometry.observe(ui.agentGeneral);
+    this.links.classList.add("agent-anchor-layer");
+    this.links.setAttribute("aria-hidden", "true");
+    ui.agentAnchored.prepend(this.links);
     window.visualViewport?.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("scroll", schedule);
     window.addEventListener("resize", schedule);
@@ -250,6 +269,8 @@ export class Answers {
     node.addEventListener("focusout", () => { this.schedulePlacement(); });
   }
 
+  private readonly links = document.createElementNS(SVG_NS, "svg");
+
   private show(answer: Answer): void {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
     // The oldest go first (a Map keeps the order answers came in).
@@ -274,7 +295,10 @@ export class Answers {
     unavailable.className = "agent-unavailable";
     unavailable.textContent = "Target unavailable";
     unavailable.hidden = true;
-    node.append(close, to, body, unavailable);
+    const header = document.createElement("header");
+    header.className = "agent-header";
+    header.append(to, close);
+    node.append(header, body, unavailable);
     const options = document.createElement("div");
     options.className = "agent-choices";
     // Labels are data, never markup. The joiner already checked their caps.
@@ -365,10 +389,26 @@ export class Answers {
     const marker = document.createElement("div");
     marker.className = "agent-anchor-marker";
     marker.setAttribute("aria-hidden", "true");
-    const line = document.createElement("div");
-    line.className = "agent-anchor-line";
-    line.setAttribute("aria-hidden", "true");
-    wrapper.append(marker, line);
+    const link = makeLink();
+    link.dataset.answerId = answer.id;
+    wrapper.append(marker);
+    const highlight = (active: boolean): void => {
+      link.classList.toggle("active", active);
+      marker.classList.toggle("active", active);
+    };
+    let hovered = false;
+    node.addEventListener("mouseenter", () => {
+      hovered = true;
+      highlight(true);
+    });
+    node.addEventListener("mouseleave", () => {
+      hovered = false;
+      highlight(node.contains(this.ui.shadow.activeElement));
+    });
+    node.addEventListener("focusin", () => { highlight(true); });
+    node.addEventListener("focusout", (event) => {
+      highlight(hovered || (event.relatedTarget instanceof Node && node.contains(event.relatedTarget)));
+    });
     // Anchored content is fixed for the lifetime of the answer. Measure
     // each width without changing the live card's overflow or scroll.
     const heights = new Map<number, number>();
@@ -392,7 +432,18 @@ export class Answers {
       return height;
     };
     const shown: Shown = {
-      node, wrapper, marker, line, unavailable, show, target, localAnchor, hasPlace: entry !== undefined, heightAt,
+      node, wrapper, marker, link, unavailable, show, target, localAnchor, hasPlace: entry !== undefined, heightAt,
+      dropped: undefined,
+      endMove: moveBy(header, node, (point, width) => {
+        shown.dropped = { point, width: shown.dropped?.width ?? width };
+        this.schedulePlacement();
+      }, () => {
+        const previous = shown.dropped;
+        return () => {
+          shown.dropped = previous;
+          this.schedulePlacement();
+        };
+      }, close),
     };
     this.shown.set(answer.id, shown);
     this.schedulePlacement();
@@ -403,8 +454,10 @@ export class Answers {
     if (this.recent.get(id)?.choices.length) this.recent.delete(id);
     const shown = this.shown.get(id);
     shown?.stopTimer?.();
+    shown?.endMove();
     shown?.node.remove();
     shown?.wrapper.remove();
+    shown?.link.remove();
     this.shown.delete(id);
     this.prunePlaces();
     this.schedulePlacement();
@@ -512,6 +565,7 @@ export class Answers {
     const anchored = new Map<Shown, Element>();
     const cards = new Map<Element, Shown>();
     let hovered: Element | undefined;
+    const fixed = new Map<Shown, Box>();
     for (const entry of this.shown.values()) {
       const local = entry.localAnchor();
       const target = entry.target();
@@ -525,7 +579,15 @@ export class Answers {
         entry.node.removeAttribute("aria-label");
       }
       if (target !== undefined) anchored.set(entry, target);
-      else this.placeGeneral(entry, local);
+      if (entry.dropped !== undefined) {
+        fixed.set(entry, this.positionMoved(entry.node, entry.dropped));
+      } else if (entry.node.classList.contains("manually-placed")) {
+        entry.node.classList.remove("manually-placed");
+        for (const property of ["left", "top", "width", "max-width", "max-height"]) {
+          entry.node.style.removeProperty(property);
+        }
+      }
+      if (target === undefined) this.placeGeneral(entry, local);
     }
 
     const preview = this.historyPreview;
@@ -567,6 +629,7 @@ export class Answers {
     ];
     const occupied: Box[] = obstacles.filter((node) => node.getClientRects().length > 0 &&
       getComputedStyle(node).visibility === "visible").map((node) => node.getBoundingClientRect());
+    occupied.push(...fixed.values());
     const targets = new Set(anchored.values());
     for (const target of this.observedTargets) if (!targets.has(target)) this.geometry.unobserve(target);
     for (const target of targets) if (!this.observedTargets.has(target)) this.geometry.observe(target);
@@ -586,7 +649,9 @@ export class Answers {
       if (page !== null) pages.set(target, page.getBoundingClientRect());
     }
     const general = new Map(
-      Array.from(agentGeneral.children, (node) => [node, node.getBoundingClientRect()]),
+      Array.from(agentGeneral.children)
+        .filter((node) => !node.classList.contains("manually-placed"))
+        .map((node) => [node, node.getBoundingClientRect()]),
     );
     const pending = new Set(anchored.keys());
     const placements = new Map<Shown, { rect: Box; placement: Placement }>();
@@ -599,7 +664,10 @@ export class Answers {
       const rect = targetBoxes.get(target);
       const previous = general.get(entry.node);
       general.delete(entry.node);
-      const placement = rect === undefined ? undefined : placeAnswer(entry.heightAt, view, rect, pages.get(target), [
+      const moved = fixed.get(entry);
+      const placement = rect === undefined ? undefined : moved !== undefined
+        ? { box: moved, side: nearestSide(rect, moved), maxHeight: view.bottom - view.top }
+        : placeAnswer(entry.heightAt, view, rect, pages.get(target), [
         ...occupied,
         ...general.values(),
         ...Array.from(targetBoxes.values()).filter((box) => box !== rect),
@@ -622,7 +690,7 @@ export class Answers {
       }
       // Border-box sizing gives dependents their parent's final geometry
       // before we apply the styles to the live cards.
-      occupied.push(placement.box);
+      if (moved === undefined) occupied.push(placement.box);
       if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
       placements.set(entry, { rect, placement });
     };
@@ -632,21 +700,38 @@ export class Answers {
     for (const [entry, { rect, placement }] of placements) {
       entry.unavailable.hidden = true;
       if (entry.show !== null) entry.show.hidden = true;
-      if (entry.node.parentElement !== entry.wrapper) {
+      if (entry.node.parentElement !== entry.wrapper && entry.dropped === undefined) {
         if (entry.node.parentElement === agentGeneral) this.schedulePlacement();
         entry.wrapper.prepend(entry.node);
       }
       if (entry.wrapper.parentElement !== agentAnchored) agentAnchored.append(entry.wrapper);
       const { box, maxHeight } = placement;
-      entry.node.style.left = `${box.left}px`;
-      entry.node.style.top = `${box.top}px`;
-      entry.node.style.width = `${box.right - box.left}px`;
-      entry.node.style.maxHeight = `${maxHeight}px`;
-      drawAnswerLink(entry.marker, entry.line, view, rect, placement);
+      if (entry.dropped === undefined) {
+        entry.node.style.left = `${box.left}px`;
+        entry.node.style.top = `${box.top}px`;
+        entry.node.style.width = `${box.right - box.left}px`;
+        entry.node.style.maxHeight = `${maxHeight}px`;
+      }
+      if (entry.link.parentElement === null) this.links.append(entry.link);
+      drawAnswerLink(entry.marker, entry.link, view, rect, placement);
     }
+    agentGeneral.classList.toggle("scrollable", agentGeneral.scrollHeight > agentGeneral.clientHeight);
     for (const entry of this.shown.values()) {
       if (entry.stopTimer === undefined) this.startTimer(entry);
     }
+  }
+
+  private positionMoved(node: HTMLElement, dropped: NonNullable<Shown["dropped"]>): Box {
+    const view = answerViewport();
+    node.classList.add("manually-placed");
+    node.style.width = `${dropped.width}px`;
+    node.style.maxWidth = `${view.right - view.left}px`;
+    node.style.maxHeight = `${view.bottom - view.top}px`;
+    const { width, height } = node.getBoundingClientRect();
+    const point = fitPosition(dropped.point, width, height);
+    node.style.left = `${point.x}px`;
+    node.style.top = `${point.y}px`;
+    return { left: point.x, top: point.y, right: point.x + width, bottom: point.y + height };
   }
 
   private placeGeneral(entry: Shown, unavailable: boolean): void {
@@ -654,6 +739,11 @@ export class Answers {
     if (entry.show !== null) {
       const hidden = unavailable || (!entry.hasPlace && !entry.localAnchor());
       if (entry.show.hidden !== hidden) entry.show.hidden = hidden;
+    }
+    entry.link.remove();
+    if (entry.dropped !== undefined) {
+      entry.marker.hidden = true;
+      return;
     }
     if (entry.node.parentElement === this.ui.agentGeneral) return;
     this.ui.agentGeneral.append(entry.node);

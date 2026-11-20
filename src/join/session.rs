@@ -442,6 +442,7 @@ pub(crate) mod tests {
             comment_mode,
             show_cursor: _,
             corner,
+            theme,
             answer_timeout,
         } = Settings::default();
         Session::new(Preferences {
@@ -451,6 +452,7 @@ pub(crate) mod tests {
                 comment_mode,
                 show_cursor: Switch::On,
                 corner,
+                theme,
                 answer_timeout,
             },
             given: None,

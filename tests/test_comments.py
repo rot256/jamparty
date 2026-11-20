@@ -482,7 +482,7 @@ def test_the_comment_list(tmp_path: Path, page: Page) -> None:
         # Delivered once the agent has them, in green.
         assert len(jamparty(tmp_path, "recv").splitlines()) == 2
         expect(rows.nth(1).locator(".state")).to_have_text("delivered")
-        expect(rows.nth(1).locator(".state")).to_have_css("color", "rgb(140, 233, 154)")
+        expect(rows.nth(1).locator(".state")).to_have_css("color", "rgb(23, 102, 48)")
         expect(overlay(page, "#list-count")).to_have_text("0 queued")
 
         # Collapse with ▾, and by clicking the header.
@@ -501,7 +501,7 @@ def test_the_comment_list(tmp_path: Path, page: Page) -> None:
         unsent = rows.nth(0)
         expect(unsent).to_have_attribute("data-state", "unsent")
         expect(unsent.locator(".state")).to_have_text("not sent")
-        expect(unsent.locator(".state")).to_have_css("color", "rgb(255, 168, 168)")
+        expect(unsent.locator(".state")).to_have_css("color", "rgb(162, 34, 34)")
         _ = page.evaluate("() => window.jampartyRestore()")
         unsent.locator("button.again").click()
         expect(unsent).to_have_attribute("data-state", "queued")
