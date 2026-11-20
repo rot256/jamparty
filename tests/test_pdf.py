@@ -841,6 +841,13 @@ def test_single_pdf_opens_from_root_and_reloads(tmp_path: Path, page: Page) -> N
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         assert page.request.get(f"{joined.url.rstrip('/')}/paper.log").status == 404
 
+        pdf.unlink()
+        expect(page.locator("#pdf-status")).to_have_text(
+            "Could not open the updated PDF."
+        )
+        expect(text).to_have_text("Old PDF")
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+
         updated = site / "paper.tmp"
         _ = updated.write_bytes(reading_pdf([(792, 150, ["Rebuilt PDF"])]))
         _ = updated.replace(pdf)

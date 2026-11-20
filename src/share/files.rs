@@ -8,7 +8,7 @@ use std::{
 use http_body_util::BodyExt;
 use hyper::{
     Method, Request, Response, StatusCode,
-    header::{self, CACHE_CONTROL, CONTENT_TYPE},
+    header::{self, ACCEPT, CACHE_CONTROL, CONTENT_TYPE},
 };
 use hyper_staticfile::{ResolveResult, Resolver, ResponseBuilder};
 use nix::libc;
@@ -20,7 +20,7 @@ use crate::{
     core::text::Untrusted,
     protocol::control::Revision,
     share::{
-        inject::{ClientMode, maybe_inject_client},
+        inject::{ClientMode, maybe_inject_client, missing_page},
         listing,
     },
 };
@@ -65,7 +65,18 @@ impl Files {
         } else {
             path_access(&requested, root).await?
         };
+        let missing = async || {
+            if is_document_request(&request)
+                && (single.is_some()
+                    || has_visible_ancestor(&root.join(&requested.path), root).await)
+            {
+                missing_page(&request_method, revision)
+            } else {
+                empty_response(StatusCode::NOT_FOUND)
+            }
+        };
         let resolved = match access {
+            Access::Missing => return Ok(missing().await),
             Access::Refused(status) => return Ok(empty_response(status)),
             Access::Listing(path) => {
                 let response = listing::response(root, &path, &requested.path, &request_method)
@@ -92,9 +103,9 @@ impl Files {
                 }
                 Ok(path) => {
                     tracing::warn!(path = %Untrusted(path.display()), "refused a symlink outside the root or to a dotfile");
-                    ResolveResult::NotFound
+                    return Ok(empty_response(StatusCode::NOT_FOUND));
                 }
-                Err(error) if is_missing_path_error(&error) => ResolveResult::NotFound,
+                Err(error) if is_missing_path_error(&error) => return Ok(missing().await),
                 Err(error) if error.kind() == ErrorKind::PermissionDenied => {
                     ResolveResult::PermissionDenied
                 }
@@ -103,8 +114,8 @@ impl Files {
                     return Err(read_error());
                 }
             },
+            ResolveResult::NotFound => return Ok(missing().await),
             other @ (ResolveResult::MethodNotMatched
-            | ResolveResult::NotFound
             | ResolveResult::PermissionDenied
             | ResolveResult::IsDirectory { .. }) => other,
         };
@@ -140,6 +151,36 @@ impl Files {
             .insert(CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
         maybe_inject_client(response, &request_method, ClientMode::Live(revision)).await
     }
+}
+
+fn is_document_request<B>(request: &Request<B>) -> bool {
+    let headers = request.headers();
+    let dest = headers.get("sec-fetch-dest");
+    let mode = headers.get("sec-fetch-mode");
+    if dest.is_some() || mode.is_some() {
+        return dest.is_none_or(|value| value == "document")
+            && mode.is_none_or(|value| value == "navigate");
+    }
+
+    headers.get_all(ACCEPT).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value.split(',').any(|entry| {
+                let mut parts = entry.split(';').map(str::trim);
+                parts.next().is_some_and(|media_type| {
+                    media_type.eq_ignore_ascii_case("text/html")
+                        || media_type.eq_ignore_ascii_case("application/xhtml+xml")
+                }) && parts.all(|parameter| {
+                    parameter.split_once('=').is_none_or(|(name, value)| {
+                        !name.trim().eq_ignore_ascii_case("q")
+                            || value
+                                .trim()
+                                .parse::<f32>()
+                                .is_ok_and(|q| q > 0.0 && q <= 1.0)
+                    })
+                })
+            })
+        })
+    })
 }
 
 fn read_error() -> RequestError {
@@ -178,6 +219,7 @@ impl TryFrom<&str> for RequestedPath {
 }
 
 enum Access {
+    Missing,
     Refused(StatusCode),
     File,
     Redirect(String),
@@ -211,10 +253,12 @@ async fn single_access(uri_path: &str, file: &Path, root: &Path) -> Result<Acces
 }
 
 async fn path_access(requested: &RequestedPath, root: &Path) -> Result<Access, RequestError> {
-    let Some((path, metadata)) = (match visible_entry(&root.join(&requested.path), root).await {
-        Ok(entry) => entry,
-        Err(error) => return access_error(error),
-    }) else {
+    let Some((path, metadata)) =
+        (match checked_visible_entry(&root.join(&requested.path), root).await {
+            Ok(entry) => entry,
+            Err(error) => return access_error(error),
+        })
+    else {
         return Ok(Access::Refused(StatusCode::NOT_FOUND));
     };
     if !metadata.is_dir() {
@@ -240,25 +284,38 @@ pub(crate) async fn visible_entry(
     path: &Path,
     root: &Path,
 ) -> io::Result<Option<(PathBuf, std::fs::Metadata)>> {
-    if !served(path, root) {
-        return Ok(None);
-    }
-    let result = async {
-        let path = fs::canonicalize(path).await?;
-        if !served(&path, root) {
-            return Ok(None);
-        }
-        let metadata = fs::metadata(&path).await?;
-        if metadata.is_file() {
-            fs::File::open(&path).await?;
-        }
-        Ok((metadata.is_file() || metadata.is_dir()).then_some((path, metadata)))
-    }
-    .await;
-    match result {
+    match checked_visible_entry(path, root).await {
         Err(error) if is_missing_path_error(&error) => Ok(None),
         result => result,
     }
+}
+
+async fn checked_visible_entry(
+    path: &Path,
+    root: &Path,
+) -> io::Result<Option<(PathBuf, std::fs::Metadata)>> {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return Ok(None);
+    };
+    if has_hidden_component(relative) {
+        return Ok(None);
+    }
+    // Resolve one component at a time, so a prefix leading out of the share
+    // ends the lookup before anything beneath it is touched: nothing in an
+    // excluded directory can answer differently by existing or not.
+    let mut path = root.to_path_buf();
+    for component in relative.components() {
+        path.push(component);
+        path = fs::canonicalize(&path).await?;
+        if !served(&path, root) {
+            return Ok(None);
+        }
+    }
+    let metadata = fs::metadata(&path).await?;
+    if metadata.is_file() {
+        fs::File::open(&path).await?;
+    }
+    Ok((metadata.is_file() || metadata.is_dir()).then_some((path, metadata)))
 }
 
 pub(crate) fn encode_name(name: &str) -> impl std::fmt::Display + '_ {
@@ -291,6 +348,24 @@ fn served(path: &Path, root: &Path) -> bool {
         .is_ok_and(|inside| !has_hidden_component(inside))
 }
 
+/// Check the deepest existing entry, including symlinks with missing targets,
+/// before exposing live recovery for a missing path.
+async fn has_visible_ancestor(path: &Path, root: &Path) -> bool {
+    for ancestor in path.ancestors().take_while(|path| served(path, root)) {
+        match fs::symlink_metadata(ancestor).await {
+            Ok(_) => {
+                return fs::canonicalize(ancestor)
+                    .await
+                    .is_ok_and(|resolved| served(&resolved, root));
+            }
+            Err(error)
+                if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
 fn has_hidden_component(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str().to_string_lossy().starts_with('.'))
@@ -299,6 +374,9 @@ fn has_hidden_component(path: &Path) -> bool {
 fn access_error(error: io::Error) -> Result<Access, RequestError> {
     if error.kind() == ErrorKind::PermissionDenied {
         return Ok(Access::Refused(StatusCode::FORBIDDEN));
+    }
+    if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) {
+        return Ok(Access::Missing);
     }
     if is_missing_path_error(&error) {
         return Ok(Access::Refused(StatusCode::NOT_FOUND));
@@ -495,6 +573,116 @@ mod tests {
         fs::rename(&root, moved).unwrap();
         symlink(outside.path(), &root).unwrap();
         assert_eq!(get(&files, location).await.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn missing_pages_only_recover_for_documents_in_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        symlink(dir.path().parent().unwrap(), root.join("outside")).unwrap();
+
+        for (files, visible, excluded) in [
+            (
+                Files::new(root.clone(), Some(root.join("paper.pdf"))),
+                "/paper.pdf",
+                ["/paper.log", "/paper.pdf/"],
+            ),
+            (
+                Files::new(root, None),
+                "/missing.html",
+                ["/.hidden", "/outside"],
+            ),
+        ] {
+            let cases = [
+                (visible, Some("document"), Some("navigate"), "*/*", true),
+                (visible, None, None, "text/html, */*;q=0.8", true),
+                (visible, Some("image"), Some("no-cors"), "text/html", false),
+                (
+                    visible,
+                    Some("iframe"),
+                    Some("navigate"),
+                    "text/html",
+                    false,
+                ),
+                (visible, None, Some("cors"), "text/html", false),
+                (visible, None, None, "*/*", false),
+                (visible, None, None, "text/html;q=0", false),
+            ];
+            for (path, dest, mode, accept, recovery) in cases.into_iter().chain(
+                excluded.map(|path| (path, Some("document"), Some("navigate"), "text/html", false)),
+            ) {
+                let mut request = Request::builder().uri(path).header(header::ACCEPT, accept);
+                if let Some(dest) = dest {
+                    request = request.header("sec-fetch-dest", dest);
+                }
+                if let Some(mode) = mode {
+                    request = request.header("sec-fetch-mode", mode);
+                }
+                let response = files
+                    .handle(request.body(()).unwrap(), Revision::default())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+                let html = body(response).await;
+                if recovery {
+                    assert!(html.contains("client.js?live=0"), "{path}");
+                } else {
+                    assert!(html.is_empty(), "{path}: {html}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_children_of_excluded_symlinks_get_plain_404s() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let hidden = root.join(".hidden");
+        fs::create_dir(&hidden).unwrap();
+        fs::create_dir(root.join("visible")).unwrap();
+        for (link, target) in [("outside", outside.path()), ("hidden", hidden.as_path())] {
+            fs::write(target.join("existing.html"), "excluded").unwrap();
+            // Traversing into it fails, which must not show either.
+            let locked = target.join("locked");
+            fs::create_dir(&locked).unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+            symlink(target, root.join(link)).unwrap();
+        }
+        let files = Files::new(root, None);
+
+        let request = async |path: &str| {
+            let request = Request::builder()
+                .uri(path)
+                .header("sec-fetch-dest", "document")
+                .body(())
+                .unwrap();
+            let response = files.handle(request, Revision::default()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            (response.headers().clone(), body(response).await)
+        };
+        let plain = request("/.hidden/existing.html").await;
+        assert!(plain.1.is_empty());
+        for link in ["outside", "hidden"] {
+            for child in [
+                "existing.html",
+                "missing.html",
+                "absent/nested.html",
+                "locked/nested.html",
+            ] {
+                let path = format!("/{link}/{child}");
+                assert_eq!(request(&path).await, plain, "{path}");
+            }
+        }
+        assert!(
+            request("/visible/missing.html")
+                .await
+                .1
+                .contains("client.js?live=0")
+        );
+        for target in [outside.path(), hidden.as_path()] {
+            fs::set_permissions(target.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+        }
     }
 
     async fn get(files: &Files, uri: &str) -> hyper::Response<crate::adapters::http::AppBody> {

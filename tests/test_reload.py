@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import cast
 
+import pytest
 from playwright.sync_api import (
     Browser,
     Page,
@@ -46,6 +47,29 @@ def test_live_reload_after_a_file_change(tmp_path: Path, page: Page) -> None:
         index = site / "index.html"
         _ = index.write_text(index.read_text().replace("Fixture page", "Changed page"))
         expect(page.locator("h1")).to_have_text("Changed page")
+
+
+@pytest.mark.parametrize("single", [False, True], ids=["directory", "single-file"])
+def test_live_reload_recovers_a_deleted_page(
+    tmp_path: Path, page: Page, single: bool
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    document = site / "page.html"
+    _ = document.write_text("<h1>Original page</h1>")
+    with (
+        share(tmp_path, "serve", str(document if single else site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(f"{joined.url.rstrip('/')}/page.html")
+        expect(page.get_by_role("heading", name="Original page")).to_be_visible()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        document.unlink()
+        # Wait for the debounced reload to land on the missing page.
+        expect(page.get_by_role("heading", name="Page not found")).to_be_visible()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = document.write_text("<h1>Rebuilt page</h1>")
+        expect(page.get_by_role("heading", name="Rebuilt page")).to_be_visible()
 
 
 def test_only_a_newer_revision_reloads(tmp_path: Path, page: Page) -> None:
