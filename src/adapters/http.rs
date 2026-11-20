@@ -133,15 +133,6 @@ pub(crate) fn json_response(status: StatusCode, body: &impl Serialize) -> Respon
     no_store(response)
 }
 
-pub(crate) fn javascript_response(script: &'static str) -> Response<AppBody> {
-    let mut response = Response::new(full_body(Bytes::from_static(script.as_bytes())));
-    response.headers_mut().insert(
-        CONTENT_TYPE,
-        header::HeaderValue::from_static("text/javascript; charset=utf-8"),
-    );
-    no_store(response)
-}
-
 pub(crate) fn empty_response(status: StatusCode) -> Response<AppBody> {
     let mut response = Response::new(full_body(Bytes::new()));
     *response.status_mut() = status;

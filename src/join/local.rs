@@ -35,8 +35,8 @@ use tokio::{
 use crate::{
     Report,
     adapters::http::{
-        AppBody, BodyError, HEADER_READ_TIMEOUT, RequestError, full_body, javascript_response,
-        json_response, map_incoming_response, read_upload,
+        AppBody, BodyError, HEADER_READ_TIMEOUT, RequestError, full_body, json_response,
+        map_incoming_response, read_upload,
     },
     core::{
         request::{
@@ -49,9 +49,9 @@ use crate::{
     protocol::resource::{MAX_UPLOAD_REPLY_BYTES, ResourceId, UPLOAD_PATH, Uploaded},
 };
 
-/// The browser client the share's pages load: this joiner's own, so it
-/// always speaks this joiner's page API.
-const CLIENT_JS: &str = include_str!("../../assets/client.js");
+mod assets;
+
+use assets::{CLIENT, JAVASCRIPT, PDF_CMAPS, PDF_SCRIPT, PDF_STYLE, PDF_VIEWER, PDF_WORKER};
 
 /// The pause after a failed accept.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
@@ -182,22 +182,20 @@ async fn handle(
     let page_load = is_navigation(&request_facts);
     let pdf = is_pdf_path(request_facts.path);
     let decision = origin.decide(&request_facts);
+    let headers = request.headers();
     let mut response = match decision {
-        Ok(Route::Client) => javascript_response(CLIENT_JS),
-        Ok(Route::PdfViewer) => pdf_viewer_response(origin),
-        Ok(Route::PdfScript) => javascript_response(include_str!("../../assets/pdf.js")),
+        Ok(Route::Client) => CLIENT.response(headers, JAVASCRIPT),
+        Ok(Route::PdfViewer) => pdf_viewer_response(origin, headers),
+        Ok(Route::PdfScript) => PDF_SCRIPT.response(headers, JAVASCRIPT),
         Ok(Route::PdfWorker) => {
-            let mut response = javascript_response(include_str!("../../assets/pdf-worker.js"));
+            let mut response = PDF_WORKER.response(headers, JAVASCRIPT);
             response.headers_mut().insert(
                 header::CONTENT_SECURITY_POLICY,
                 HeaderValue::from_static("default-src 'none'"),
             );
             response
         }
-        Ok(Route::PdfStyle) => pdf_asset(
-            include_str!("../../assets/pdf.css"),
-            "text/css; charset=utf-8",
-        ),
+        Ok(Route::PdfStyle) => nosniff(PDF_STYLE.response(headers, "text/css; charset=utf-8")),
         Ok(Route::PdfCMap) => pdf_cmap_response(request_facts.path),
         Ok(Route::Socket) => socket::open(request, session),
         Ok(Route::Upload) => upload(request, session, proxy, connect_wait)
@@ -233,27 +231,18 @@ fn pdf_cmap_response(path: &str) -> Response<AppBody> {
     fn cmap(name: &str) -> Option<&'static [u8]> {
         let cmap_range = include!("../../assets/pdf-cmaps.rs");
         let range = cmap_range(name)?;
-        include_bytes!("../../assets/pdf-cmaps.bin").get(range)
+        PDF_CMAPS.identity().get(range)
     }
 
     let Some(data) = path.strip_prefix(PDF_CMAP_PREFIX).and_then(cmap) else {
         return RequestError::new(StatusCode::NOT_FOUND, "no such PDF CMap").into();
     };
-    let mut response = Response::new(full_body(Bytes::from_static(data)));
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+    // The embedded stream encodes the whole table. Each URL serves one slice.
+    assets::asset_response(data, "application/octet-stream")
 }
 
-fn pdf_viewer_response(origin: &LocalOrigin) -> Response<AppBody> {
-    let mut response = pdf_asset(
-        include_str!("../../assets/pdf.html"),
-        "text/html; charset=utf-8",
-    );
+fn pdf_viewer_response(origin: &LocalOrigin, headers: &HeaderMap) -> Response<AppBody> {
+    let mut response = nosniff(PDF_VIEWER.response(headers, "text/html; charset=utf-8"));
     response.headers_mut().insert(
         "cross-origin-opener-policy",
         HeaderValue::from_static("noopener-allow-popups"),
@@ -274,11 +263,7 @@ fn pdf_viewer_response(origin: &LocalOrigin) -> Response<AppBody> {
     response
 }
 
-fn pdf_asset(text: &'static str, content_type: &'static str) -> Response<AppBody> {
-    let mut response = javascript_response(text);
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+fn nosniff(mut response: Response<AppBody>) -> Response<AppBody> {
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),

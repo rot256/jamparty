@@ -287,3 +287,181 @@ async fn the_joiner_serves_the_client_itself() {
         .unwrap();
     assert_eq!(fetch(&joiner, head).await.status, 200);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn embedded_assets_negotiate_encoding_and_head_lengths() {
+    let dir = fixture_dir();
+    let share = share_files(&dir).await;
+    let joiner = join(&share, "alice").await;
+    let cmaps = include_bytes!("../../assets/pdf-cmaps.bin");
+    let cmap_range = include!("../../assets/pdf-cmaps.rs");
+    let cmap = cmaps.get(cmap_range("78-EUC-H.bcmap").unwrap()).unwrap();
+
+    for (path, raw, content_type) in [
+        (
+            "/_jamparty/client.js",
+            include_bytes!("../../assets/client.js").as_slice(),
+            "text/javascript; charset=utf-8",
+        ),
+        (
+            "/_jamparty/pdf.js",
+            include_bytes!("../../assets/pdf.js").as_slice(),
+            "text/javascript; charset=utf-8",
+        ),
+        (
+            "/_jamparty/pdf-worker.js",
+            include_bytes!("../../assets/pdf-worker.js").as_slice(),
+            "text/javascript; charset=utf-8",
+        ),
+        (
+            "/_jamparty/pdf.css",
+            include_bytes!("../../assets/pdf.css").as_slice(),
+            "text/css; charset=utf-8",
+        ),
+        (
+            "/fixture.pdf",
+            include_bytes!("../../assets/pdf.html").as_slice(),
+            "text/html; charset=utf-8",
+        ),
+        (
+            "/_jamparty/pdf-cmaps/78-EUC-H.bcmap",
+            cmap,
+            "application/octet-stream",
+        ),
+    ] {
+        for accept in ["gzip, br", "*;q=1, br;q=0"] {
+            let request = |method| {
+                let mut request =
+                    local(&joiner, method, path).header(header::ACCEPT_ENCODING, accept);
+                if path == "/fixture.pdf" {
+                    request = request
+                        .header("sec-fetch-mode", "navigate")
+                        .header("sec-fetch-dest", "document");
+                }
+                request.body(Full::default()).unwrap()
+            };
+            let get = send(joiner.local_addr(), request("GET")).await;
+            let head = send(joiner.local_addr(), request("HEAD")).await;
+            assert_eq!(get.status(), StatusCode::OK, "{path}");
+            assert_eq!(head.status(), get.status(), "{path}");
+            let headers = get.headers().clone();
+            for name in [
+                header::CONTENT_LENGTH,
+                header::CONTENT_ENCODING,
+                header::CONTENT_TYPE,
+                header::CACHE_CONTROL,
+                header::VARY,
+                header::CONTENT_SECURITY_POLICY,
+                header::X_CONTENT_TYPE_OPTIONS,
+            ] {
+                assert_eq!(
+                    head.headers().get_all(&name),
+                    headers.get_all(&name),
+                    "{path} {name}"
+                );
+            }
+            assert_eq!(headers[header::CONTENT_TYPE], content_type);
+            assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+            assert!(
+                headers
+                    .get_all(header::CONTENT_SECURITY_POLICY)
+                    .iter()
+                    .any(|v| v == "frame-ancestors 'self'")
+            );
+            if path == "/_jamparty/pdf-worker.js" {
+                assert_eq!(
+                    headers[header::CONTENT_SECURITY_POLICY],
+                    "default-src 'none'"
+                );
+            }
+            if path == "/fixture.pdf" || path == "/_jamparty/pdf.css" {
+                assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+            }
+            if path == "/fixture.pdf" {
+                assert_eq!(
+                    headers["cross-origin-opener-policy"],
+                    "noopener-allow-popups"
+                );
+                assert!(
+                    headers
+                        .get_all(header::VARY)
+                        .iter()
+                        .any(|v| v == "Sec-Fetch-Dest, Sec-Fetch-Mode")
+                );
+            }
+            let body = get.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(headers[header::CONTENT_LENGTH], body.len().to_string());
+            assert!(
+                head.into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes()
+                    .is_empty()
+            );
+
+            let negotiates = content_type != "application/octet-stream";
+            assert_eq!(
+                headers
+                    .get_all(header::VARY)
+                    .iter()
+                    .any(|v| v == "Accept-Encoding"),
+                negotiates,
+            );
+            if negotiates && accept == "gzip, br" {
+                assert_eq!(headers[header::CONTENT_ENCODING], "br");
+                let mut decoded = Vec::new();
+                brotli_decompressor::BrotliDecompress(&mut body.as_ref(), &mut decoded).unwrap();
+                assert_eq!(decoded, raw, "{path}");
+            } else {
+                assert!(!headers.contains_key(header::CONTENT_ENCODING), "{path}");
+                assert_eq!(body, raw, "{path}");
+            }
+        }
+    }
+    assert_eq!(
+        get(&joiner, "/_jamparty/pdf-cmaps/78-EUC-H.bcmap.bak")
+            .await
+            .status,
+        StatusCode::NOT_FOUND,
+    );
+
+    // Explicit weights decide, also across header lines; excluding both
+    // representations is refused.
+    for (lines, status, encoding) in [
+        (&["identity;q=1, br;q=0.1"][..], StatusCode::OK, None),
+        (&["identity;q=1", "br;q=0.1"][..], StatusCode::OK, None),
+        (&["identity;q=0.5", "br"][..], StatusCode::OK, Some("br")),
+        (
+            &["br;q=0", "identity;q=0"][..],
+            StatusCode::NOT_ACCEPTABLE,
+            None,
+        ),
+        (&["*;q=0"][..], StatusCode::NOT_ACCEPTABLE, None),
+    ] {
+        for method in ["GET", "HEAD"] {
+            let mut request = local(&joiner, method, "/_jamparty/client.js");
+            for line in lines {
+                request = request.header(header::ACCEPT_ENCODING, *line);
+            }
+            let response = send(joiner.local_addr(), request.body(Full::default()).unwrap()).await;
+            assert_eq!(response.status(), status, "{method} {lines:?}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_ENCODING)
+                    .map(|value| value.to_str().unwrap()),
+                encoding,
+                "{method} {lines:?}"
+            );
+            assert!(
+                response
+                    .headers()
+                    .get_all(header::VARY)
+                    .iter()
+                    .any(|v| v == "Accept-Encoding"),
+                "{method} {lines:?}"
+            );
+        }
+    }
+}
