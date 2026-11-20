@@ -47,7 +47,12 @@ use crate::{
         token::{PartyToken, TokenError},
     },
     join::{JoinConfig, Joiner, ProxyLimits, Refused},
-    protocol::{agent::Addressee, control::AnswerText, resource::ResourceId},
+    protocol::{
+        agent::Addressee,
+        answer::{AnswerAnchor, AnswerPath, AnswerSelector, PlaceAnchor, pdf_place},
+        control::AnswerText,
+        resource::ResourceId,
+    },
     share::{
         Share, ShareConfig, Source,
         delivery::{CommandTarget, Target},
@@ -170,6 +175,15 @@ enum Command {
         /// to its author).
         #[arg(long, value_name = "COMMENT ID")]
         anchor: Option<CommentId>,
+        /// Show the answer next to this CSS selector.
+        #[arg(long, value_name = "CSS SELECTOR", requires = "page", conflicts_with_all = ["anchor", "at_pdf"])]
+        at: Option<AnswerSelector>,
+        /// The share URL path containing the selector.
+        #[arg(long, value_name = "URL PATH", requires = "at")]
+        page: Option<AnswerPath>,
+        /// Show the answer next to a box on a PDF page.
+        #[arg(long, value_name = "PATH#page=N&box=x0,y0,x1,y1", value_parser = pdf_place, conflicts_with = "anchor")]
+        at_pdf: Option<PlaceAnchor>,
         /// Only to this person: a name, `key:<fingerprint>` (or the full
         /// key) when names collide, or `all` for everyone.
         #[arg(long, value_name = "NAME")]
@@ -322,6 +336,9 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
             choices,
             message,
             anchor,
+            at,
+            page,
+            at_pdf,
             to,
             which,
         } => {
@@ -334,6 +351,14 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
                 }
             };
             let message = AnswerText::try_from(message)?;
+            let anchor = anchor
+                .map(|comment| AnswerAnchor::Comment { comment })
+                .or_else(|| {
+                    at.zip(page)
+                        .map(|(selector, path)| PlaceAnchor::Html { path, selector })
+                        .or(at_pdf)
+                        .map(|place| AnswerAnchor::Place { place })
+                });
             let stream = runtime::connect(&runtime::default_dir()?, which.share.as_ref()).await?;
             agent::send(stream, message, choices.try_into()?, anchor, to).await
         }

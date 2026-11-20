@@ -127,6 +127,16 @@ pub(crate) struct PdfAnchorFields {
 #[cfg_attr(test, derive(ts_rs::TS), ts(as = "PdfAnchorFields"))]
 pub(crate) struct PdfAnchor(PdfAnchorFields);
 
+impl PdfAnchor {
+    pub(crate) fn new(page: u32, [x0, y0, x1, y1]: [f64; 4]) -> Result<Self, Invalid> {
+        PdfAnchorFields {
+            page,
+            bounds: PdfBox { x0, y0, x1, y1 },
+        }
+        .try_into()
+    }
+}
+
 // Validation excludes NaN, so equality is reflexive.
 impl Eq for PdfAnchor {}
 

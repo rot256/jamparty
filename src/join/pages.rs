@@ -13,7 +13,7 @@ use crate::{join::api::ToPage, protocol::presence::PagePath};
 const MAX_PAGES: usize = 64;
 /// The largest message sent to a page. The largest the joiner makes is a
 /// `hello`, whose answers are bounded well below this
-/// ([`crate::join::state::MAX_ANSWERS_HTML`]); a larger one is not sent.
+/// ([`crate::join::state::MAX_ANSWERS_BYTES`]); a larger one is not sent.
 pub(crate) const MAX_FRAME: usize = 1024 * 1024;
 /// Messages waiting for one page. A page that falls this far behind (a
 /// frozen tab) is dropped: it reconnects and starts from a new `hello`.

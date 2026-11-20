@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::{
     core::{ids::CommentId, rng::SystemRng},
-    join::{MAX_ANSWER_HTML, MAX_ANSWERS_HTML, MAX_FRAME},
+    join::{MAX_ANSWER_HTML, MAX_ANSWERS_BYTES, MAX_FRAME},
     tests::{
         fake_share::fake_share,
         harness::{PageSocket, try_joiner, within},
@@ -69,7 +69,7 @@ async fn answers_that_render_large_stay_bounded() {
         assert!(!answer.html.as_str().contains("<table>"));
         stored += answer.html.len();
     }
-    assert!(stored <= MAX_ANSWERS_HTML, "{stored}");
+    assert!(stored <= MAX_ANSWERS_BYTES, "{stored}");
     assert!(view.answers.len() < 20, "{}", view.answers.len());
     // What a page is told when it attaches fits a frame.
     let (_page, hello) = within(

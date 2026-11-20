@@ -15,7 +15,7 @@ mod uplink;
 pub(crate) use crate::join::local::ProxyLimits;
 #[cfg(test)]
 pub(crate) use crate::join::{
-    markdown::MAX_ANSWER_HTML, pages::MAX_FRAME, state::MAX_ANSWERS_HTML, uplink::REPORT_GAP,
+    markdown::MAX_ANSWER_HTML, pages::MAX_FRAME, state::MAX_ANSWERS_BYTES, uplink::REPORT_GAP,
 };
 
 use std::{

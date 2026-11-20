@@ -209,6 +209,7 @@ mod bindings {
             state::{Answer, Link, MAX_ANSWERS, Snapshot},
         },
         protocol::{
+            answer::{AnswerPath, AnswerSelector, PlaceAnchor},
             comment::{
                 Author, CommentPage, CommentSelector, MAX_COMMENT, MAX_SELECTED_TEXT,
                 PdfAnchorFields, PdfBox,
@@ -258,6 +259,9 @@ mod bindings {
             PageSettings::decl(&cfg),
             SettingsChange::decl(&cfg),
             Choices::decl(&cfg),
+            AnswerPath::decl(&cfg),
+            AnswerSelector::decl(&cfg),
+            PlaceAnchor::decl(&cfg),
             Answer::decl(&cfg),
             Link::decl(&cfg),
             Snapshot::decl(&cfg),

@@ -50,9 +50,15 @@ async fn send_to(
 ) -> Result<(), String> {
     let stream = UnixStream::connect(path).await.unwrap();
     let message = message.to_owned().try_into().unwrap();
-    agent::send(stream, message, Default::default(), anchor, to)
-        .await
-        .map_err(|error| format!("{error:?}"))
+    agent::send(
+        stream,
+        message,
+        Default::default(),
+        anchor.map(|comment| crate::protocol::answer::AnswerAnchor::Comment { comment }),
+        to,
+    )
+    .await
+    .map_err(|error| format!("{error:?}"))
 }
 
 #[tokio::test(flavor = "multi_thread")]

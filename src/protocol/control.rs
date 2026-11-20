@@ -29,6 +29,7 @@ use crate::{
         version::{JampartyVersion, Version1},
     },
     protocol::{
+        answer::AnswerAnchor,
         comment::{Author, CommentPage, CommentSelector, Draft},
         presence::{PagePath, Person, Position},
     },
@@ -132,7 +133,7 @@ pub(crate) enum ShareMessage {
         #[serde(default, skip_serializing_if = "Choices::is_empty")]
         choices: Choices,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        anchor: Option<Anchor>,
+        anchor: Option<AnswerAnchor<Anchor>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<EndpointKey>,
     },
@@ -204,6 +205,7 @@ pub(crate) enum SiteInfo {
 /// The comment an answer replies to, with where it was made so pages can
 /// place the answer next to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Anchor {
     pub(crate) comment: CommentId,
     pub(crate) page: CommentPage,

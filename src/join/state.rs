@@ -18,26 +18,27 @@ use crate::{
         preferences::PageSettings,
     },
     protocol::{
+        answer::{AnswerAnchor, PlaceAnchor},
         comment::{Author, CommentPage, CommentSelector},
         control::{
             AckOutcome, Choices, MAX_QUEUED_PER_KEY, RefusedReason, Revision, ShareMessage,
             StatusLine,
         },
+        line_size,
         presence::Person,
     },
 };
 
 /// Answers kept for pages that load later.
 pub(crate) const MAX_ANSWERS: usize = 100;
-/// The most answer HTML kept for pages that load later, all answers
-/// together: older answers go first. Each is at most
-/// [`markdown::MAX_ANSWER_HTML`], so the latest always fits.
-pub(crate) const MAX_ANSWERS_HTML: usize = 256 * 1024;
+/// The encoded size of answers kept for pages that load later, including
+/// their text, locations and choices. Older answers go first.
+pub(crate) const MAX_ANSWERS_BYTES: usize = 256 * 1024;
 
-/// Whether answers of `count` and `bytes` of HTML have room for one more
+/// Whether answers of `count` and `bytes` have room for one more
 /// of `incoming` bytes.
 fn room(count: usize, bytes: usize, incoming: usize) -> bool {
-    count < MAX_ANSWERS && bytes.saturating_add(incoming) <= MAX_ANSWERS_HTML
+    count < MAX_ANSWERS && bytes.saturating_add(incoming) <= MAX_ANSWERS_BYTES
 }
 
 /// The joiner's link to the share.
@@ -80,8 +81,17 @@ pub(crate) struct Answer {
     #[serde(rename = "toYou")]
     pub(crate) to_you: bool,
     pub(crate) choices: Choices,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) place: Option<PlaceAnchor>,
     /// Arrived after the share's admission replay.
     pub(crate) live: bool,
+}
+
+impl Answer {
+    fn encoded_size(&self) -> usize {
+        line_size(self).unwrap_or(MAX_ANSWERS_BYTES)
+    }
 }
 
 /// Everything a page is told when it connects.
@@ -96,8 +106,8 @@ pub(crate) struct Snapshot {
     /// share first said.
     pub(crate) mine: Option<Vec<CommentId>>,
     pub(crate) settings: PageSettings,
-    /// Recent answers, oldest first: at most [`MAX_ANSWERS`], of at most
-    /// [`MAX_ANSWERS_HTML`] together.
+    /// Recent answers, oldest first: at most [`MAX_ANSWERS`], encoding to at most
+    /// [`MAX_ANSWERS_BYTES`] together.
     pub(crate) answers: Vec<Answer>,
     /// The live-reload revision (shared directories only).
     pub(crate) revision: Option<Revision>,
@@ -175,8 +185,8 @@ pub(crate) struct State {
     settings: PageSettings,
     answers: VecDeque<Answer>,
     catching_up: bool,
-    /// The HTML of `answers`, in bytes.
-    answers_html: usize,
+    /// The encoded size of `answers`, in bytes.
+    answers_bytes: usize,
     revision: Option<Revision>,
 }
 
@@ -190,7 +200,7 @@ impl State {
             settings,
             answers: VecDeque::new(),
             catching_up: true,
-            answers_html: 0,
+            answers_bytes: 0,
             revision: None,
         }
     }
@@ -262,7 +272,7 @@ impl State {
             .map(|answer| ToPage::AnswerResolved { id: answer.id })
             .collect();
         self.answers.retain(|answer| answer.choices.is_empty());
-        self.answers_html = self.answers.iter().map(|answer| answer.html.len()).sum();
+        self.answers_bytes = self.answers.iter().map(Answer::encoded_size).sum();
         if link != self.link {
             self.link = link;
             messages.push(ToPage::Link(self.link.clone()));
@@ -331,13 +341,15 @@ impl State {
                 if self.answers.iter().any(|answer| answer.id == id) {
                     return Vec::new();
                 }
-                let (reply_to, anchor, page) = match anchor {
-                    Some(anchor) => (
-                        Some(anchor.comment),
-                        Some(anchor.selector),
-                        Some(anchor.page),
+                let (reply_to, anchor, page, place) = match anchor {
+                    Some(AnswerAnchor::Comment { comment }) => (
+                        Some(comment.comment),
+                        Some(comment.selector),
+                        Some(comment.page),
+                        None,
                     ),
-                    None => (None, None, None),
+                    Some(AnswerAnchor::Place { place }) => (None, None, None, Some(place)),
+                    None => (None, None, None, None),
                 };
                 let you = self.link.you.as_ref().map(|you| you.key);
                 let answer = Answer {
@@ -347,22 +359,24 @@ impl State {
                     reply_to,
                     anchor,
                     page,
+                    place,
                     to_you: to.is_some() && to == you,
                     live: !self.catching_up,
                 };
-                while !room(self.answers.len(), self.answers_html, answer.html.len()) {
+                let incoming = answer.encoded_size();
+                while !room(self.answers.len(), self.answers_bytes, incoming) {
                     let Some(oldest) = self.answers.pop_front() else {
                         break;
                     };
-                    self.answers_html = self.answers_html.saturating_sub(oldest.html.len());
+                    self.answers_bytes = self.answers_bytes.saturating_sub(oldest.encoded_size());
                 }
-                self.answers_html = self.answers_html.saturating_add(answer.html.len());
+                self.answers_bytes = self.answers_bytes.saturating_add(incoming);
                 self.answers.push_back(answer.clone());
                 vec![ToPage::Answer(answer)]
             }
             ShareMessage::AnswerResolved { id } => {
                 self.answers.retain(|answer| answer.id != id);
-                self.answers_html = self.answers.iter().map(|answer| answer.html.len()).sum();
+                self.answers_bytes = self.answers.iter().map(Answer::encoded_size).sum();
                 vec![ToPage::AnswerResolved { id }]
             }
             ShareMessage::Cursor { key, url, position } => {
@@ -390,15 +404,11 @@ pub(crate) fn follow(snapshot: &mut Snapshot, message: &ToPage) {
         ToPage::Reload { revision } => snapshot.revision = Some(*revision),
         ToPage::Answer(answer) => {
             if !snapshot.answers.iter().any(|known| known.id == answer.id) {
-                let html = |answers: &[Answer]| answers.iter().map(|known| known.html.len()).sum();
-                while !snapshot.answers.is_empty()
-                    && !room(
-                        snapshot.answers.len(),
-                        html(&snapshot.answers),
-                        answer.html.len(),
-                    )
+                let incoming = answer.encoded_size();
+                let mut bytes: usize = snapshot.answers.iter().map(Answer::encoded_size).sum();
+                while !snapshot.answers.is_empty() && !room(snapshot.answers.len(), bytes, incoming)
                 {
-                    snapshot.answers.remove(0);
+                    bytes = bytes.saturating_sub(snapshot.answers.remove(0).encoded_size());
                 }
                 snapshot.answers.push(answer.clone());
             }

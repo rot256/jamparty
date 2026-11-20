@@ -15,6 +15,7 @@ use crate::{
     core::ids::CommentId,
     protocol::{
         agent::{Addressee, AgentReply, AgentRequest},
+        answer::AnswerAnchor,
         control::{AnswerText, Choices, Envelope},
     },
 };
@@ -48,13 +49,13 @@ pub(crate) async fn recv(stream: UnixStream, out: &mut impl Write) -> Result<usi
     Ok(comments.len())
 }
 
-/// Sends an answer, next to comment `anchor` if given, to `to` (by
-/// default the anchor's author, else everyone).
+/// Sends an answer. A comment anchor defaults to its author, while a
+/// place anchor or an unanchored answer defaults to everyone.
 pub(crate) async fn send(
     stream: UnixStream,
     message: AnswerText,
     choices: Choices,
-    anchor: Option<CommentId>,
+    anchor: Option<AnswerAnchor<CommentId>>,
     to: Option<Addressee>,
 ) -> Result<(), Report> {
     let (read, mut write) = stream.into_split();

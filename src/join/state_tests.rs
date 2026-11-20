@@ -16,9 +16,10 @@ use crate::{
         api::ToPage,
         markdown::MAX_ANSWER_HTML,
         preferences::PageSettings,
-        state::{MAX_ANSWERS, MAX_ANSWERS_HTML, State, TooMany, follow},
+        state::{MAX_ANSWERS, MAX_ANSWERS_BYTES, State, TooMany, follow},
     },
     protocol::{
+        answer::{AnswerAnchor, PlaceAnchor},
         comment::{Author, Draft},
         control::{
             AckOutcome, Anchor, AnswerText, CommentRef, MAX_QUEUED_PER_KEY, Revision, ShareMessage,
@@ -206,10 +207,12 @@ fn answers_become_live_after_admission_presence() {
         id: nth(index),
         message: "Reply".to_owned().try_into().unwrap(),
         choices: Default::default(),
-        anchor: Some(Anchor {
-            comment: nth(3),
-            page: "http://localhost:8080/".to_owned().try_into().unwrap(),
-            selector: "#intro".to_owned().try_into().unwrap(),
+        anchor: Some(AnswerAnchor::Comment {
+            comment: Anchor {
+                comment: nth(3),
+                page: "http://localhost:8080/".to_owned().try_into().unwrap(),
+                selector: "#intro".to_owned().try_into().unwrap(),
+            },
         }),
         to: None,
     };
@@ -246,8 +249,8 @@ fn answers_kept_are_bounded_in_bytes_as_well_as_number() {
         .iter()
         .map(|answer| answer.html.len())
         .sum();
-    assert!(html <= MAX_ANSWERS_HTML, "{html}");
-    assert!(snapshot.answers.len() >= MAX_ANSWERS_HTML / MAX_ANSWER_HTML);
+    assert!(html <= MAX_ANSWERS_BYTES, "{html}");
+    assert!(snapshot.answers.len() >= MAX_ANSWERS_BYTES / MAX_ANSWER_HTML);
     assert!(snapshot.answers.len() < MAX_ANSWERS);
     assert_eq!(snapshot.answers.last().unwrap().id, nth(39));
     // A page that followed holds the same.
@@ -413,4 +416,32 @@ async fn a_comment_queued_as_a_batch_finishes_is_acked_after_it() {
         "{taken:?}"
     );
     assert_eq!(state.snapshot().pending(), 1);
+}
+
+#[test]
+fn answer_locations_count_toward_the_snapshot_budget() {
+    let mut state = State::new(settings(Switch::Off));
+    let mut page = state.snapshot();
+    let anchor = Some(AnswerAnchor::Place {
+        place: PlaceAnchor::Html {
+            path: format!("/{}", "p".repeat(4095)).parse().unwrap(),
+            selector: format!("p{}", "\u{1}".repeat(2047)).parse().unwrap(),
+        },
+    });
+    for index in 0..MAX_ANSWERS {
+        for message in state.apply(ShareMessage::Answer {
+            id: nth(index),
+            choices: Default::default(),
+            message: "Hi".to_owned().try_into().unwrap(),
+            anchor: anchor.clone(),
+            to: None,
+        }) {
+            follow(&mut page, &message);
+        }
+    }
+    let snapshot = state.snapshot();
+    assert!(serde_json::to_vec(&snapshot.answers).unwrap().len() <= MAX_ANSWERS_BYTES);
+    assert!(snapshot.answers.len() < MAX_ANSWERS);
+    assert_eq!(snapshot.answers.last().unwrap().id, nth(MAX_ANSWERS - 1));
+    assert_eq!(page, snapshot);
 }

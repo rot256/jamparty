@@ -32,6 +32,7 @@ impl AnswerHtml {
     }
 
     /// Its size in bytes.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn len(&self) -> usize {
         self.0.len()
