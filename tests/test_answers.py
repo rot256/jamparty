@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+import pytest
 from playwright.sync_api import (
     Browser,
     Page,
@@ -1069,6 +1070,64 @@ def test_fixed_targets_follow_their_scroll_sources(tmp_path: Path, page: Page) -
             )
             assert delta == (-60 if target == "panel-target" else -80)
             assert aligned == 0
+
+
+@pytest.mark.parametrize("root_overflow", ["hidden", "clip"])
+def test_a_scrolling_body_moves_card_and_highlight(
+    tmp_path: Path, page: Page, root_overflow: str
+) -> None:
+    """With the root clipped, the body is an element scroller, not the viewport."""
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "index.html"
+    _ = path.write_text(f"""
+        <html style="overflow: {root_overflow}; height: 100%">
+          <body style="margin: 0; height: 100vh; overflow: auto">
+            <div style="height: 300px"></div>
+            <div id="target" style="margin-left: 400px; width: 200px">Target</div>
+            <div style="height: 2000px"></div>
+          </body>
+        </html>
+    """)
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path, "send", "--at", "#target", "--page", "/index.html", "Here"
+        )
+        group = overlay(page, ".agent-placement").filter(has_text="Here")
+        expect(group.locator(".agent-anchor-brace")).to_have_attribute(
+            "d", re.compile("^M")
+        )
+        # Enter on a focused anchored answer reveals its target with the outline.
+        message = group.locator(".agent-message")
+        message.focus()
+        expect(message).to_be_focused()
+        page.keyboard.press("Enter")
+        expect(overlay(page, "#message-highlight")).to_be_visible()
+        offsets = cast(
+            list[float],
+            page.evaluate(
+                """async () => {
+                    const root = document.querySelector("#jamparty").shadowRoot;
+                    const target = document.getElementById("target");
+                    await new Promise(resolve => {
+                        document.body.addEventListener("scroll", () =>
+                            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+                            { once: true });
+                        document.body.scrollTop = 120;
+                    });
+                    const top = target.getBoundingClientRect().top;
+                    const marker = root.querySelector(".agent-anchor-marker");
+                    const highlight = root.querySelector("#message-highlight");
+                    return [marker.getBoundingClientRect().top - top,
+                            highlight.getBoundingClientRect().top - top];
+                }"""
+            ),
+        )
+        assert offsets == [0, 0], offsets
 
 
 def test_anchored_answer_reappears_at_viewport_edge(tmp_path: Path, page: Page) -> None:

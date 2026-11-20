@@ -468,14 +468,20 @@ function containsFixed(style) {
     style.backdropFilter
   ].some((value) => value !== "" && value !== "none") || /\b(layout|paint|strict|content)\b/.test(style.contain) || style.contentVisibility === "auto" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter|contain|content-visibility)\b/.test(style.willChange);
 }
+function bodyScrolls() {
+  const root = getComputedStyle(document.documentElement);
+  const body = getComputedStyle(document.body);
+  return [root.overflowX, root.overflowY].some((overflow) => overflow !== "visible") && [body.overflowX, body.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow));
+}
 function scrollRelationship(target, rect) {
+  const body = bodyScrolls();
   const sources = /* @__PURE__ */ new Set();
   let fixed = false;
   let sticky = false;
   for (let node = target; node !== null; node = node.parentElement) {
     const style = getComputedStyle(node);
     if (fixed && !containsFixed(style)) continue;
-    if (node !== target && node !== document.body && node !== document.documentElement && [style.overflowX, style.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) {
+    if (node !== target && (node !== document.body || body) && node !== document.documentElement && [style.overflowX, style.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) {
       sources.add(node);
     }
     fixed = style.position === "fixed";

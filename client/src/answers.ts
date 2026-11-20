@@ -75,7 +75,17 @@ function containsFixed(style: CSSStyleDeclaration): boolean {
       .test(style.willChange);
 }
 
+/** Whether the body scrolls by itself: its overflow only reaches the
+ * viewport while the root element's overflow is visible. */
+function bodyScrolls(): boolean {
+  const root = getComputedStyle(document.documentElement);
+  const body = getComputedStyle(document.body);
+  return [root.overflowX, root.overflowY].some((overflow) => overflow !== "visible") &&
+    [body.overflowX, body.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow));
+}
+
 function scrollRelationship(target: Element, rect: Box): ScrollRelationship {
+  const body = bodyScrolls();
   const sources = new Set<EventTarget>();
   let fixed = false;
   let sticky = false;
@@ -83,7 +93,7 @@ function scrollRelationship(target: Element, rect: Box): ScrollRelationship {
     const style = getComputedStyle(node);
     // A fixed box escapes intervening scrollers up to its containing block.
     if (fixed && !containsFixed(style)) continue;
-    if (node !== target && node !== document.body && node !== document.documentElement &&
+    if (node !== target && (node !== document.body || body) && node !== document.documentElement &&
         [style.overflowX, style.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) {
       sources.add(node);
     }
