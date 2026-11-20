@@ -77,6 +77,7 @@ export function install(pdf?: PdfViewer): void {
     list.close();
   };
 
+  list.onPreview = (entry) => { pdf?.previewComment(entry); };
   list.onOpen = () => { panel.close(); };
   panel.onOpen = () => { list.close(); };
   outbox.onChange = () => {

@@ -339,8 +339,9 @@ stays active until clicked again or you press Escape with the dialog closed.
 Turn it off to select text directly. You can still use `/` for a document
 comment when there is no selection.
 
-Your comments in the outbox have blue outlines at their PDF anchors, and
-the list labels them by PDF page number. When the PDF changes in a live
+The list labels PDF comments by page number. Hover or focus a comment row
+to show its anchor in blue. Sending or cancelling clears the draft outline
+and browser text selection. When the PDF changes in a live
 share, the viewer keeps the same text at the same height when it finds a
 clear match nearby, even if the text moves to another page. Otherwise it
 restores the page and scroll position. Zoom stays in place, and scrolling

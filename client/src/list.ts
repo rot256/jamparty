@@ -4,7 +4,7 @@
 
 import { AGENT_TARGET_PREFIX } from "./config";
 import type { ConnectionView } from "./connection";
-import type { Outbox, ShownState } from "./outbox";
+import type { Outbox, OutboxEntry, ShownState } from "./outbox";
 import type { Ui } from "./ui";
 
 /** The last step of a selector, for people: `h1`, `#intro`, `page`. */
@@ -41,6 +41,9 @@ function stateText(state: ShownState): string {
 }
 
 export class CommentList {
+  private hovered: OutboxEntry | null = null;
+  private focused: OutboxEntry | null = null;
+  onPreview: (entry: OutboxEntry | null) => void = () => undefined;
   private refreshTimer: number | undefined;
   /** Called when the list opens (the control panel closes then). */
   onOpen: () => void = () => undefined;
@@ -81,6 +84,8 @@ export class CommentList {
   close(): void {
     if (!this.isOpen) return;
     this.ui.list.hidden = true;
+    this.hovered = this.focused = null;
+    this.onPreview(null);
     this.ui.bar.hidden = false;
     this.ui.pill.setAttribute("aria-expanded", "false");
     if (this.refreshTimer !== undefined) clearInterval(this.refreshTimer);
@@ -103,10 +108,44 @@ export class CommentList {
     const { outboxList } = this.ui;
     const now = Date.now();
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
+    const previousFocus = this.focused;
+    const root = outboxList.getRootNode();
+    const active = root instanceof Document || root instanceof ShadowRoot ? root.activeElement : null;
+    const againFocused = active instanceof HTMLElement && active.classList.contains("again") &&
+      outboxList.contains(active);
+    this.hovered = this.focused = null;
+    this.onPreview(null);
     outboxList.replaceChildren(...entries.map((entry) => {
       const item = document.createElement("li");
       const shown = this.outbox.shown(entry);
       item.dataset.state = shown;
+      if (entry.draft.pdf !== undefined) {
+        item.tabIndex = 0;
+        item.addEventListener("pointerenter", () => {
+          this.hovered = entry;
+          this.onPreview(entry);
+        });
+        item.addEventListener("pointerleave", () => {
+          this.hovered = null;
+          this.onPreview(this.focused?.draft.pdf === undefined ? null : this.focused);
+        });
+      } else {
+        // Focusable from code only, for when its "send again" button goes
+        // away under the focus; no extra Tab stop.
+        item.tabIndex = -1;
+      }
+      // Focus is tracked for every row, so a refresh can restore it. The
+      // latest of hover and focus wins, so a keyboard user sees the row
+      // they moved to even with the pointer resting on another.
+      item.addEventListener("focusin", () => {
+        this.focused = entry;
+        if (entry.draft.pdf !== undefined) this.onPreview(entry);
+      });
+      item.addEventListener("focusout", (event) => {
+        if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
+        this.focused = null;
+        this.onPreview(this.hovered);
+      });
       const row = document.createElement("div");
       row.className = "row";
       const where = document.createElement("span");
@@ -145,5 +184,13 @@ export class CommentList {
       }
       return item;
     }));
+    if (previousFocus !== null) {
+      const index = entries.indexOf(previousFocus);
+      const item = outboxList.children.item(index);
+      // Keep focus on "send again" while the comment can still be sent again.
+      const again = againFocused ? item?.querySelector<HTMLElement>(".again") : null;
+      if (again instanceof HTMLElement) again.focus({ preventScroll: true });
+      else if (item instanceof HTMLElement) item.focus({ preventScroll: true });
+    }
   }
 }

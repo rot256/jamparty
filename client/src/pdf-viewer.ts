@@ -93,6 +93,7 @@ export class PdfViewer {
   private displayedRevision: number | null = null;
   private request: AbortController | null = null;
   private zoom: number | "fit" = "fit";
+  private preview: OutboxEntry | null = null;
   private comments: readonly OutboxEntry[] = [];
   private dialog: CommentDialog | null = null;
   private drawing = false;
@@ -336,13 +337,29 @@ export class PdfViewer {
     this.drawComments();
   }
 
+  previewComment(entry: OutboxEntry | null): void {
+    if (entry === this.preview) return;
+    this.previewNode(this.preview)?.classList.remove("pdf-comment");
+    this.preview = entry;
+    this.previewNode(entry)?.classList.add("pdf-comment");
+  }
+
+  private previewNode(entry: OutboxEntry | null): Element | null {
+    if (entry?.draft.pdf === undefined || !samePage(entry.draft.page)) return null;
+    const node = document.getElementById(entry.draft.selector.slice(1));
+    return node?.matches(".pdf-comment-anchor") ? node : null;
+  }
+
   private drawComments(): void {
     for (const page of this.pages.values()) page.marks.replaceChildren();
-    for (const { draft } of this.comments) {
+    for (const entry of this.comments) {
+      const { draft } = entry;
       if (draft.pdf === undefined || !samePage(draft.page) ||
           !/^#jamparty-pdf-anchor-[\da-f-]+$/.test(draft.selector)) continue;
       const node = document.createElement("div");
-      node.className = "pdf-comment";
+      // Answer placement uses the anchor geometry even without a preview.
+      node.className = "pdf-comment-anchor";
+      node.classList.toggle("pdf-comment", entry === this.preview);
       node.id = draft.selector.slice(1);
       this.byNumber.get(draft.pdf.page)?.mark(node, draft.pdf);
     }
@@ -368,10 +385,19 @@ export class PdfViewer {
       }
     };
     ui.edit.addEventListener("click", () => { setDrawing(!this.drawing); });
-    ui.dialog.addEventListener("close", () => {
+    dialog.onOpen = ({ pdf: anchor }) => {
+      this.clearHover();
+      if (anchor === undefined) return;
+      const node = document.createElement("div");
+      node.className = "pdf-draft";
+      this.draftMarker = { anchor, node };
+      this.byNumber.get(anchor.page)?.mark(node, anchor);
+    };
+    dialog.onClose = () => {
       this.draftMarker?.node.remove();
       this.draftMarker = null;
-    });
+      this.clearHover();
+    };
     document.addEventListener("keydown", (event) => {
       if (event.key !== "Escape" || !this.drawing || dialog.open) return;
       event.preventDefault();
@@ -420,7 +446,7 @@ export class PdfViewer {
         return;
       }
       const anchor = drag.page.anchor(rectangle(drag.x, drag.y, event.clientX, event.clientY));
-      if (anchor !== undefined) this.openComment(drag.page, anchor, null, event.clientX, event.clientY);
+      if (anchor !== undefined) this.openComment(anchor, null, event.clientX, event.clientY);
     });
   }
 
@@ -451,7 +477,7 @@ export class PdfViewer {
     const select = (): void => {
       if (gesture !== this.gesture || !page.element.isConnected) return;
       const block = page.blockAt(x, y);
-      if (block !== undefined) this.openComment(page, block.anchor, block.text, x, y);
+      if (block !== undefined) this.openComment(block.anchor, block.text, x, y);
     };
     const pending = page.prepareBlocks();
     if (pending === undefined) select();
@@ -499,20 +525,14 @@ export class PdfViewer {
     const box = range.getBoundingClientRect();
     const anchor = page.anchor(box);
     if (anchor === undefined) return false;
-    this.openComment(page, anchor, text, event?.clientX ?? box.left, event?.clientY ?? box.bottom);
-    selection.removeAllRanges();
+    this.openComment(anchor, text, event?.clientX ?? box.left, event?.clientY ?? box.bottom);
     return true;
   }
 
-  private openComment(page: PdfPage, anchor: PdfAnchor, selectedText: string | null, x: number, y: number): void {
+  private openComment(anchor: PdfAnchor, selectedText: string | null, x: number, y: number): void {
     if (this.dialog === null || this.dialog.open) return;
-    this.clearHover();
-    const node = document.createElement("div");
-    node.className = "pdf-draft";
-    this.draftMarker = { anchor, node };
-    page.mark(node, anchor);
     this.dialog.openPdf({
-      element: node, page: location.href,
+      element: null, page: location.href,
       selector: `#jamparty-pdf-anchor-${crypto.randomUUID()}`, selectedText, pdf: anchor,
     }, x, y);
   }
