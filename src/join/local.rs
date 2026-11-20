@@ -13,7 +13,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::{
     Method as HttpMethod, Request, Response, StatusCode,
     body::{Body, Incoming},
@@ -522,7 +522,7 @@ async fn upload(
     let status = response.status();
     let invalid = || {
         RequestError::new(
-            StatusCode::BAD_GATEWAY,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "the share returned an invalid attachment reply",
         )
     };
@@ -533,8 +533,19 @@ async fn upload(
                 Limited::new(response.into_body(), MAX_UPLOAD_REPLY_BYTES).collect(),
             )
             .await
-            .map_err(|_| invalid())?
-            .map_err(|_| invalid())?;
+            .map_err(|_| {
+                RequestError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "the share did not answer in time",
+                )
+            })?
+            .map_err(|error| {
+                if error.is::<LengthLimitError>() {
+                    invalid()
+                } else {
+                    RequestError::new(StatusCode::BAD_GATEWAY, "the upload reply was interrupted")
+                }
+            })?;
             let uploaded: Uploaded =
                 serde_json::from_slice(&collected.to_bytes()).map_err(|_| invalid())?;
             if uploaded.id != expected {

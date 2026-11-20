@@ -170,6 +170,19 @@ export const styles = `
   #outbox-list .where, #outbox-list .state { color: #b8b2a9; }
   #outbox-list .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #outbox-list li[data-state="delivered"] .state { color: #8ce99a; }
+  .sending-indicator {
+    display: inline-block;
+    width: .65em; height: .65em;
+    margin-right: .45em;
+    border: 1px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: jamparty-sending .8s linear infinite;
+  }
+  @keyframes jamparty-sending { to { transform: rotate(1turn); } }
+  @media (prefers-reduced-motion: reduce) {
+    .sending-indicator { animation: none; border-right-color: currentColor; }
+  }
   #outbox-list li:is([data-state="unsent"], [data-state="failed"]) .state { color: #ffa8a8; }
   #outbox-list li[data-state="delivered"] .text,
   #outbox-list li[data-state="unsent"] .text { color: #d8d4cd; }

@@ -4,6 +4,7 @@
 // dialog closes.
 
 import { DRAFT_KEY } from "./config";
+import { isThisPage } from "./location";
 import { parsePdfAnchor, type PdfAnchor } from "./pdf-anchor";
 import { isRecord } from "./json";
 
@@ -26,8 +27,10 @@ export interface SavedDraft {
   selectedText: string | null;
   pdf?: PdfAnchor;
   comment: string;
-  /** File contents only live in the open dialog. */
   fileCount: number;
+  editRef?: string;
+  /** Positions of the original attachments still in the edit. */
+  originalFiles?: number[];
 }
 
 function parseKind(value: unknown): DraftKind | null {
@@ -63,6 +66,10 @@ function parse(value: unknown): SavedDraft | null {
     unavailable: unavailable === true,
     selectedText: typeof selectedText === "string" ? selectedText : null,
     comment,
+    ...(typeof value.editRef === "string" ? { editRef: value.editRef } : {}),
+    ...(Array.isArray(value.originalFiles) &&
+      value.originalFiles.every((index) => typeof index === "number" && Number.isInteger(index) && index >= 0)
+      ? { originalFiles: value.originalFiles as number[] } : {}),
     fileCount: typeof value.fileCount === "number" && value.fileCount > 0 ? value.fileCount : 0,
   };
 }
@@ -80,17 +87,6 @@ export function clearDraft(): void {
     sessionStorage.removeItem(DRAFT_KEY);
   } catch {
     // Nothing was kept.
-  }
-}
-
-/** Whether `page` is this page: path, query and fragment alike. */
-function isThisPage(page: string): boolean {
-  try {
-    const url = new URL(page);
-    const here = window.location;
-    return url.pathname === here.pathname && url.search === here.search && url.hash === here.hash;
-  } catch {
-    return false;
   }
 }
 

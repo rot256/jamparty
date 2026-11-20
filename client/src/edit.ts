@@ -93,6 +93,10 @@ export class EditMode {
     this.outline(this.pageTarget(event));
   }
 
+  clearHover(): void {
+    this.outline(null);
+  }
+
   private outline(target: Element | null): void {
     this.hovered = target;
     const box = this.ui.editHighlight;

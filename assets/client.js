@@ -113,6 +113,7 @@ var DISMISSED_KEY = "jamparty-dismissed-v1";
 var OUTBOX_KEY = "jamparty-outbox-v1";
 var JOINER_KEY = "jamparty-joiner-key-v1";
 var DRAFT_KEY = "jamparty-draft-v1";
+var EDIT_REF_KEY = "jamparty-edit-ref-v1";
 var SETTINGS_COOKIE = "jamparty-settings-v1";
 var MAX_OUTBOX = 20;
 var WATCHDOG_MS = 35e3;
@@ -1056,41 +1057,44 @@ var CursorLayer = class {
   }
 };
 
+// client/src/location.ts
+function pageUrl() {
+  const url = new URL(window.location.href);
+  const raw = `${url.pathname}${url.search}${url.hash}`;
+  const encoded = raw.replace(/[^\x21-\x7e]|["\\]/gu, (character) => encodeURIComponent(character));
+  return encoded.startsWith("/") && encoded.length <= MAX_PAGE_PATH ? encoded : null;
+}
+function isThisPage(page) {
+  try {
+    const url = new URL(page);
+    const here = window.location;
+    return url.pathname === here.pathname && url.search === here.search && url.hash === here.hash;
+  } catch {
+    return false;
+  }
+}
+function watchUrl(listener) {
+  let last = pageUrl();
+  const check = () => {
+    const now = pageUrl();
+    if (now === last) return;
+    last = now;
+    listener(now);
+  };
+  for (const method of ["pushState", "replaceState"]) {
+    const original = history[method].bind(history);
+    history[method] = (...args) => {
+      original(...args);
+      check();
+    };
+  }
+  window.addEventListener("popstate", check);
+  window.addEventListener("hashchange", check);
+}
+
 // client/src/json.ts
 function isRecord(value) {
   return typeof value === "object" && value !== null;
-}
-
-// client/src/attachments.ts
-function parseAttachments(value) {
-  if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS) return null;
-  const files = [];
-  for (const entry of value) {
-    if (!isRecord(entry) || entry.type !== "file" || !isResourceId(entry.file) || typeof entry.name !== "string") return null;
-    files.push({ type: "file", file: entry.file, name: entry.name });
-  }
-  return files;
-}
-function isResourceId(value) {
-  return typeof value === "string" && value.length === 69 && /^sha3:[0-9a-f]{64}$/.test(value);
-}
-async function upload(file) {
-  const reply = await fetch(UPLOAD_URL, {
-    method: "POST",
-    mode: "same-origin",
-    redirect: "error",
-    body: file
-  }).catch(() => null);
-  if (reply !== null) {
-    const result = await reply.json().catch(() => null);
-    if (reply.status === 201 && isRecord(result) && isResourceId(result.id)) {
-      return { type: "file", file: result.id, name: file.name };
-    }
-    if (!reply.ok && isRecord(result) && typeof result.error === "string") {
-      throw new Error(result.error);
-    }
-  }
-  throw new Error("Could not upload the attachment. Try again.");
 }
 
 // client/src/pdf-anchor.ts
@@ -1135,6 +1139,8 @@ function parse(value) {
     unavailable: unavailable === true,
     selectedText: typeof selectedText === "string" ? selectedText : null,
     comment,
+    ...typeof value.editRef === "string" ? { editRef: value.editRef } : {},
+    ...Array.isArray(value.originalFiles) && value.originalFiles.every((index) => typeof index === "number" && Number.isInteger(index) && index >= 0) ? { originalFiles: value.originalFiles } : {},
     fileCount: typeof value.fileCount === "number" && value.fileCount > 0 ? value.fileCount : 0
   };
 }
@@ -1148,15 +1154,6 @@ function clearDraft() {
   try {
     sessionStorage.removeItem(DRAFT_KEY);
   } catch {
-  }
-}
-function isThisPage(page) {
-  try {
-    const url = new URL(page);
-    const here = window.location;
-    return url.pathname === here.pathname && url.search === here.search && url.hash === here.hash;
-  } catch {
-    return false;
   }
 }
 function loadDraft() {
@@ -1183,10 +1180,9 @@ function labelFor(kind) {
   }
 }
 var CommentDialog = class {
-  constructor(ui, outbox, pending) {
+  constructor(ui, outbox) {
     this.ui = ui;
     this.outbox = outbox;
-    this.pending = pending;
     const { dialog, form, textarea, cancel } = ui;
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1248,10 +1244,11 @@ var CommentDialog = class {
   }
   ui;
   outbox;
-  pending;
   onOpen = () => void 0;
   onClose = () => void 0;
   files = [];
+  editing;
+  originals = [];
   missingFiles = 0;
   position = { x: 0, y: 0 };
   captured = null;
@@ -1259,7 +1256,7 @@ var CommentDialog = class {
   target = { kind: "page", selector: "" };
   /** The target was gone after a reload: a page comment now. */
   unavailable = false;
-  /** Handed to the outbox and on its way: no draft any more. */
+  /** Saving this draft in the outbox. */
   sending = false;
   /** A live reload waiting for the dialog to close. */
   pendingReload = false;
@@ -1294,7 +1291,9 @@ var CommentDialog = class {
       name.title = file.name;
       const size = document.createElement("span");
       size.className = "attachment-size";
-      size.textContent = file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KiB`;
+      if (file instanceof File) {
+        size.textContent = file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KiB`;
+      }
       const remove = document.createElement("button");
       remove.type = "button";
       remove.textContent = "×";
@@ -1316,8 +1315,7 @@ var CommentDialog = class {
   }
   /**
    * Closes the dialog at the person's request (Cancel, Escape, a click
-   * outside), unless its comment is on its way: it stays until the joiner
-   * answers, so no other comment starts meanwhile.
+   * outside), unless its comment is being saved locally.
    */
   dismiss() {
     if (!this.sending) this.close();
@@ -1350,9 +1348,48 @@ var CommentDialog = class {
    * found by `find`. A target that is gone makes it a page comment, for
    * good: it stays one after further reloads, and the dialog says so.
    */
-  restore(find) {
+  async restore(find) {
     const draft = loadDraft();
-    if (draft === null || this.ui.dialog.open) return;
+    if (draft === null || this.open) return;
+    if (draft.editRef === void 0) {
+      this.showSaved(draft, find);
+      return;
+    }
+    const entry = this.outbox.entries.find((candidate) => candidate.ref === draft.editRef);
+    if (entry?.state !== "failed") {
+      clearDraft();
+      return;
+    }
+    await this.edit(entry, find, draft);
+  }
+  async edit(entry, find, savedDraft) {
+    const { draft } = entry;
+    const saved = entry.files === void 0 ? { files: [] } : await this.outbox.savedFiles(entry).catch(
+      () => ({ files: [] })
+    );
+    if (this.open || !this.outbox.entries.includes(entry) || entry.state !== "failed") return false;
+    const selector = draft.selector;
+    const kind = draft.pdf !== void 0 ? "pdf" : selector.startsWith(AGENT_TARGET_PREFIX) ? "answer" : selector === "" ? "page" : "element";
+    const refs = draft.attachments ?? [];
+    const existing = entry.uploaded && saved.files.length > 0 ? refs.slice(0, -saved.files.length) : refs;
+    const originals = [...existing, ...saved.files];
+    const files = savedDraft === void 0 ? originals : (savedDraft.originalFiles ?? []).flatMap(
+      (index) => originals[index] === void 0 ? [] : [originals[index]]
+    );
+    const fileCount = savedDraft?.fileCount ?? existing.length + (entry.uploaded === true ? saved.files.length : entry.files?.length ?? 0);
+    this.editing = entry;
+    this.originals = originals;
+    this.showSaved({
+      ...draft,
+      page: window.location.href,
+      target: { kind, selector },
+      unavailable: false,
+      ...savedDraft,
+      fileCount: Math.max(0, fileCount - files.length)
+    }, find, files);
+    return true;
+  }
+  showSaved(draft, find, files = []) {
     const { target, selectedText } = draft;
     let element = null;
     if (target.kind !== "page" && target.kind !== "pdf" && !draft.unavailable) {
@@ -1361,7 +1398,7 @@ var CommentDialog = class {
       } catch {
       }
     }
-    const page = window.location.href;
+    const page = draft.page;
     let x = window.innerWidth / 2;
     let y = window.innerHeight / 3;
     let captured = { element: null, page, selector: "", selectedText };
@@ -1377,6 +1414,7 @@ var CommentDialog = class {
     this.show(captured, x, y, target);
     this.unavailable = target.kind !== "page" && target.kind !== "pdf" && element === null;
     this.ui.textarea.value = draft.comment;
+    this.files = files;
     this.missingFiles = draft.fileCount;
     this.showFiles();
     if (this.unavailable) this.ui.status.textContent = GONE;
@@ -1393,7 +1431,11 @@ var CommentDialog = class {
       selectedText: captured.selectedText,
       ...captured.pdf === void 0 ? {} : { pdf: captured.pdf },
       comment: this.ui.textarea.value,
-      fileCount: this.files.length + this.missingFiles
+      fileCount: this.files.length + this.missingFiles,
+      ...this.editing === void 0 ? {} : {
+        editRef: this.editing.ref,
+        originalFiles: this.files.map((file) => this.originals.indexOf(file)).filter((index) => index !== -1)
+      }
     });
   }
   updateHighlight = () => {
@@ -1458,6 +1500,8 @@ var CommentDialog = class {
     this.stopTracking();
     ui.highlight.style.display = "none";
     this.captured = null;
+    this.editing = void 0;
+    this.originals = [];
     this.unavailable = false;
     clearDraft();
     this.files = [];
@@ -1494,18 +1538,7 @@ var CommentDialog = class {
       return;
     }
     this.setSending(true);
-    const attachments = [];
-    try {
-      for (const file of this.files) {
-        ui.status.textContent = `Uploading ${file.name}…`;
-        attachments.push(await upload(file));
-      }
-    } catch (error) {
-      this.setSending(false);
-      ui.status.textContent = error instanceof Error ? error.message : "Could not upload the attachment.";
-      return;
-    }
-    ui.status.textContent = "Queueing…";
+    const attachments = this.files.filter((file) => !(file instanceof File));
     const draft = {
       page: captured.page,
       selector: captured.selector,
@@ -1514,20 +1547,13 @@ var CommentDialog = class {
       comment,
       ...attachments.length > 0 ? { attachments } : {}
     };
-    const ref = crypto.randomUUID();
-    clearDraft();
-    const outcome = await this.outbox.submit(draft, ref);
-    this.setSending(false);
-    if ("commented" in outcome) {
+    try {
+      await this.outbox.enqueue(draft, this.files.filter((file) => file instanceof File), this.editing);
       this.close();
-      ui.showToast(`Comment queued · ${this.pending()} pending`);
-    } else if ("unsent" in outcome) {
-      this.close();
-      ui.showToast("Not sent: kept in the page, sent when the connection is back");
-    } else {
-      this.keep();
-      ui.status.textContent = outcome.refused.error;
-      ui.textarea.focus();
+    } catch (error) {
+      ui.status.textContent = error instanceof Error ? error.message : "Could not save the comment.";
+    } finally {
+      this.setSending(false);
     }
   }
 };
@@ -1616,6 +1642,9 @@ var EditMode = class {
     if (!this.on || this.dialog.open) return;
     this.outline(this.pageTarget(event));
   }
+  clearHover() {
+    this.outline(null);
+  }
   outline(target) {
     this.hovered = target;
     const box = this.ui.editHighlight;
@@ -1649,6 +1678,7 @@ function relativeTime(at, now = Date.now()) {
 function stateText(state) {
   switch (state) {
     case "failed":
+      return "refused";
     case "unsent":
       return "not sent";
     case "sending":
@@ -1676,9 +1706,11 @@ var CommentList = class {
   }
   ui;
   outbox;
+  items = /* @__PURE__ */ new Map();
   hovered = null;
   focused = null;
   onPreview = () => void 0;
+  onEdit = () => Promise.resolve();
   refreshTimer;
   /** Called when the list opens (the control panel closes then). */
   onOpen = () => void 0;
@@ -1721,42 +1753,56 @@ var CommentList = class {
     connectionText.dataset.state = view.colour;
     connectionText.textContent = `· ${view.text}`;
   }
+  createItem(entry) {
+    const item = document.createElement("li");
+    if (entry.draft.pdf !== void 0) {
+      item.tabIndex = 0;
+      item.addEventListener("pointerenter", () => {
+        this.hovered = entry;
+        this.onPreview(entry);
+      });
+      item.addEventListener("pointerleave", () => {
+        this.hovered = null;
+        this.onPreview(this.focused?.draft.pdf === void 0 ? null : this.focused);
+      });
+    } else {
+      item.tabIndex = -1;
+    }
+    item.addEventListener("focusin", () => {
+      this.focused = entry;
+      if (entry.draft.pdf !== void 0) this.onPreview(entry);
+    });
+    item.addEventListener("focusout", (event) => {
+      if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
+      this.focused = null;
+      this.onPreview(this.hovered);
+    });
+    this.items.set(entry, item);
+    return item;
+  }
   render() {
     const { outboxList } = this.ui;
     const now = Date.now();
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
-    const previousFocus = this.focused;
-    const root = outboxList.getRootNode();
-    const active = root instanceof Document || root instanceof ShadowRoot ? root.activeElement : null;
-    const againFocused = active instanceof HTMLElement && active.classList.contains("again") && outboxList.contains(active);
-    this.hovered = this.focused = null;
-    this.onPreview(null);
-    outboxList.replaceChildren(...entries.map((entry) => {
-      const item = document.createElement("li");
+    const active = this.ui.shadow.activeElement;
+    const focusedItem = active?.closest("li");
+    const focusedAction = active instanceof HTMLButtonElement ? active.textContent : null;
+    for (const [entry, item] of this.items) {
+      if (entries.includes(entry)) continue;
+      item.remove();
+      this.items.delete(entry);
+      if (this.hovered === entry || this.focused === entry) {
+        if (this.hovered === entry) this.hovered = null;
+        if (this.focused === entry) this.focused = null;
+        this.onPreview(this.hovered ?? (this.focused?.draft.pdf === void 0 ? null : this.focused));
+      }
+    }
+    for (const [index, entry] of entries.entries()) {
+      const item = this.items.get(entry) ?? this.createItem(entry);
+      const atIndex = outboxList.children.item(index);
+      if (atIndex !== item) outboxList.insertBefore(item, atIndex);
       const shown = this.outbox.shown(entry);
       item.dataset.state = shown;
-      if (entry.draft.pdf !== void 0) {
-        item.tabIndex = 0;
-        item.addEventListener("pointerenter", () => {
-          this.hovered = entry;
-          this.onPreview(entry);
-        });
-        item.addEventListener("pointerleave", () => {
-          this.hovered = null;
-          this.onPreview(this.focused?.draft.pdf === void 0 ? null : this.focused);
-        });
-      } else {
-        item.tabIndex = -1;
-      }
-      item.addEventListener("focusin", () => {
-        this.focused = entry;
-        if (entry.draft.pdf !== void 0) this.onPreview(entry);
-      });
-      item.addEventListener("focusout", (event) => {
-        if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
-        this.focused = null;
-        this.onPreview(this.hovered);
-      });
       const row = document.createElement("div");
       row.className = "row";
       const where = document.createElement("span");
@@ -1767,15 +1813,23 @@ var CommentList = class {
       const state = document.createElement("span");
       state.className = "state";
       state.textContent = stateText(shown);
+      if (shown === "sending") {
+        const spinner = document.createElement("span");
+        spinner.className = "sending-indicator";
+        spinner.setAttribute("aria-hidden", "true");
+        state.prepend(spinner);
+      }
       row.append(where, state);
       const text = document.createElement("p");
       text.className = "text";
       text.textContent = entry.draft.comment;
-      item.append(row, text);
-      for (const attachment of entry.draft.attachments ?? []) {
+      item.replaceChildren(row, text);
+      const names = (entry.draft.attachments ?? []).map((file) => file.name);
+      if (entry.uploaded !== true) names.push(...entry.files ?? []);
+      for (const name of names) {
         const file = document.createElement("p");
         file.className = "text";
-        file.textContent = attachment.name;
+        file.textContent = name;
         item.append(file);
       }
       if (entry.error !== void 0) {
@@ -1784,7 +1838,24 @@ var CommentList = class {
         error.textContent = entry.error;
         item.append(error);
       }
-      if (entry.state === "unsent") {
+      if (entry.state === "failed") {
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "again";
+        edit.textContent = "edit";
+        edit.addEventListener("click", () => {
+          void this.onEdit(entry);
+        });
+        const discard = document.createElement("button");
+        discard.type = "button";
+        discard.className = "again";
+        discard.textContent = "discard";
+        discard.addEventListener("click", () => {
+          this.outbox.discard(entry);
+        });
+        item.append(edit, discard);
+      }
+      if (shown !== "sending" && this.outbox.canResend(entry)) {
         const again = document.createElement("button");
         again.type = "button";
         again.className = "again";
@@ -1794,43 +1865,13 @@ var CommentList = class {
         });
         item.append(again);
       }
-      return item;
-    }));
-    if (previousFocus !== null) {
-      const index = entries.indexOf(previousFocus);
-      const item = outboxList.children.item(index);
-      const again = againFocused ? item?.querySelector(".again") : null;
-      if (again instanceof HTMLElement) again.focus({ preventScroll: true });
-      else if (item instanceof HTMLElement) item.focus({ preventScroll: true });
+      if (item === focusedItem) {
+        const button = focusedAction === null ? void 0 : Array.from(item.querySelectorAll("button")).find((candidate) => candidate.textContent === focusedAction);
+        (button ?? item).focus({ preventScroll: true });
+      }
     }
   }
 };
-
-// client/src/location.ts
-function pageUrl() {
-  const url = new URL(window.location.href);
-  const raw = `${url.pathname}${url.search}${url.hash}`;
-  const encoded = raw.replace(/[^\x21-\x7e]|["\\]/gu, (character) => encodeURIComponent(character));
-  return encoded.startsWith("/") && encoded.length <= MAX_PAGE_PATH ? encoded : null;
-}
-function watchUrl(listener) {
-  let last = pageUrl();
-  const check = () => {
-    const now = pageUrl();
-    if (now === last) return;
-    last = now;
-    listener(now);
-  };
-  for (const method of ["pushState", "replaceState"]) {
-    const original = history[method].bind(history);
-    history[method] = (...args) => {
-      original(...args);
-      check();
-    };
-  }
-  window.addEventListener("popstate", check);
-  window.addEventListener("hashchange", check);
-}
 
 // client/src/name.ts
 var NamePrompt = class {
@@ -1873,6 +1914,153 @@ var NamePrompt = class {
   }
 };
 
+// client/src/attachments.ts
+function parseAttachments(value) {
+  if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS) return null;
+  const files = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || entry.type !== "file" || !isResourceId(entry.file) || typeof entry.name !== "string") return null;
+    files.push({ type: "file", file: entry.file, name: entry.name });
+  }
+  return files;
+}
+function isResourceId(value) {
+  return typeof value === "string" && value.length === 69 && /^sha3:[0-9a-f]{64}$/.test(value);
+}
+var UploadError = class extends Error {
+  constructor(message, transient) {
+    super(message);
+    this.transient = transient;
+  }
+  transient;
+};
+async function upload(file) {
+  const reply = await fetch(UPLOAD_URL, {
+    method: "POST",
+    mode: "same-origin",
+    redirect: "error",
+    body: file
+  }).catch(() => null);
+  if (reply === null) throw new UploadError("Could not reach the joiner.", true);
+  let result;
+  try {
+    result = JSON.parse(await reply.text());
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw new UploadError("The upload reply was interrupted.", true);
+  }
+  if (reply.status === 201 && isRecord(result) && isResourceId(result.id)) {
+    return { type: "file", file: result.id, name: file.name };
+  }
+  const reason = isRecord(result) && typeof result.error === "string" ? result.error : void 0;
+  const transient = [408, 429, 502, 503, 504].includes(reply.status) || reason === "could not read the attachment";
+  throw new UploadError(reason ?? "Could not upload the attachment.", transient);
+}
+
+// client/src/outbox-files.ts
+var FILES = "files";
+var ACCEPTED = "accepted";
+var MAX_AGE = 7 * 24 * 60 * 60 * 1e3;
+async function transaction(mode, work) {
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open("jamparty-outbox", 2);
+    request.onupgradeneeded = (event) => {
+      if (event.oldVersion === 0) {
+        request.result.createObjectStore(FILES).createIndex("at", "at");
+      }
+      request.result.createObjectStore(ACCEPTED).createIndex("at", "at");
+    };
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+    request.onerror = () => {
+      reject(new Error("Could not open attachment storage.", { cause: request.error }));
+    };
+  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction([FILES, ACCEPTED], mode);
+      let result;
+      tx.oncomplete = () => {
+        resolve(result);
+      };
+      tx.onabort = () => {
+        reject(new Error("Attachment storage transaction aborted.", { cause: tx.error }));
+      };
+      work(tx, (value) => {
+        result = value;
+      });
+    });
+  } finally {
+    db.close();
+  }
+}
+function valid(files) {
+  return Array.isArray(files) && files.length > 0 && files.length <= MAX_ATTACHMENTS && files.every((file) => file instanceof File && file.size <= MAX_FILE_BYTES);
+}
+function prune(store, done) {
+  const expired = store.index("at").openCursor(IDBKeyRange.upperBound(Date.now() - MAX_AGE));
+  expired.onsuccess = () => {
+    const cursor = expired.result;
+    if (cursor === null) {
+      done();
+    } else {
+      cursor.delete();
+      cursor.continue();
+    }
+  };
+}
+function pruneFiles() {
+  void transaction("readwrite", (tx, finish) => {
+    prune(tx.objectStore(FILES), () => {
+      finish(void 0);
+    });
+    prune(tx.objectStore(ACCEPTED), () => {
+      finish(void 0);
+    });
+  }).catch(() => void 0);
+}
+function keepFiles(ref, files, replaces) {
+  if (!valid(files)) return Promise.resolve(false);
+  return transaction("readwrite", (tx, finish) => {
+    const store = tx.objectStore(FILES);
+    prune(store, () => {
+      const count = store.count();
+      const replaced = replaces === void 0 ? null : store.getKey(replaces);
+      const check = () => {
+        if (count.result - Number(replaced?.result !== void 0) >= MAX_OUTBOX) {
+          finish(false);
+          return;
+        }
+        store.put({ at: Date.now(), files }, ref);
+        finish(true);
+      };
+      if (replaced === null) count.onsuccess = check;
+      else replaced.onsuccess = check;
+    });
+  });
+}
+function readFiles(ref) {
+  return transaction("readonly", (tx, finish) => {
+    const saved = tx.objectStore(FILES).get(ref);
+    const receipt = tx.objectStore(ACCEPTED).get(ref);
+    receipt.onsuccess = () => {
+      const record = saved.result;
+      const accepted = receipt.result;
+      finish(accepted === void 0 ? { files: valid(record?.files) ? record.files : [] } : { files: [], accepted });
+    };
+  });
+}
+function forgetFiles(ref, accepted) {
+  return transaction("readwrite", (tx, finish) => {
+    if (accepted !== void 0) {
+      tx.objectStore(ACCEPTED).put({ at: Date.now(), ...accepted }, ref);
+    }
+    tx.objectStore(FILES).delete(ref);
+    finish(void 0);
+  }).catch(() => {
+  });
+}
+
 // client/src/outbox.ts
 function parseDraft(value) {
   if (!isRecord(value)) return null;
@@ -1898,6 +2086,7 @@ function parseState(value) {
     case "queued":
     case "delivered":
     case "failed":
+    case "sending":
       return value;
     default:
       return "unsent";
@@ -1907,6 +2096,7 @@ function parseEntry(value) {
   if (!isRecord(value)) return null;
   const draft = parseDraft(value.draft);
   if (draft === null) return null;
+  const progress = parseAttachments(value.uploadProgress);
   return {
     draft,
     ref: typeof value.ref === "string" ? value.ref : crypto.randomUUID(),
@@ -1914,6 +2104,9 @@ function parseEntry(value) {
     state: parseState(value.state),
     key: typeof value.key === "string" ? value.key : null,
     ...typeof value.error === "string" ? { error: value.error } : {},
+    ...Array.isArray(value.files) && value.files.every((name) => typeof name === "string") ? { files: value.files } : {},
+    ...progress === null ? {} : { uploadProgress: progress },
+    ...value.uploaded === true ? { uploaded: true } : {},
     at: typeof value.at === "number" ? value.at : Date.now()
   };
 }
@@ -1934,14 +2127,20 @@ function load() {
   }
 }
 var Outbox = class {
-  constructor(send) {
+  constructor(send, reachable) {
     this.send = send;
+    this.reachable = reachable;
+    pruneFiles();
   }
   send;
+  reachable;
   entries = load();
   /** Called after every change, to redraw. */
   onChange = () => void 0;
-  onAttachmentUnavailable = () => void 0;
+  onInitialOutcome = () => void 0;
+  active = /* @__PURE__ */ new Set();
+  /** Serializes file transfers within this tab. The joiner also caps concurrent uploads. */
+  uploads = Promise.resolve();
   /**
    * The ids of this joiner's comments the share holds, as the joiner last
    * said; null while it does not know (a restarted joiner before the
@@ -1956,6 +2155,13 @@ var Outbox = class {
    * last heard from, which it most likely is.
    */
   stamp = lastKey();
+  retryTimer;
+  retryUploads() {
+    this.retryTimer ??= window.setTimeout(() => {
+      this.retryTimer = void 0;
+      if (this.reachable()) void this.resendAll();
+    }, 2e3);
+  }
   /** The joiner's key, from its hello or link (null: not known yet, and kept). */
   setKey(key) {
     if (key === null || key === this.key) return;
@@ -1976,17 +2182,15 @@ var Outbox = class {
   }
   /** How `entry` is shown. */
   shown(entry) {
-    return entry.state === "queued" && this.foreign(entry) ? "earlier" : entry.state;
+    return (entry.state === "queued" || entry.state === "sending") && this.foreign(entry) ? "earlier" : entry.state;
   }
-  /** Persists the list (bounded) and redraws. */
+  persist() {
+    sessionStorage.setItem(OUTBOX_KEY, JSON.stringify(this.entries));
+  }
+  /** Persists state changes and redraws. */
   changed() {
-    while (this.entries.length > MAX_OUTBOX) {
-      const index = this.droppable();
-      if (index === -1) break;
-      this.entries.splice(index, 1);
-    }
     try {
-      sessionStorage.setItem(OUTBOX_KEY, JSON.stringify(this.entries));
+      this.persist();
     } catch {
     }
     this.onChange();
@@ -1998,16 +2202,11 @@ var Outbox = class {
   droppable() {
     const delivered = this.entries.findIndex((entry) => entry.state === "delivered");
     if (delivered !== -1) return delivered;
-    const queued = this.entries.findIndex((entry) => entry.state === "queued");
-    if (queued !== -1) return queued;
-    return this.entries.findIndex((entry) => entry.state === "failed");
+    return this.entries.findIndex((entry) => entry.state === "queued");
   }
-  /** Whether the outbox holds as many comments still to send as it keeps. */
-  get full() {
-    const unsent = this.entries.filter(
-      (entry) => entry.state === "unsent" || entry.state === "sending"
-    );
-    return unsent.length >= MAX_OUTBOX;
+  /** Whether adding a new comment would displace one the browser must keep. */
+  full(replaces) {
+    return this.entries.length >= MAX_OUTBOX && (replaces === void 0 || !this.entries.includes(replaces)) && this.droppable() === -1;
   }
   /** A queued entry the share no longer holds was delivered. */
   settle(entry) {
@@ -2024,79 +2223,189 @@ var Outbox = class {
     for (const entry of this.entries) this.settle(entry);
     this.changed();
   }
-  /**
-   * Sends `draft` under `ref`, kept first: a reload before the joiner's
-   * answer sends it again under the same ref, so it is queued once.
-   * Resolves with the outcome once the entry reflects it; a refused
-   * comment is taken out again (it goes back to the dialog). Refused
-   * without sending while the outbox is full of comments still to send.
-   */
-  async submit(draft, ref) {
-    if (this.full) {
-      return {
-        refused: {
-          error: `${MAX_OUTBOX} comments are waiting to be sent; this one can go once they have`
-        }
-      };
+  fullError() {
+    if (this.entries.some((entry) => entry.state === "failed")) {
+      return "The comment list is full. Edit or discard a refused comment, or wait for a comment to queue.";
     }
+    return `${MAX_OUTBOX} comments are waiting to be sent; this one can go once they have`;
+  }
+  /** Make room and persist the new ref before starting any network work. */
+  add(draft, ref, files = [], replaces) {
+    if (this.full(replaces)) throw new Error(this.fullError());
     const entry = {
       draft,
       ref,
       id: null,
       state: "sending",
       key: this.stamp,
-      at: Date.now()
+      at: Date.now(),
+      ...files.length === 0 ? {} : { files: files.map((file) => file.name) }
     };
+    const replaced = replaces === void 0 ? -1 : this.entries.indexOf(replaces);
+    const index = replaced !== -1 ? replaced : this.entries.length >= MAX_OUTBOX ? this.droppable() : -1;
+    const [removed] = index === -1 ? [] : this.entries.splice(index, 1);
     this.entries.push(entry);
-    this.changed();
-    const outcome = await this.send({ ref, ...draft });
-    if ("refused" in outcome) {
-      const index = this.entries.indexOf(entry);
-      if (index !== -1) this.entries.splice(index, 1);
-      this.changed();
-    } else {
-      this.take(entry, outcome);
+    try {
+      this.persist();
+    } catch {
+      this.entries.pop();
+      if (removed !== void 0) this.entries.splice(index, 0, removed);
+      throw new Error("Could not save the comment in this tab.");
     }
-    return outcome;
+    if (removed?.files !== void 0) void forgetFiles(removed.ref);
+    this.onChange();
+    return entry;
   }
-  /** Records what became of `entry`. */
-  take(entry, outcome) {
-    if (entry.draft.choice !== void 0 && "refused" in outcome && outcome.refused.choiceRefused === true) {
-      const index = this.entries.indexOf(entry);
-      if (index !== -1) this.entries.splice(index, 1);
-    } else if ("refused" in outcome && outcome.refused.attachmentUnavailable === true) {
-      entry.state = "failed";
+  /** Save a comment locally and start delivery without waiting for the share. */
+  async enqueue(draft, files, replaces) {
+    if (this.full(replaces)) throw new Error(this.fullError());
+    if (replaces?.files !== void 0 && (await this.savedFiles(replaces)).accepted !== void 0) {
+      throw new Error("This comment has already been queued.");
+    }
+    const ref = crypto.randomUUID();
+    if (files.length > 0 && !await keepFiles(ref, files, replaces?.ref).catch(() => false)) {
+      throw new Error("Could not save the files in this browser. Free space or remove an attachment.");
+    }
+    let entry;
+    try {
+      entry = this.add(draft, ref, files, replaces);
+    } catch (error) {
+      if (files.length > 0) await forgetFiles(ref);
+      throw error;
+    }
+    void this.deliver(entry).then((outcome) => {
+      if (!this.foreign(entry)) this.onInitialOutcome(outcome);
+    });
+  }
+  /** Choice buttons still wait for a reply before dismissing the question. */
+  async submit(draft, ref) {
+    let entry;
+    try {
+      entry = this.add(draft, ref);
+    } catch (error) {
+      return { refused: { error: error instanceof Error ? error.message : "Could not save the choice." } };
+    }
+    return this.deliver(entry);
+  }
+  discard(entry) {
+    const index = this.entries.indexOf(entry);
+    if (index === -1) return;
+    this.entries.splice(index, 1);
+    if (entry.files !== void 0) void forgetFiles(entry.ref);
+    this.changed();
+  }
+  accept(entry, id) {
+    entry.id = id;
+    entry.state = "queued";
+    delete entry.error;
+    delete entry.files;
+    delete entry.uploaded;
+    delete entry.uploadProgress;
+    this.settle(entry);
+  }
+  async savedFiles(entry) {
+    const saved = await readFiles(entry.ref);
+    if (saved.accepted !== void 0) {
+      entry.draft.attachments = saved.accepted.attachments;
+      this.accept(entry, saved.accepted.id);
+      this.changed();
+    }
+    return saved;
+  }
+  async uploadFiles(entry, files) {
+    if (files.length !== entry.files?.length) {
+      throw new UploadError("The saved files are unavailable. Attach them again.", false);
+    }
+    const uploaded = entry.uploadProgress ?? [];
+    entry.uploadProgress = uploaded;
+    for (const file of files.slice(uploaded.length)) {
+      try {
+        uploaded.push(await upload(file));
+        this.changed();
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "Could not upload the attachment.";
+        throw new UploadError(`${file.name} — ${reason}`, error instanceof UploadError && error.transient);
+      }
+    }
+    entry.draft.attachments = [...entry.draft.attachments ?? [], ...uploaded];
+    entry.uploaded = true;
+    delete entry.uploadProgress;
+    this.changed();
+  }
+  async sendEntry(entry) {
+    if (entry.files !== void 0) {
+      const work = this.uploads.then(async () => {
+        const { files, accepted } = await readFiles(entry.ref);
+        if (accepted === void 0 && entry.uploaded !== true && !this.foreign(entry)) {
+          await this.uploadFiles(entry, files);
+        }
+        return accepted;
+      });
+      this.uploads = work.then(() => void 0, () => void 0);
+      try {
+        const accepted = await work;
+        if (accepted !== void 0) {
+          entry.draft.attachments = accepted.attachments;
+          return { commented: { id: accepted.id } };
+        }
+      } catch (error) {
+        if (!(error instanceof UploadError) || error.transient) {
+          this.retryUploads();
+          return { unsent: { error: error instanceof Error ? error.message : "Could not read the files." } };
+        }
+        return { refused: { error: error.message } };
+      }
+    }
+    if (this.foreign(entry)) return { unsent: { error: "The joiner restarted." } };
+    return this.send({ ref: entry.ref, ...entry.draft });
+  }
+  async deliver(entry) {
+    this.active.add(entry);
+    let outcome;
+    try {
+      outcome = await this.sendEntry(entry);
+    } catch {
+      outcome = { unsent: { error: "Could not send the comment." } };
+    }
+    if ("refused" in outcome) {
+      if (entry.draft.choice !== void 0 && outcome.refused.choiceRefused === true) {
+        this.active.delete(entry);
+        this.discard(entry);
+        return outcome;
+      }
+      entry.state = entry.draft.choice === void 0 ? "failed" : "unsent";
       entry.error = outcome.refused.error;
-      this.onAttachmentUnavailable(entry.error);
     } else if ("commented" in outcome) {
-      entry.id = outcome.commented.id;
-      entry.state = "queued";
-      this.settle(entry);
-    } else {
+      if (entry.files !== void 0) {
+        await forgetFiles(entry.ref, { id: outcome.commented.id, attachments: entry.draft.attachments ?? [] });
+      }
+      this.accept(entry, outcome.commented.id);
+    } else if (!this.foreign(entry)) {
       entry.state = "unsent";
     }
+    this.active.delete(entry);
     this.changed();
+    return outcome;
   }
-  /**
-   * Sends an unsent entry again. One of another joiner key goes under
-   * this one's from now on: only ever by hand, since the share may have
-   * queued it under the other.
-   */
+  canResend(entry) {
+    return !this.active.has(entry) && (entry.state === "unsent" || entry.state === "sending");
+  }
+  /** Send again under the same ref. Only a manual retry can adopt an earlier key. */
   async resend(entry) {
-    if (entry.state !== "unsent") return;
+    if (!this.canResend(entry)) return;
     entry.key = this.stamp;
     entry.state = "sending";
+    const work = this.deliver(entry);
     this.changed();
-    const outcome = await this.send({ ref: entry.ref, ...entry.draft });
-    this.take(entry, outcome);
+    await work;
   }
-  /** Sends every unsent entry of this joiner key again. */
+  /** Sends every unsent or interrupted entry made under this joiner key. */
   async resendAll() {
     const unsent = this.entries.filter(
-      (candidate) => candidate.state === "unsent" && !this.foreign(candidate)
+      (entry) => this.canResend(entry) && !this.foreign(entry)
     );
     for (const entry of unsent) {
-      await this.resend(entry);
+      if (!this.foreign(entry)) await this.resend(entry);
     }
   }
 };
@@ -2513,6 +2822,19 @@ var styles = `
   #outbox-list .where, #outbox-list .state { color: #b8b2a9; }
   #outbox-list .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #outbox-list li[data-state="delivered"] .state { color: #8ce99a; }
+  .sending-indicator {
+    display: inline-block;
+    width: .65em; height: .65em;
+    margin-right: .45em;
+    border: 1px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: jamparty-sending .8s linear infinite;
+  }
+  @keyframes jamparty-sending { to { transform: rotate(1turn); } }
+  @media (prefers-reduced-motion: reduce) {
+    .sending-indicator { animation: none; border-right-color: currentColor; }
+  }
   #outbox-list li:is([data-state="unsent"], [data-state="failed"]) .state { color: #ffa8a8; }
   #outbox-list li[data-state="delivered"] .text,
   #outbox-list li[data-state="unsent"] .text { color: #d8d4cd; }
@@ -3289,9 +3611,12 @@ var Ui = class _Ui {
       this.toast.hidden = true;
     }, 2400);
   }
-  setPending(pending) {
-    const text = `${pending} queued`;
-    this.badge.textContent = text;
+  setPending(pending, sending, refused) {
+    const parts = [`${pending} queued`];
+    if (sending > 0) parts.push(`${sending} sending`);
+    if (refused > 0) parts.push(`${refused} refused`);
+    const text = parts.join(" · ");
+    if (this.badge.textContent !== text) this.badge.textContent = text;
     this.badge.dataset.pending = String(pending);
     this.listCount.textContent = text;
   }
@@ -3325,7 +3650,7 @@ function install(pdf) {
       answers.remove(submission.selector.slice(AGENT_TARGET_PREFIX.length));
     }
     return outcome;
-  });
+  }, () => connection.isReachable);
   const changeSettings = async (change) => {
     const before = remembered();
     remember(change);
@@ -3334,7 +3659,7 @@ function install(pdf) {
     return outcome;
   };
   const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref));
-  const dialog = new CommentDialog(ui, outbox, () => pending);
+  const dialog = new CommentDialog(ui, outbox);
   const list = new CommentList(ui, outbox);
   const panel = new Panel(ui, changeSettings);
   panel.onClearAnswers = () => {
@@ -3347,12 +3672,44 @@ function install(pdf) {
   const layer = new CursorLayer(ui);
   const editMode = pdf === void 0 ? new EditMode(ui, dialog) : null;
   pdf?.bind(ui, dialog);
-  if (editMode !== null) editMode.onPagePress = () => {
-    panel.close();
-    list.close();
-  };
+  if (editMode !== null) {
+    dialog.onOpen = () => {
+      editMode.clearHover();
+    };
+    editMode.onPagePress = () => {
+      panel.close();
+      list.close();
+    };
+  }
   list.onPreview = (entry) => {
     pdf?.previewComment(entry);
+  };
+  list.onEdit = async (entry) => {
+    if (!isThisPage(entry.draft.page)) {
+      try {
+        const target = new URL(entry.draft.page);
+        if (target.origin === location.origin) {
+          if (target.pathname !== location.pathname || target.search !== location.search) {
+            sessionStorage.setItem(EDIT_REF_KEY, entry.ref);
+            location.assign(target);
+            return;
+          }
+          location.assign(target);
+          await new Promise((resolve) => {
+            window.addEventListener("hashchange", () => {
+              requestAnimationFrame(() => {
+                resolve();
+              });
+            }, { once: true });
+          });
+          await targetMounted(entry.draft.selector, HASH_ROUTE_WAIT_MS);
+        }
+      } catch {
+      }
+    }
+    if (await dialog.edit(entry, (selector) => isThisPage(entry.draft.page) ? answers.targetFor(selector) : null)) {
+      list.close();
+    }
   };
   list.onOpen = () => {
     panel.close();
@@ -3363,9 +3720,18 @@ function install(pdf) {
   outbox.onChange = () => {
     list.render();
     pdf?.showComments(outbox.entries);
+    const sending = outbox.entries.filter(
+      (entry) => entry.draft.choice === void 0 && outbox.shown(entry) === "sending"
+    ).length;
+    const refused = outbox.entries.filter((entry) => entry.state === "failed").length;
+    ui.setPending(pending, sending, refused);
   };
-  outbox.onAttachmentUnavailable = (error) => {
-    ui.showToast(error);
+  outbox.onInitialOutcome = (outcome) => {
+    if ("commented" in outcome) {
+      ui.showToast(`Comment queued · ${pending} pending`);
+    } else if ("unsent" in outcome) {
+      ui.showToast("Not sent: kept in the page, sent when the connection is back");
+    }
   };
   const prompt = new NamePrompt(ui, changeSettings);
   panel.onSettings = (settings) => {
@@ -3390,7 +3756,6 @@ function install(pdf) {
   const showMine = (undelivered) => {
     if (undelivered === null) return;
     pending = undelivered.length;
-    ui.setPending(pending);
     outbox.sync(undelivered);
   };
   const onRevision = (revision) => {
@@ -3405,10 +3770,21 @@ function install(pdf) {
     dialog.reloadWhenClosed();
   };
   let restored = false;
+  let editRef = null;
+  try {
+    editRef = sessionStorage.getItem(EDIT_REF_KEY);
+    sessionStorage.removeItem(EDIT_REF_KEY);
+  } catch {
+  }
   const restoreDraft = () => {
     if (restored) return;
     restored = true;
-    dialog.restore((selector) => answers.targetFor(selector));
+    const edit = outbox.entries.find((entry) => entry.ref === editRef && entry.state === "failed" && isThisPage(entry.draft.page));
+    if (edit !== void 0) {
+      void list.onEdit(edit);
+      return;
+    }
+    void dialog.restore((selector) => answers.targetFor(selector));
   };
   function applyHello(hello) {
     you = hello.link.you?.key ?? null;
@@ -3517,8 +3893,37 @@ function install(pdf) {
     if (!pdf?.commentOnSelection()) dialog.openPage();
   }, true);
   outbox.onChange();
-  if (loadDraft()?.target.kind !== "answer") restoreDraft();
+  if (editRef === null && loadDraft()?.target.kind !== "answer") restoreDraft();
   socket.start();
+}
+var HASH_ROUTE_WAIT_MS = 2e3;
+function targetMounted(selector, timeout) {
+  const found = () => {
+    try {
+      return selector !== "" && document.querySelector(selector) !== null;
+    } catch {
+      return false;
+    }
+  };
+  if (selector === "" || selector.startsWith(AGENT_TARGET_PREFIX) || found()) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const done = () => {
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve();
+    };
+    const observer = new MutationObserver(() => {
+      if (found()) done();
+    });
+    observer.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true
+    });
+    const timer = window.setTimeout(done, timeout);
+  });
 }
 
 // client/src/index.ts

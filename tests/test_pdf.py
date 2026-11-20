@@ -122,13 +122,15 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         row = overlay(page, "#outbox-list li")
         row.hover()
         expect(sheet.locator(".pdf-comment")).to_have_count(1)
+        [box_record] = recv_all(tmp_path)
+        expect(row).to_have_attribute("data-state", "delivered")
+        expect(sheet.locator(".pdf-comment")).to_have_count(1)
         overlay(page, "#collapse").hover()
         expect_selection_cleared(page)
         row.focus()
         expect(sheet.locator(".pdf-comment")).to_have_count(1)
         overlay(page, "#collapse").click()
         expect_selection_cleared(page)
-        [box_record] = recv_all(tmp_path)
         assert box_record["page"] == url
         assert box_record["pdf"] == {
             "page": 2,
@@ -193,7 +195,12 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         field = overlay(page, "textarea")
         field.fill("Keep this draft")
         expect(sheet.locator(".pdf-draft")).to_have_count(1)
-        _ = updated.write_bytes(fixture_pdf("Third version"))
+        _ = updated.write_bytes(
+            reading_pdf(
+                [(792, 144, ["First page"]), (792, 144, ["Third version"])]
+                + [(792, 144, ["Another page"])] * 4
+            )
+        )
         _ = updated.replace(pdf)
         expect(sheet.locator(".textLayer span")).to_have_text("Third version")
         expect(page.locator(".pdf-draft")).to_have_count(1)
@@ -206,12 +213,14 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         expect(field).to_have_value("Keep this draft")
         field.press("Escape")
         expect_selection_cleared(page)
-        for number in ("1", "2"):
+        for number in ("6", "2"):
             jump.fill(number)
             jump.press("Tab")
             expect(page.locator(f"#jamparty-pdf-page-{number}")).to_have_attribute(
                 "data-rendered", "true"
             )
+            if number == "6":
+                expect(sheet).not_to_have_attribute("data-rendered", "true")
             # Typing in the page field moves the selection there, so only
             # the viewer's own marks are checked.
             expect(
@@ -233,7 +242,10 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
 
 
 @pytest.mark.parametrize("tool", ["slash", "contextmenu", "block", "box"])
-def test_pdf_cancel_clears_draft(tmp_path: Path, page: Page, tool: str) -> None:
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_pdf_dialog_clears_draft(
+    tmp_path: Path, page: Page, tool: str, cancelled: bool
+) -> None:
     pdf = tmp_path / "paper.pdf"
     _ = pdf.write_bytes(fixture_pdf("Second page"))
     with (
@@ -274,7 +286,7 @@ def test_pdf_cancel_clears_draft(tmp_path: Path, page: Page, tool: str) -> None:
         expect(sheet.locator(".pdf-draft")).to_be_visible()
         expect(page.locator(".pdf-draft")).to_have_count(1)
         expect(overlay(page, "#highlight")).to_be_hidden()
-        field.press("Escape")
+        field.press("Escape" if cancelled else "Enter")
         expect(field).to_be_hidden()
         expect_selection_cleared(page)
 

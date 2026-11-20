@@ -3,7 +3,7 @@
 // panel, presence and cursors (docs/ui.md).
 
 import { Answers } from "./answers";
-import { AGENT_TARGET_PREFIX, LIVE_REVISION } from "./config";
+import { AGENT_TARGET_PREFIX, EDIT_REF_KEY, LIVE_REVISION } from "./config";
 import { Connection } from "./connection";
 import { CursorLayer, CursorSender } from "./cursors";
 import { CommentDialog } from "./dialog";
@@ -11,7 +11,7 @@ import { loadDraft } from "./draft";
 import { EditMode } from "./edit";
 import type { PageSettings, Person, Snapshot } from "./generated/api";
 import { CommentList } from "./list";
-import { pageUrl, watchUrl } from "./location";
+import { isThisPage, pageUrl, watchUrl } from "./location";
 import { NamePrompt } from "./name";
 import { Outbox } from "./outbox";
 import { type ChangeSettings, Panel, isEditing } from "./panel";
@@ -48,7 +48,7 @@ export function install(pdf?: PdfViewer): void {
       answers.remove(submission.selector.slice(AGENT_TARGET_PREFIX.length));
     }
     return outcome;
-  });
+  }, () => connection.isReachable);
   // The joiner takes a change for this join only; the page keeps it for
   // the share, from before it goes (the tab may close before the reply),
   // and takes it back if the joiner refuses it.
@@ -60,7 +60,7 @@ export function install(pdf?: PdfViewer): void {
     return outcome;
   };
   const answers = new Answers(ui, ({ ref, ...draft }) => outbox.submit(draft, ref));
-  const dialog = new CommentDialog(ui, outbox, () => pending);
+  const dialog = new CommentDialog(ui, outbox);
   const list = new CommentList(ui, outbox);
   // The panel takes its keys before the page and the `/` handler below.
   const panel = new Panel(ui, changeSettings);
@@ -72,19 +72,62 @@ export function install(pdf?: PdfViewer): void {
   const layer = new CursorLayer(ui);
   const editMode = pdf === undefined ? new EditMode(ui, dialog) : null;
   pdf?.bind(ui, dialog);
-  if (editMode !== null) editMode.onPagePress = () => {
-    panel.close();
-    list.close();
-  };
+  if (editMode !== null) {
+    dialog.onOpen = () => { editMode.clearHover(); };
+    editMode.onPagePress = () => {
+      panel.close();
+      list.close();
+    };
+  }
 
   list.onPreview = (entry) => { pdf?.previewComment(entry); };
+  list.onEdit = async (entry) => {
+    if (!isThisPage(entry.draft.page)) {
+      try {
+        const target = new URL(entry.draft.page);
+        if (target.origin === location.origin) {
+          if (target.pathname !== location.pathname || target.search !== location.search) {
+            sessionStorage.setItem(EDIT_REF_KEY, entry.ref);
+            location.assign(target);
+            return;
+          }
+          // Let the hash route render its target before opening the editor;
+          // a route may mount it later, after fetching.
+          location.assign(target);
+          await new Promise<void>((resolve) => {
+            window.addEventListener("hashchange", () => {
+              requestAnimationFrame(() => { resolve(); });
+            }, { once: true });
+          });
+          await targetMounted(entry.draft.selector, HASH_ROUTE_WAIT_MS);
+        }
+      } catch {
+        // The original page cannot be opened from this tab.
+      }
+    }
+    if (await dialog.edit(entry, (selector) => isThisPage(entry.draft.page) ? answers.targetFor(selector) : null)) {
+      list.close();
+    }
+  };
   list.onOpen = () => { panel.close(); };
   panel.onOpen = () => { list.close(); };
   outbox.onChange = () => {
     list.render();
     pdf?.showComments(outbox.entries);
+    const sending = outbox.entries.filter(
+      (entry) => entry.draft.choice === undefined && outbox.shown(entry) === "sending",
+    ).length;
+    const refused = outbox.entries.filter((entry) => entry.state === "failed").length;
+    ui.setPending(pending, sending, refused);
   };
-  outbox.onAttachmentUnavailable = (error) => { ui.showToast(error); };
+
+  outbox.onInitialOutcome = (outcome) => {
+    if ("commented" in outcome) {
+      ui.showToast(`Comment queued · ${pending} pending`);
+    } else if ("unsent" in outcome) {
+      ui.showToast("Not sent: kept in the page, sent when the connection is back");
+    }
+  };
 
   const prompt = new NamePrompt(ui, changeSettings);
   panel.onSettings = (settings: PageSettings): void => {
@@ -113,7 +156,6 @@ export function install(pdf?: PdfViewer): void {
     // Unknown (before the share first admitted the joiner): as it was.
     if (undelivered === null) return;
     pending = undelivered.length;
-    ui.setPending(pending);
     outbox.sync(undelivered);
   };
 
@@ -134,10 +176,23 @@ export function install(pdf?: PdfViewer): void {
   // A draft left by a reload comes back once; one on an answer waits for
   // the answers, which come with the first hello.
   let restored = false;
+  let editRef: string | null = null;
+  try {
+    editRef = sessionStorage.getItem(EDIT_REF_KEY);
+    sessionStorage.removeItem(EDIT_REF_KEY);
+  } catch {
+    // No edit request could have been kept for this navigation.
+  }
   const restoreDraft = (): void => {
     if (restored) return;
     restored = true;
-    dialog.restore((selector) => answers.targetFor(selector));
+    const edit = outbox.entries.find((entry) => entry.ref === editRef && entry.state === "failed" &&
+      isThisPage(entry.draft.page));
+    if (edit !== undefined) {
+      void list.onEdit(edit);
+      return;
+    }
+    void dialog.restore((selector) => answers.targetFor(selector));
   };
 
   function applyHello(hello: Snapshot): void {
@@ -276,6 +331,36 @@ export function install(pdf?: PdfViewer): void {
   }, true);
 
   outbox.onChange();
-  if (loadDraft()?.target.kind !== "answer") restoreDraft();
+  if (editRef === null && loadDraft()?.target.kind !== "answer") restoreDraft();
   socket.start();
+}
+
+/** How long an edit waits for a hash route to mount the comment's target. */
+const HASH_ROUTE_WAIT_MS = 2000;
+
+/** Resolves once `selector` matches, or after `timeout` ms. */
+function targetMounted(selector: string, timeout: number): Promise<void> {
+  const found = (): boolean => {
+    try {
+      return selector !== "" && document.querySelector(selector) !== null;
+    } catch {
+      return false;
+    }
+  };
+  // Page comments and answers to the agent have no element to wait for.
+  if (selector === "" || selector.startsWith(AGENT_TARGET_PREFIX) || found()) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve();
+    };
+    const observer = new MutationObserver(() => { if (found()) done(); });
+    observer.observe(document.documentElement, {
+      subtree: true, childList: true, attributes: true,
+    });
+    const timer = window.setTimeout(done, timeout);
+  });
 }

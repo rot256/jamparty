@@ -15,6 +15,8 @@ from support import (
     BINARY,
     SITE,
     TIMEOUT,
+    PageSocket,
+    SocketTap,
     comment_on_intro,
     environment,
     hello,
@@ -25,6 +27,7 @@ from support import (
     recv_all,
     settings_path,
     share,
+    waiting,
 )
 
 
@@ -460,6 +463,60 @@ def test_late_choice_retry_is_quietly_removed(tmp_path: Path, page: Page) -> Non
         expect(overlay(page, "#toast")).not_to_contain_text("not sent")
 
 
+def test_rate_limited_choice_replay_stays_available(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        tap = SocketTap(page)
+        _ = page.goto(joined.url)
+        _ = jamparty(tmp_path, "send", "Pick one", "--choice", "Yes", "--choice", "No")
+        question = overlay(page, ".agent-message")
+        expect(question).to_be_visible()
+        tap.hold.add("hello")
+        tap.sockets[-1].close()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "amber")
+        question.get_by_role("button", name="Yes", exact=True).click()
+        expect(overlay(page, "#toast")).to_contain_text("Choice not sent")
+        row = overlay(page, "#outbox-list li")
+        expect(row).to_have_attribute("data-state", "unsent")
+        ref = page.evaluate(
+            "JSON.parse(sessionStorage.getItem('jamparty-outbox-v1'))[0].ref"
+        )
+        assert tap.submissions == []
+
+        waiting(page, "reconnect hello", lambda: bool(tap.held))
+        # Exhaust the share's rate limit under this joiner's key.
+        other = PageSocket(joined)
+        try:
+            assert other.next()["type"] == "hello"
+            for index in range(10):
+                reply = other.request(
+                    {
+                        "type": "comment",
+                        "ref": f"rate-limit-{index}",
+                        "page": "/",
+                        "selector": "#intro",
+                        "comment": "Fill the rate limit",
+                    }
+                )
+                assert "commented" in cast(dict[str, object], reply["outcome"])
+        finally:
+            other.close()
+        tap.release()
+
+        expect(row).to_contain_text("too many comments; try again shortly")
+        expect(row).to_have_attribute("data-state", "unsent")
+        expect(row).to_contain_text("Yes")
+        expect(question).to_be_visible()
+        overlay(page, "#pill").click()
+        expect(row.get_by_role("button", name="send again")).to_be_enabled()
+        [submission] = tap.submissions
+        assert submission["ref"] == ref
+        assert submission["choice"] == "Yes"
+
+
 def test_choice_lost_ack_reloads_without_duplicate(tmp_path: Path, page: Page) -> None:
     without_answer_timeout(tmp_path)
     with (
@@ -510,7 +567,6 @@ def test_choice_lost_ack_reloads_without_duplicate(tmp_path: Path, page: Page) -
 def test_full_outbox_keeps_question_and_reenables_choices(
     tmp_path: Path, page: Page
 ) -> None:
-    from support import SocketTap, hello
     from test_comments import FILL_OUTBOX
 
     without_answer_timeout(tmp_path)

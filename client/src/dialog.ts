@@ -1,14 +1,13 @@
 // The comment dialog: opened on an element (right-click), the whole page
-// (`/`) or an answer; Enter queues the comment. While it is open, what is
+// (`/`) or an answer; Enter saves and starts sending the comment. While it is open, what is
 // written is kept as a draft (see draft.ts) and comes back after a reload;
 // once sent, it is the outbox's (sent again under its ref if need be).
 
-import { upload } from "./attachments";
 import { type Captured, captureTarget, capturePageTarget } from "./capture";
 import { AGENT_TARGET_PREFIX } from "./config";
-import { type DraftKind, type DraftTarget, clearDraft, loadDraft, saveDraft } from "./draft";
+import { type DraftKind, type DraftTarget, type SavedDraft, clearDraft, loadDraft, saveDraft } from "./draft";
 import { type Attachment, MAX_ATTACHMENTS, MAX_FILE_BYTES } from "./generated/api";
-import type { Outbox } from "./outbox";
+import type { Outbox, OutboxEntry } from "./outbox";
 import type { Ui } from "./ui";
 
 const ELEMENT_LABEL = "Comment:";
@@ -29,7 +28,9 @@ function labelFor(kind: DraftKind): string {
 export class CommentDialog {
   onOpen: (captured: Captured) => void = () => undefined;
   onClose: () => void = () => undefined;
-  private files: File[] = [];
+  private files: (File | Attachment)[] = [];
+  private editing: OutboxEntry | undefined;
+  private originals: (File | Attachment)[] = [];
   private missingFiles = 0;
   private position = { x: 0, y: 0 };
   private captured: Captured | null = null;
@@ -37,7 +38,7 @@ export class CommentDialog {
   private target: DraftTarget = { kind: "page", selector: "" };
   /** The target was gone after a reload: a page comment now. */
   private unavailable = false;
-  /** Handed to the outbox and on its way: no draft any more. */
+  /** Saving this draft in the outbox. */
   private sending = false;
   /** A live reload waiting for the dialog to close. */
   private pendingReload = false;
@@ -45,8 +46,6 @@ export class CommentDialog {
   constructor(
     private readonly ui: Ui,
     private readonly outbox: Outbox,
-    /** How many of this joiner's comments the share holds. */
-    private readonly pending: () => number,
   ) {
     const { dialog, form, textarea, cancel } = ui;
     form.addEventListener("submit", (event) => {
@@ -138,7 +137,9 @@ export class CommentDialog {
       name.title = file.name;
       const size = document.createElement("span");
       size.className = "attachment-size";
-      size.textContent = file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KiB`;
+      if (file instanceof File) {
+        size.textContent = file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KiB`;
+      }
       const remove = document.createElement("button");
       remove.type = "button";
       remove.textContent = "×";
@@ -162,8 +163,7 @@ export class CommentDialog {
 
   /**
    * Closes the dialog at the person's request (Cancel, Escape, a click
-   * outside), unless its comment is on its way: it stays until the joiner
-   * answers, so no other comment starts meanwhile.
+   * outside), unless its comment is being saved locally.
    */
   private dismiss(): void {
     if (!this.sending) this.close();
@@ -201,9 +201,61 @@ export class CommentDialog {
    * found by `find`. A target that is gone makes it a page comment, for
    * good: it stays one after further reloads, and the dialog says so.
    */
-  restore(find: (selector: string) => Element | null): void {
+  async restore(find: (selector: string) => Element | null): Promise<void> {
     const draft = loadDraft();
-    if (draft === null || this.ui.dialog.open) return;
+    if (draft === null || this.open) return;
+    if (draft.editRef === undefined) {
+      this.showSaved(draft, find);
+      return;
+    }
+    const entry = this.outbox.entries.find((candidate) => candidate.ref === draft.editRef);
+    if (entry?.state !== "failed") {
+      clearDraft();
+      return;
+    }
+    await this.edit(entry, find, draft);
+  }
+
+  async edit(
+    entry: OutboxEntry,
+    find: (selector: string) => Element | null,
+    savedDraft?: SavedDraft,
+  ): Promise<boolean> {
+    const { draft } = entry;
+    const saved = entry.files === undefined ? { files: [] } : await this.outbox.savedFiles(entry).catch(
+      () => ({ files: [] }),
+    );
+    if (this.open || !this.outbox.entries.includes(entry) || entry.state !== "failed") return false;
+    const selector = draft.selector;
+    const kind = draft.pdf !== undefined ? "pdf" : selector.startsWith(AGENT_TARGET_PREFIX) ? "answer" :
+      selector === "" ? "page" : "element";
+    const refs = draft.attachments ?? [];
+    // Prefer the original bytes so a correction can recover an evicted resource.
+    const existing = entry.uploaded && saved.files.length > 0 ? refs.slice(0, -saved.files.length) : refs;
+    const originals = [...existing, ...saved.files];
+    const files = savedDraft === undefined ? originals : (savedDraft.originalFiles ?? []).flatMap(
+      (index) => originals[index] === undefined ? [] : [originals[index]],
+    );
+    const fileCount = savedDraft?.fileCount ?? existing.length +
+      (entry.uploaded === true ? saved.files.length : entry.files?.length ?? 0);
+    this.editing = entry;
+    this.originals = originals;
+    this.showSaved({
+      ...draft,
+      page: window.location.href,
+      target: { kind, selector },
+      unavailable: false,
+      ...savedDraft,
+      fileCount: Math.max(0, fileCount - files.length),
+    }, find, files);
+    return true;
+  }
+
+  private showSaved(
+    draft: SavedDraft,
+    find: (selector: string) => Element | null,
+    files: (File | Attachment)[] = [],
+  ): void {
     const { target, selectedText } = draft;
     let element: Element | null = null;
     if (target.kind !== "page" && target.kind !== "pdf" && !draft.unavailable) {
@@ -213,7 +265,7 @@ export class CommentDialog {
         // Not a selector this page takes: gone, as far as it can tell.
       }
     }
-    const page = window.location.href;
+    const page = draft.page;
     let x = window.innerWidth / 2;
     let y = window.innerHeight / 3;
     let captured: Captured = { element: null, page, selector: "", selectedText };
@@ -230,6 +282,7 @@ export class CommentDialog {
     this.show(captured, x, y, target);
     this.unavailable = target.kind !== "page" && target.kind !== "pdf" && element === null;
     this.ui.textarea.value = draft.comment;
+    this.files = files;
     this.missingFiles = draft.fileCount;
     this.showFiles();
     if (this.unavailable) this.ui.status.textContent = GONE;
@@ -248,6 +301,10 @@ export class CommentDialog {
       ...(captured.pdf === undefined ? {} : { pdf: captured.pdf }),
       comment: this.ui.textarea.value,
       fileCount: this.files.length + this.missingFiles,
+      ...(this.editing === undefined ? {} : {
+        editRef: this.editing.ref,
+        originalFiles: this.files.map((file) => this.originals.indexOf(file)).filter((index) => index !== -1),
+      }),
     });
   }
 
@@ -297,6 +354,8 @@ export class CommentDialog {
     ui.reloadNotice.hidden = !this.pendingReload;
     ui.textarea.value = "";
     this.position = { x, y };
+    // The quote is already captured. Clear the page range before focus
+    // moves to the textarea, and again after the browser restores focus.
     window.getSelection()?.removeAllRanges();
     ui.dialog.showModal();
     this.onOpen(captured);
@@ -319,6 +378,8 @@ export class CommentDialog {
     this.stopTracking();
     ui.highlight.style.display = "none";
     this.captured = null;
+    this.editing = undefined;
+    this.originals = [];
     this.unavailable = false;
     clearDraft();
     this.files = [];
@@ -358,18 +419,7 @@ export class CommentDialog {
       return;
     }
     this.setSending(true);
-    const attachments: Attachment[] = [];
-    try {
-      for (const file of this.files) {
-        ui.status.textContent = `Uploading ${file.name}…`;
-        attachments.push(await upload(file));
-      }
-    } catch (error) {
-      this.setSending(false);
-      ui.status.textContent = error instanceof Error ? error.message : "Could not upload the attachment.";
-      return;
-    }
-    ui.status.textContent = "Queueing…";
+    const attachments = this.files.filter((file): file is Attachment => !(file instanceof File));
     const draft = {
       page: captured.page,
       selector: captured.selector,
@@ -378,22 +428,13 @@ export class CommentDialog {
       comment,
       ...(attachments.length > 0 ? { attachments } : {}),
     };
-    const ref = crypto.randomUUID();
-    // The outbox has the uploaded attachments and ref before the socket
-    // sends the comment, so it can retry across reconnects and reloads.
-    clearDraft();
-    const outcome = await this.outbox.submit(draft, ref);
-    this.setSending(false);
-    if ("commented" in outcome) {
+    try {
+      await this.outbox.enqueue(draft, this.files.filter((file) => file instanceof File), this.editing);
       this.close();
-      ui.showToast(`Comment queued · ${this.pending()} pending`);
-    } else if ("unsent" in outcome) {
-      this.close();
-      ui.showToast("Not sent: kept in the page, sent when the connection is back");
-    } else {
-      this.keep();
-      ui.status.textContent = outcome.refused.error;
-      ui.textarea.focus();
+    } catch (error) {
+      ui.status.textContent = error instanceof Error ? error.message : "Could not save the comment.";
+    } finally {
+      this.setSending(false);
     }
   }
 }

@@ -266,9 +266,12 @@ export class Ui {
     this.toastTimer = window.setTimeout(() => { this.toast.hidden = true; }, 2400);
   }
 
-  setPending(pending: number): void {
-    const text = `${pending} queued`;
-    this.badge.textContent = text;
+  setPending(pending: number, sending: number, refused: number): void {
+    const parts = [`${pending} queued`];
+    if (sending > 0) parts.push(`${sending} sending`);
+    if (refused > 0) parts.push(`${refused} refused`);
+    const text = parts.join(" · ");
+    if (this.badge.textContent !== text) this.badge.textContent = text;
     this.badge.dataset.pending = String(pending);
     this.listCount.textContent = text;
   }
