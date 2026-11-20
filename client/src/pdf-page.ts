@@ -91,8 +91,8 @@ export class PdfPage {
     }
   }
 
-  resize(zoom: number | "fit", available: number): void {
-    const scale = zoom === "fit" ? available / this.natural.width : zoom * 96 / 72;
+  resize(available: number): void {
+    const scale = available / this.natural.width;
     this.viewport = this.natural.clone({ scale });
     this.element.style.width = `${this.viewport.width}px`;
     this.element.style.height = `${this.viewport.height}px`;
@@ -108,6 +108,11 @@ export class PdfPage {
     this.operators = undefined;
     this.content.replaceChildren();
     delete this.element.dataset.rendered;
+  }
+
+  rerender(): void {
+    this.clear();
+    this.render();
   }
 
   render(): void {
@@ -128,7 +133,7 @@ export class PdfPage {
     const viewport = this.viewport;
     const canvas = document.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
-    const ratio = Math.min(devicePixelRatio, 4096 / viewport.width, 4096 / viewport.height,
+    const ratio = Math.min(devicePixelRatio * (window.visualViewport?.scale ?? 1), 4096 / viewport.width, 4096 / viewport.height,
       Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height)));
     canvas.width = Math.max(1, Math.floor(viewport.width * ratio));
     canvas.height = Math.max(1, Math.floor(viewport.height * ratio));

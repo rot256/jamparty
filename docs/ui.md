@@ -342,7 +342,10 @@ from the start URL.
 ## PDF viewer
 
 Opening a `.pdf` URL in the main browser tab opens the joiner's PDF viewer.
-Use the page field to jump to a page and the zoom menu to change its scale.
+Pages fit the window width up to a maximum of 960 pixels. Use the browser’s
+zoom controls to magnify them. Scrolling briefly shows the current page and
+page count. Loading, updating and errors appear in the same corner, away
+from the command bar.
 As with other pages from a share, a complex or hostile PDF can slow down
 or crash the viewer tab.
 Select text and right-click the selection or press `/` to comment on it.
@@ -369,7 +372,7 @@ outline follows the page through scrolling, zoom and live rebuilds. When
 the PDF changes in a live share, the viewer keeps the same text at the
 same height when it finds a clear match nearby, even if the text moves
 to another page. Otherwise it
-restores the page and scroll position. Zoom stays in place, and scrolling
+restores the page and scroll position. Resizing the window keeps the same reading position, and scrolling
 during the search takes precedence. The outbox and any open dialog stay
 in place. Box positions refer to the layout at the time of review and may
 point to different content after a rebuild.

@@ -12,7 +12,6 @@ import type { Ui } from "./ui";
 interface ViewPosition {
   page: number;
   y: number;
-  x: number;
   offset?: number;
 }
 
@@ -26,6 +25,7 @@ interface Drag {
 }
 
 const DRAG_THRESHOLD = 3;
+const READING_EDGE = 12;
 
 const MAX_PDF_BYTES = 128 * 1024 * 1024;
 const MAX_PDF_PAGES = 1000;
@@ -67,10 +67,8 @@ async function readPdf(response: Response): Promise<Uint8Array> {
 
 export class PdfViewer {
   private readonly container = document.querySelector<HTMLElement>("#pdf-pages");
-  private readonly pageInput = document.querySelector<HTMLInputElement>("#pdf-page");
-  private readonly zoomInput = document.querySelector<HTMLSelectElement>("#pdf-zoom");
   private readonly status = document.querySelector<HTMLElement>("#pdf-status");
-  private readonly count = document.querySelector<HTMLElement>("#pdf-count");
+  private readonly indicator = document.querySelector<HTMLElement>("#pdf-position");
   private readonly pages = new Map<Element, PdfPage>();
   private readonly byNumber = new Map<number, PdfPage>();
   private readonly visible = new Set<PdfPage>();
@@ -92,7 +90,9 @@ export class PdfViewer {
   private requestedRevision = 0;
   private displayedRevision: number | null = null;
   private request: AbortController | null = null;
-  private zoom: number | "fit" = "fit";
+  private width = this.availableWidth();
+  private pixelRatio = this.renderRatio();
+  private indicatorTimer: number | undefined;
   private preview: OutboxEntry | null = null;
   private comments: readonly OutboxEntry[] = [];
   private dialog: CommentDialog | null = null;
@@ -108,34 +108,54 @@ export class PdfViewer {
 
   constructor() {
     GlobalWorkerOptions.workerSrc = "/_jamparty/pdf-worker.js";
-    this.pageInput?.addEventListener("change", () => {
-      const page = this.pageInput;
-      if (page === null) return;
-      const number = Math.max(1, Math.min(this.pages.size, Math.trunc(page.valueAsNumber) || 1));
-      this.byNumber.get(number)?.element.scrollIntoView({ block: "start", inline: "nearest" });
-      page.valueAsNumber = number;
-    });
-    this.zoomInput?.addEventListener("change", () => {
-      const value = this.zoomInput?.value;
-      const position = this.position();
-      this.readingRestore = undefined;
-      this.zoom = value === "fit" ? value : Number(value);
-      this.resize(position);
-    });
-    window.addEventListener("resize", () => {
-      this.readingRestore = undefined;
-      if (this.zoom === "fit") this.resize(this.position());
-    });
+    window.addEventListener("resize", this.updateViewport);
+    window.visualViewport?.addEventListener("resize", this.updateViewport);
+    this.watchResolution();
     window.addEventListener("scroll", () => {
       this.activeReadingRestore();
       this.scrollFrame ??= requestAnimationFrame(() => {
         this.scrollFrame = undefined;
-        if (this.pageInput !== null && document.activeElement !== this.pageInput) {
-          this.pageInput.valueAsNumber = this.position().page;
-        }
+        if (this.pages.size === 0) return;
+        this.updateIndicator();
+        this.indicator?.setAttribute("data-scrolling", "");
+        clearTimeout(this.indicatorTimer);
+        this.indicatorTimer = window.setTimeout(() => {
+          this.indicator?.removeAttribute("data-scrolling");
+        }, 1500);
       });
     }, { passive: true });
   }
+
+  private updateIndicator(): void {
+    if (this.indicator !== null) {
+      this.indicator.textContent = `${this.position().page} / ${this.pages.size}`;
+    }
+  }
+
+  private renderRatio(): number {
+    return devicePixelRatio * (window.visualViewport?.scale ?? 1);
+  }
+
+  private watchResolution(): void {
+    matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener("change", () => {
+      this.updateViewport();
+      this.watchResolution();
+    }, { once: true });
+  }
+
+  private readonly updateViewport = (): void => {
+    const width = this.availableWidth();
+    const ratio = this.renderRatio();
+    if (width !== this.width) {
+      const position = this.position();
+      this.width = width;
+      this.readingRestore = undefined;
+      this.resize(position);
+    } else if (ratio !== this.pixelRatio) {
+      for (const page of this.visible) page.rerender();
+    }
+    this.pixelRatio = ratio;
+  };
 
   requestRevision(revision: number): void {
     if (revision <= this.requestedRevision) return;
@@ -195,7 +215,7 @@ export class PdfViewer {
           const page = this.byNumber.get(number);
           if (page === undefined || this.document !== loading) return;
           const position = this.activeReadingRestore() ?? this.position();
-          page.resize(this.zoom, this.availableWidth());
+          page.resize(this.width);
           this.drawComments();
           page.render();
           this.restorePosition(position);
@@ -237,12 +257,12 @@ export class PdfViewer {
     const moved = (): boolean => window.scrollX !== x || window.scrollY !== y;
     const onScroll = (): void => { if (moved()) scroll.abort(); };
     window.addEventListener("scroll", onScroll, { passive: true });
-    const match = await findReadingPosition(page, this.scrollEdge(), pages,
+    const match = await findReadingPosition(page, READING_EDGE, pages,
       AbortSignal.any([signal, scroll.signal]))
       .catch(() => undefined)
       .finally(() => { window.removeEventListener("scroll", onScroll); });
     if (scroll.signal.aborted || moved()) return this.position();
-    return match === undefined ? position : { ...match, x: position.x };
+    return match ?? position;
   }
 
   private replacePages(pages: PdfPage[], position: ViewPosition): void {
@@ -263,16 +283,11 @@ export class PdfViewer {
     this.container?.replaceChildren(...this.pages.keys());
     this.resize(position);
     for (const page of this.pages.keys()) this.observer.observe(page);
-    if (this.count !== null) this.count.textContent = `of ${pages.length}`;
-    if (this.pageInput !== null) {
-      this.pageInput.max = String(pages.length);
-      this.pageInput.valueAsNumber = Math.min(position.page, pages.length);
-      this.pageInput.disabled = pages.length === 0;
-    }
+    this.updateIndicator();
   }
 
   private position(): ViewPosition {
-    const top = this.scrollEdge();
+    const top = READING_EDGE;
     // Page boxes are laid out from top to bottom with a fixed gap.
     let low = 1;
     let high = this.pages.size;
@@ -283,16 +298,11 @@ export class PdfViewer {
       else high = middle;
     }
     const rect = this.byNumber.get(low)?.element.getBoundingClientRect();
-    if (rect === undefined) return { page: 1, y: 0, x: 0 };
+    if (rect === undefined) return { page: 1, y: 0 };
     return {
       page: low,
       y: (top - rect.top) / rect.height,
-      x: Math.max(0, -rect.left / rect.width),
     };
-  }
-
-  private scrollEdge(): number {
-    return (document.querySelector("nav")?.getBoundingClientRect().bottom ?? 0) + 12;
   }
 
   private availableWidth(): number {
@@ -302,8 +312,7 @@ export class PdfViewer {
   private resize(position: ViewPosition): void {
     this.clearHover();
     this.gesture++;
-    const available = this.availableWidth();
-    for (const page of this.pages.values()) page.resize(this.zoom, available);
+    for (const page of this.pages.values()) page.resize(this.width);
     this.drawComments();
     for (const page of this.visible) page.render();
     this.restorePosition(position);
@@ -322,8 +331,7 @@ export class PdfViewer {
     const rect = this.byNumber.get(Math.min(position.page, this.pages.size))
       ?.element.getBoundingClientRect();
     if (rect !== undefined) {
-      window.scrollBy(position.x === 0 ? -window.scrollX : rect.left + position.x * rect.width,
-        rect.top + position.y * rect.height - this.scrollEdge() - (position.offset ?? 0));
+      window.scrollBy(0, rect.top + position.y * rect.height - READING_EDGE - (position.offset ?? 0));
       if (position.offset !== undefined) {
         // Unmeasured pages can resize above the matched line after the swap.
         // Keep targeting that line until the reader moves.
