@@ -250,6 +250,9 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
             ("Hello alice", True),
         ]
         assert answers(bob_page) == [("Everyone: done.", False), ("Yes, it is.", True)]
+        reply = overlay(bob_page, ".agent-placement").filter(has_text="Yes, it is.")
+        expect(reply.locator(".agent-anchor-marker")).to_be_visible()
+        expect(reply.locator(".agent-anchor-line")).to_be_visible()
         to_you = alice_page.locator("#jamparty .agent-to").first
         expect(to_you).to_have_text("to you")
         expect(to_you).to_have_css("color", "rgb(123, 50, 33)")
@@ -735,9 +738,36 @@ def test_show_html_place_on_another_page(tmp_path: Path, page: Page) -> None:
         assert intro_box is not None and answer_box is not None
         assert abs(intro_box["y"] - answer_box["y"]) < 10
         assert answer_box["x"] >= intro_box["x"] + intro_box["width"]
+        marker = overlay(page, ".agent-anchor-marker")
+        leader = overlay(page, ".agent-anchor-line")
+        expect(marker).to_be_visible()
+        expect(leader).to_be_visible()
+        expect(marker).to_have_attribute("data-side", "right")
+        assert (
+            marker.evaluate(
+                "(node) => getComputedStyle(node, '::before').backgroundColor"
+            )
+            == "rgb(40, 104, 182)"
+        )
+        expect(marker).to_have_css("background-color", "rgba(0, 0, 0, 0)")
         answer.hover()
-        expect(overlay(page, "#message-highlight")).to_be_visible()
+        expect(marker).to_have_css("background-color", "rgba(47, 128, 237, 0.08)")
+        page.mouse.move(0, 0)
+        expect(marker).to_have_css("background-color", "rgba(0, 0, 0, 0)")
+        answer.focus()
+        expect(marker).to_have_css("background-color", "rgba(47, 128, 237, 0.08)")
+        page.set_viewport_size({"width": 390, "height": 844})
+        expect(marker).to_have_attribute("data-side", "below")
+        intro_box = page.locator("#intro").bounding_box()
+        answer_box = answer.bounding_box()
+        assert intro_box is not None and answer_box is not None
+        assert answer_box["y"] >= intro_box["y"] + intro_box["height"] + 12
+        assert "system-ui" in answer.evaluate(
+            "(node) => getComputedStyle(node).fontFamily"
+        )
         answer.get_by_role("button", name="Dismiss agent message").click()
+        expect(marker).to_have_count(0)
+        expect(leader).to_have_count(0)
         _ = page.reload()
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         expect(overlay(page, ".agent-message")).to_have_count(0)
@@ -791,3 +821,180 @@ def test_a_stale_show_does_not_reveal_on_another_page(
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         expect(page.locator("#intro")).not_to_be_in_viewport()
         expect(overlay(page, "#message-highlight")).to_be_hidden()
+
+
+def test_nearby_answers_keep_separate_leaders(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    site = tmp_path / "site"
+    site.mkdir()
+    _ = (site / "index.html").write_text(
+        '<main style="margin: 100px auto; width: 350px">'
+        '<div id="first">First statement</div>'
+        '<div id="second">Second statement</div></main>'
+    )
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        for target in ("second", "first"):
+            _ = jamparty(
+                tmp_path,
+                "send",
+                "--at",
+                f"#{target}",
+                "--page",
+                "/",
+                f"About {target}.",
+            )
+
+        cards = []
+        for target in ("first", "second"):
+            group = overlay(page, ".agent-placement").filter(
+                has_text=f"About {target}."
+            )
+            marker = group.locator(".agent-anchor-marker")
+            leader = group.locator(".agent-anchor-line")
+            expect(marker).to_have_attribute("data-side", "right")
+            expect(leader).to_be_visible()
+            assert marker.bounding_box() == page.locator(f"#{target}").bounding_box()
+            card = group.locator(".agent-message").bounding_box()
+            assert card is not None
+            cards.append(card)
+        first, second = cards
+        assert first["y"] + first["height"] <= second["y"]
+
+
+def test_unplaceable_question_can_be_answered(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    site = tmp_path / "site"
+    site.mkdir()
+    _ = (site / "index.html").write_text(
+        '<main id="full" style="position:fixed; inset:0">Whole viewport</main>'
+    )
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path, "send", "--at", "#full", "--page", "/", "A whole-page reply."
+        )
+        general = overlay(page, "#agent-general .agent-message")
+        expect(general.filter(has_text="A whole-page reply.")).to_be_visible()
+        _ = jamparty(
+            tmp_path,
+            "send",
+            "--at",
+            "#full",
+            "--page",
+            "/",
+            "--choice",
+            "Keep it",
+            "--choice",
+            "Change it",
+            "Keep this layout?",
+        )
+        question = general.filter(has_text="Keep this layout?")
+        expect(question.get_by_role("link", name="Show")).to_be_visible()
+        question.get_by_role("button", name="Keep it").click()
+        expect(question).to_have_count(0)
+        [record] = recv_all(tmp_path)
+        assert record["choice"] == "Keep it"
+        assert record["comment"] == "Keep it"
+
+
+def test_reply_marker_follows_parent_after_one_scroll(
+    tmp_path: Path, page: Page
+) -> None:
+    without_answer_timeout(tmp_path)
+    site = tmp_path / "site"
+    site.mkdir()
+    _ = (site / "index.html").write_text(
+        '<main style="padding: 280px 0 1400px">'
+        '<div id="target" style="width: 220px">Target</div></main>'
+    )
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(tmp_path, "send", "--at", "#target", "--page", "/", "Parent note.")
+        parent = overlay(page, "#agent-anchored .agent-message").filter(
+            has_text="Parent note."
+        )
+        parent.click(button="right")
+        textarea = overlay(page, "textarea")
+        textarea.fill("Comment on parent")
+        textarea.press("Enter")
+        expect(overlay(page, "#badge")).to_have_text("1 queued")
+        [record] = recv_all(tmp_path)
+        _ = jamparty(tmp_path, "send", "--anchor", str(record["id"]), "Child reply.")
+        group = overlay(page, ".agent-placement").filter(has_text="Child reply.")
+        marker = group.locator(".agent-anchor-marker")
+        expect(marker).to_have_attribute("data-side", "right")
+        expect(group.locator(".agent-anchor-line")).to_be_visible()
+        before = parent.bounding_box()
+        assert before is not None
+        after = cast(
+            dict[str, object],
+            page.evaluate(
+                """() => {
+                const shadow = document.querySelector("#jamparty").shadowRoot;
+                window.scrollTo(0, 120);
+                // Verify the first placement pass, even if another observer
+                // later schedules a second one.
+                window.dispatchEvent(new Event("scroll"));
+                return new Promise(resolve => requestAnimationFrame(() => {
+                    const parent = [...shadow.querySelectorAll(".agent-message")]
+                        .find(node => node.textContent.includes("Parent note."));
+                    const child = [...shadow.querySelectorAll(".agent-placement")]
+                        .find(node => node.textContent.includes("Child reply."));
+                    const marker = child.querySelector(".agent-anchor-marker");
+                    const bounds = parent.getBoundingClientRect();
+                    const leader = child.querySelector(".agent-anchor-line");
+                    resolve({
+                        parent: bounds.toJSON(),
+                        marker: marker.getBoundingClientRect().toJSON(),
+                        leaderAttached: parseFloat(leader.style.left) === bounds.right + 3
+                            && parseFloat(leader.style.top) === bounds.top + 16,
+                    });
+                }));
+            }"""
+            ),
+        )
+        assert after["parent"] == after["marker"]
+        assert after["leaderAttached"] is True
+        assert cast(dict[str, float], after["parent"])["y"] < before["y"]
+
+
+def test_clipped_answer_keeps_internal_scroll(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    site = tmp_path / "site"
+    site.mkdir()
+    _ = (site / "index.html").write_text(
+        '<main style="padding: 180px 0 1400px">'
+        '<div id="target" style="width: 220px">Target</div></main>'
+    )
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        message = "\n\n".join(
+            f"Paragraph {index} for the long answer." for index in range(100)
+        )
+        _ = jamparty(tmp_path, "send", "--at", "#target", "--page", "/", message)
+        answer = overlay(page, "#agent-anchored .agent-message")
+        expect(answer).to_be_visible()
+        _ = answer.evaluate("(node) => { node.scrollTop = 200; }")
+        _ = page.evaluate("window.scrollTo(0, 80)")
+        expect(overlay(page, ".agent-anchor-marker")).to_have_css("top", "108px")
+        assert answer.evaluate("(node) => node.scrollTop") == 200
+        page.set_viewport_size({"width": 540, "height": 620})
+        expect(answer).not_to_have_css("width", "340px")
+        assert answer.evaluate("(node) => node.scrollTop") == 200

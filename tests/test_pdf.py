@@ -1299,6 +1299,8 @@ def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) ->
             "Live second-page note.",
         )
         answer = overlay(page, "#agent-anchored .agent-message")
+        link_marker = overlay(page, ".agent-anchor-marker")
+        leader = overlay(page, ".agent-anchor-line")
         expect(answer).to_contain_text("Live second-page note.")
         sections.click()
         expect(panel).to_be_visible()
@@ -1313,7 +1315,9 @@ def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) ->
         expect(marker).to_be_in_viewport()
         expect(indicator).to_be_visible()
 
-        def check_position() -> None:
+        def check_position(*, side: str = "right", outer_margin: bool = False) -> None:
+            expect(link_marker).to_have_attribute("data-side", side)
+            expect(leader).to_be_visible()
             sheet_box = sheet.bounding_box()
             mark_box = marker.bounding_box()
             answer_box = answer.bounding_box()
@@ -1326,10 +1330,20 @@ def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) ->
             assert mark_box["x"] - sheet_box["x"] == pytest.approx(72 * scale, abs=1)
             assert mark_box["y"] - sheet_box["y"] == pytest.approx(120 * scale, abs=1)
             assert mark_box["width"] == pytest.approx(278 * scale, abs=1)
-            assert answer_box["y"] == pytest.approx(max(8, mark_box["y"]), abs=2)
-            assert answer_box["x"] >= mark_box["x"] + mark_box["width"]
+            assert link_marker.bounding_box() == pytest.approx(mark_box, abs=0.05)
+            assert answer_box["x"] >= 8
+            if side == "right":
+                assert answer_box["y"] == pytest.approx(max(8, mark_box["y"]), abs=2)
+                assert answer_box["x"] >= mark_box["x"] + mark_box["width"] + 12
+            else:
+                assert answer_box["y"] >= mark_box["y"] + mark_box["height"] + 12
+            if outer_margin:
+                assert answer_box["x"] >= sheet_box["x"] + sheet_box["width"] + 24
 
         check_position()
+        page.set_viewport_size({"width": 1920, "height": 1080})
+        expect(answer).to_have_css("width", "340px")
+        check_position(outer_margin=True)
         page.set_viewport_size({"width": 848, "height": 720})
         expect(sheet).to_have_css("width", "816px")
         expect(sheet).to_have_attribute("data-rendered", "true")
@@ -1344,14 +1358,25 @@ def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) ->
                 Math.abs(mark.getBoundingClientRect().top - answer.getBoundingClientRect().top) < 2;
         }""")
         check_position()
+        _ = answer.evaluate("(node) => node.blur()")
+        page.mouse.move(0, 0)
+        expect(link_marker).to_have_css("background-color", "rgba(0, 0, 0, 0)")
         answer.hover()
-        expect(overlay(page, "#message-highlight")).to_be_visible()
+        expect(link_marker).to_have_css("background-color", "rgba(47, 128, 237, 0.08)")
+        page.mouse.move(0, 0)
+        page.set_viewport_size({"width": 390, "height": 844})
+        expect(sheet).to_have_css("width", "358px")
+        expect(marker).to_be_in_viewport()
+        check_position(side="below")
+        assert "system-ui" in answer.evaluate(
+            "(node) => getComputedStyle(node).fontFamily"
+        )
 
         new_pdf = site / "paper.tmp"
         _ = new_pdf.write_bytes(fixture_pdf("Rebuilt second page"))
         _ = new_pdf.replace(path)
         expect(sheet.locator(".textLayer")).to_have_text("Rebuilt second page")
-        check_position()
+        check_position(side="below")
 
         _ = new_pdf.write_bytes(blank_pdf(1))
         _ = new_pdf.replace(path)
@@ -1359,3 +1384,5 @@ def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) ->
         expect(general).to_contain_text("Live second-page note.")
         expect(general).to_contain_text("Target unavailable")
         expect(general.get_by_role("link", name="Show")).to_have_count(0)
+        expect(link_marker).to_have_count(0)
+        expect(leader).to_have_count(0)
