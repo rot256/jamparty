@@ -224,14 +224,26 @@ text. Rows:
 - `jamparty send --anchor <comment id> "…"` without `--to` addresses the
   comment's author by default; `--to all` (or no anchor and no `--to`)
   sends it to everyone.
-- Live answers appear as bubbles. Answers missed while the page was closed
-  or disconnected appear in the comment list without a popup. Replies to
-  your comments appear under their comment. Other replies appear below the
+- Live answers appear as bubbles. Answers already present when a page loads,
+  or replayed after disconnect, appear quietly in the comment list. Replies
+  to your comments appear under their comment. Other answers appear below the
   comments, newest first. The joiner keeps up to 100 recent answers.
+- `--at <selector> --page <path>` and `--at-pdf <path>#page=<number>&box=<coords>`
+  send to everyone by default. Live answers open beside the target when it is
+  available on the current page. On another page, they open in the general
+  answer corner with a **Show** link.
+- Place answers in the comment list have a **Show** link that scrolls to the
+  target, navigating within the share if needed. Show follows same-origin
+  redirects, including a served directory redirect from `/docs` to `/docs/`.
+  The answer stays in the list after navigation. Hovering over a place answer
+  or focusing its list link outlines a target on the current page. PDF boxes
+  follow their page through resizing, browser zoom, scrolling and rebuilds.
+  If the target disappears, the live bubble moves to the general answer
+  corner and says “Target unavailable.”
 - Dismissing an ordinary reply bubble keeps the reply in the list.
-  Multiple-choice questions only appear as bubbles. A dismissed question
-  stays hidden for the tab session. Open, undismissed questions pop up on
-  load or reconnect.
+  Multiple-choice questions appear as bubbles. A dismissed question stays
+  hidden for the tab session. Open, undismissed questions pop up on load or
+  reconnect.
 - The recipient's answer bubble shows a small `to you` line above the text
   (in the answer-meta style, `#7b3221`, 11 px, bold).
 - The `jamparty agent` guides describe `--to`.
