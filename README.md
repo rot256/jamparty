@@ -1,4 +1,9 @@
-# jamparty
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/rot256/jamparty/main/assets/brand/jamparty-wordmark-dark.svg">
+    <img src="assets/brand/jamparty-wordmark.svg" alt="jamparty" width="320">
+  </picture>
+</h1>
 
 Share a site you are working on; people comment on it from their own
 browser and the comments reach your agent. Peer to peer over
