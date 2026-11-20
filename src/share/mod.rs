@@ -9,6 +9,7 @@ mod files;
 mod http;
 pub(crate) mod hub;
 mod inject;
+mod listing;
 mod live;
 pub(crate) mod proxy;
 mod resources;
