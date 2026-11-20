@@ -71,10 +71,13 @@ nav input, nav select {
   pointer-events: none;
 }
 
-.pdf-comment, .pdf-drag, .pdf-draft, .pdf-block-hover {
+.pdf-comment-anchor, .pdf-drag, .pdf-draft, .pdf-block-hover {
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;
+}
+
+.pdf-comment, .pdf-drag, .pdf-draft, .pdf-block-hover {
   border: 2px solid #2f80ed;
   background: #2f80ed15;
 }

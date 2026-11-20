@@ -1249,6 +1249,8 @@ var CommentDialog = class {
   ui;
   outbox;
   pending;
+  onOpen = () => void 0;
+  onClose = () => void 0;
   files = [];
   missingFiles = 0;
   position = { x: 0, y: 0 };
@@ -1437,7 +1439,9 @@ var CommentDialog = class {
     ui.reloadNotice.hidden = !this.pendingReload;
     ui.textarea.value = "";
     this.position = { x, y };
+    window.getSelection()?.removeAllRanges();
     ui.dialog.showModal();
+    this.onOpen(captured);
     this.place();
     this.updateHighlight();
     window.addEventListener("resize", this.updateHighlight);
@@ -1449,6 +1453,8 @@ var CommentDialog = class {
     const ui = this.ui;
     ui.textarea.blur();
     if (ui.dialog.open) ui.dialog.close();
+    window.getSelection()?.removeAllRanges();
+    this.onClose();
     this.stopTracking();
     ui.highlight.style.display = "none";
     this.captured = null;
@@ -1670,6 +1676,9 @@ var CommentList = class {
   }
   ui;
   outbox;
+  hovered = null;
+  focused = null;
+  onPreview = () => void 0;
   refreshTimer;
   /** Called when the list opens (the control panel closes then). */
   onOpen = () => void 0;
@@ -1694,6 +1703,8 @@ var CommentList = class {
   close() {
     if (!this.isOpen) return;
     this.ui.list.hidden = true;
+    this.hovered = this.focused = null;
+    this.onPreview(null);
     this.ui.bar.hidden = false;
     this.ui.pill.setAttribute("aria-expanded", "false");
     if (this.refreshTimer !== void 0) clearInterval(this.refreshTimer);
@@ -1714,10 +1725,38 @@ var CommentList = class {
     const { outboxList } = this.ui;
     const now = Date.now();
     const entries = [...this.outbox.entries].sort((first, second) => second.at - first.at);
+    const previousFocus = this.focused;
+    const root = outboxList.getRootNode();
+    const active = root instanceof Document || root instanceof ShadowRoot ? root.activeElement : null;
+    const againFocused = active instanceof HTMLElement && active.classList.contains("again") && outboxList.contains(active);
+    this.hovered = this.focused = null;
+    this.onPreview(null);
     outboxList.replaceChildren(...entries.map((entry) => {
       const item = document.createElement("li");
       const shown = this.outbox.shown(entry);
       item.dataset.state = shown;
+      if (entry.draft.pdf !== void 0) {
+        item.tabIndex = 0;
+        item.addEventListener("pointerenter", () => {
+          this.hovered = entry;
+          this.onPreview(entry);
+        });
+        item.addEventListener("pointerleave", () => {
+          this.hovered = null;
+          this.onPreview(this.focused?.draft.pdf === void 0 ? null : this.focused);
+        });
+      } else {
+        item.tabIndex = -1;
+      }
+      item.addEventListener("focusin", () => {
+        this.focused = entry;
+        if (entry.draft.pdf !== void 0) this.onPreview(entry);
+      });
+      item.addEventListener("focusout", (event) => {
+        if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
+        this.focused = null;
+        this.onPreview(this.hovered);
+      });
       const row = document.createElement("div");
       row.className = "row";
       const where = document.createElement("span");
@@ -1757,6 +1796,13 @@ var CommentList = class {
       }
       return item;
     }));
+    if (previousFocus !== null) {
+      const index = entries.indexOf(previousFocus);
+      const item = outboxList.children.item(index);
+      const again = againFocused ? item?.querySelector(".again") : null;
+      if (again instanceof HTMLElement) again.focus({ preventScroll: true });
+      else if (item instanceof HTMLElement) item.focus({ preventScroll: true });
+    }
   }
 };
 
@@ -3304,6 +3350,9 @@ function install(pdf) {
   if (editMode !== null) editMode.onPagePress = () => {
     panel.close();
     list.close();
+  };
+  list.onPreview = (entry) => {
+    pdf?.previewComment(entry);
   };
   list.onOpen = () => {
     panel.close();

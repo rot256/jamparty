@@ -27,6 +27,8 @@ function labelFor(kind: DraftKind): string {
 }
 
 export class CommentDialog {
+  onOpen: (captured: Captured) => void = () => undefined;
+  onClose: () => void = () => undefined;
   private files: File[] = [];
   private missingFiles = 0;
   private position = { x: 0, y: 0 };
@@ -295,7 +297,9 @@ export class CommentDialog {
     ui.reloadNotice.hidden = !this.pendingReload;
     ui.textarea.value = "";
     this.position = { x, y };
+    window.getSelection()?.removeAllRanges();
     ui.dialog.showModal();
+    this.onOpen(captured);
     this.place();
     this.updateHighlight();
     window.addEventListener("resize", this.updateHighlight);
@@ -310,6 +314,8 @@ export class CommentDialog {
     // (like `/`) would then count as typing.
     ui.textarea.blur();
     if (ui.dialog.open) ui.dialog.close();
+    window.getSelection()?.removeAllRanges();
+    this.onClose();
     this.stopTracking();
     ui.highlight.style.display = "none";
     this.captured = null;

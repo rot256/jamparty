@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
 
+import pytest
 from playwright.sync_api import (
     Browser,
     Page,
@@ -93,6 +94,7 @@ def test_connection_indicator_and_unsent_comments(tmp_path: Path, page: Page) ->
         share(tmp_path, "serve", str(SITE)) as shared,
         join(tmp_path, shared) as joined,
     ):
+        page.clock.install()
         _ = page.goto(joined.url)
         indicator = page.locator("#jamparty #connection")
         expect(indicator).to_have_attribute("data-state", "green")
@@ -106,6 +108,17 @@ def test_connection_indicator_and_unsent_comments(tmp_path: Path, page: Page) ->
         entry = page.locator("#jamparty #outbox-list li")
         expect(entry).to_have_attribute("data-state", "unsent")
         expect(entry.locator("button")).to_have_text("send again")
+
+        # The list's periodic refresh keeps keyboard focus on the button.
+        page.locator("#jamparty #pill").click()
+        again = entry.locator("button.again")
+        again.focus()
+        expect(again).to_be_focused()
+        page.clock.run_for(31_000)
+        expect(again).to_be_focused()
+        # Sending again replaces the button; focus falls back to the row.
+        again.press("Enter")
+        expect(entry).to_be_focused()
 
 
 FILL_OUTBOX = """([count, key]) => {
@@ -677,3 +690,37 @@ def test_file_attachments_survive_a_reload_after_sending(
         fetched = tmp_path / "fetched"
         _ = jamparty(tmp_path, "fetch", resource, "-o", str(fetched))
         assert fetched.read_bytes() == data
+
+
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_html_comment_clears_highlight_and_selection(
+    tmp_path: Path, page: Page, selected: bool, cancelled: bool
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        intro = page.locator("#intro")
+        if selected:
+            _ = intro.evaluate("""node => {
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                window.getSelection().addRange(range);
+            }""")
+        intro.click(button="right")
+        highlight = overlay(page, "#highlight")
+        expect(highlight).to_be_visible()
+        preview = overlay(page, "#selection-text")
+        if selected:
+            expect(preview).to_contain_text("This deliberately long paragraph")
+        else:
+            expect(overlay(page, "#selection-preview")).to_be_hidden()
+        field = overlay(page, "textarea")
+        field.fill("On this paragraph")
+        expect(highlight).to_be_visible()
+        field.press("Escape" if cancelled else "Enter")
+        expect(field).to_be_hidden()
+        expect(highlight).to_be_hidden()
+        assert page.evaluate("window.getSelection().rangeCount") == 0

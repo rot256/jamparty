@@ -57,12 +57,26 @@ def make_pdf(objects: list[bytes], padding: int = 0) -> bytes:
     return bytes(pdf)
 
 
+def expect_selection_cleared(page: Page) -> None:
+    expect(
+        page.locator(".pdf-draft, .pdf-drag, .pdf-block-hover, .pdf-comment")
+    ).to_have_count(0)
+    assert page.evaluate("window.getSelection().rangeCount") == 0
+
+
 def send_comment(page: Page, message: str) -> None:
     field = overlay(page, "textarea")
     expect(field).to_be_focused()
+    expect(page.locator(".pdf-draft")).to_have_count(1)
+    expect(overlay(page, "#highlight")).to_be_hidden()
     field.fill(message)
+    expect(page.locator(".pdf-draft")).to_have_count(1)
     field.press("Enter")
     expect(overlay(page, "#jamparty-dialog")).not_to_be_visible()
+    expect_selection_cleared(page)
+    expect(overlay(page, "#outbox-list li").first).to_have_attribute(
+        "data-state", "queued"
+    )
 
 
 def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
@@ -103,7 +117,17 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         page.mouse.up()
         send_comment(page, "Move this figure.")
         overlay(page, "#edit").click()
+        expect_selection_cleared(page)
+        overlay(page, "#pill").click()
+        row = overlay(page, "#outbox-list li")
+        row.hover()
         expect(sheet.locator(".pdf-comment")).to_have_count(1)
+        overlay(page, "#collapse").hover()
+        expect_selection_cleared(page)
+        row.focus()
+        expect(sheet.locator(".pdf-comment")).to_have_count(1)
+        overlay(page, "#collapse").click()
+        expect_selection_cleared(page)
         [box_record] = recv_all(tmp_path)
         assert box_record["page"] == url
         assert box_record["pdf"] == {
@@ -134,7 +158,7 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         assert 120 < bounds["y0"] < 144
         assert bounds["x1"] > 180
         assert 143 < bounds["y1"] < 156
-        expect(sheet.locator(".pdf-comment")).to_have_count(2)
+        expect(sheet.locator(".pdf-comment")).to_have_count(0)
         _ = jamparty(tmp_path, "send", "--anchor", str(box_record["id"]), "Moved.")
         expect(overlay(page, ".agent-message.has-anchor")).to_contain_text("Moved.")
 
@@ -147,7 +171,7 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         expect(jump).to_have_value("2")
         expect(page.locator("#pdf-zoom")).to_have_value("1")
         assert float(page.evaluate("window.scrollY")) == pytest.approx(scroll, abs=2)
-        expect(sheet.locator(".pdf-comment")).to_have_count(2)
+        expect(sheet.locator(".pdf-comment")).to_have_count(0)
         rebuilt = sheet.bounding_box()
         assert rebuilt is not None
         overlay(page, "#edit").click()
@@ -157,6 +181,102 @@ def test_pdf_comments_and_rebuild(tmp_path: Path, page: Page) -> None:
         send_comment(page, "Review the rebuilt block.")
         [block_record] = recv_all(tmp_path)
         assert block_record["selectedText"] == "Rebuilt page"
+
+        overlay(page, "#edit").click()
+        # Keep the draft marker through a document swap, zoom and scroll.
+        _ = sheet.locator(".textLayer span").evaluate("""node => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          window.getSelection().addRange(range);
+        }""")
+        page.keyboard.press("/")
+        field = overlay(page, "textarea")
+        field.fill("Keep this draft")
+        expect(sheet.locator(".pdf-draft")).to_have_count(1)
+        _ = updated.write_bytes(fixture_pdf("Third version"))
+        _ = updated.replace(pdf)
+        expect(sheet.locator(".textLayer span")).to_have_text("Third version")
+        expect(page.locator(".pdf-draft")).to_have_count(1)
+        _ = page.locator("#pdf-zoom").evaluate("""select => {
+          select.value = "0.75";
+          select.dispatchEvent(new Event("change"));
+        }""")
+        _ = page.evaluate("window.scrollBy(0, 75)")
+        expect(sheet.locator(".pdf-draft")).to_have_count(1)
+        expect(field).to_have_value("Keep this draft")
+        field.press("Escape")
+        expect_selection_cleared(page)
+        for number in ("1", "2"):
+            jump.fill(number)
+            jump.press("Tab")
+            expect(page.locator(f"#jamparty-pdf-page-{number}")).to_have_attribute(
+                "data-rendered", "true"
+            )
+            # Typing in the page field moves the selection there, so only
+            # the viewer's own marks are checked.
+            expect(
+                page.locator(".pdf-comment, .pdf-draft, .pdf-drag, .pdf-block-hover")
+            ).to_have_count(0)
+        expect(page.locator(".pdf-comment-anchor")).to_have_count(3)
+        overlay(page, "#pill").click()
+        rows = overlay(page, "#outbox-list li")
+        rows.nth(0).hover()
+        expect(page.locator(".pdf-comment")).to_have_count(1)
+        hovered = page.locator(".pdf-comment").get_attribute("id")
+        # Focus moving to another row wins over the resting pointer.
+        rows.nth(1).focus()
+        expect(page.locator(".pdf-comment")).to_have_count(1)
+        assert page.locator(".pdf-comment").get_attribute("id") != hovered
+        overlay(page, "#collapse").hover()
+        overlay(page, "#collapse").focus()
+        expect(page.locator(".pdf-comment")).to_have_count(0)
+
+
+@pytest.mark.parametrize("tool", ["slash", "contextmenu", "block", "box"])
+def test_pdf_cancel_clears_draft(tmp_path: Path, page: Page, tool: str) -> None:
+    pdf = tmp_path / "paper.pdf"
+    _ = pdf.write_bytes(fixture_pdf("Second page"))
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        sheet = page.locator("#jamparty-pdf-page-1")
+        text = sheet.locator(".textLayer span")
+        expect(text).to_have_text("First page")
+        box = text.bounding_box()
+        assert box is not None
+        x, y = box["x"] + 5, box["y"] + box["height"] / 2
+        if tool in ("slash", "contextmenu"):
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x + box["width"] - 10, y, steps=10)
+            page.mouse.up()
+            assert page.evaluate("window.getSelection().toString().length") > 0
+            if tool == "slash":
+                page.keyboard.press("/")
+            else:
+                page.mouse.click(x + 10, y, button="right")
+        else:
+            overlay(page, "#edit").click()
+            page.mouse.move(x, y)
+            expect(sheet.locator(".pdf-block-hover")).to_be_visible()
+            if tool == "block":
+                page.mouse.click(x, y)
+            else:
+                page.mouse.down()
+                page.mouse.move(x + 40, y + 20, steps=5)
+                page.mouse.up()
+
+        field = overlay(page, "textarea")
+        expect(field).to_be_focused()
+        field.fill("Draft")
+        expect(sheet.locator(".pdf-draft")).to_be_visible()
+        expect(page.locator(".pdf-draft")).to_have_count(1)
+        expect(overlay(page, "#highlight")).to_be_hidden()
+        field.press("Escape")
+        expect(field).to_be_hidden()
+        expect_selection_cleared(page)
 
 
 def test_rotated_pdf_anchors(tmp_path: Path, page: Page) -> None:
