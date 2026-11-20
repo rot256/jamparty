@@ -12,6 +12,7 @@ import {
   type PageSettings,
   type SettingsChange,
   type Switch,
+  type Theme,
 } from "./generated/api";
 import { isRecord } from "./json";
 
@@ -20,6 +21,10 @@ const MAX_AGE_SECS = 365 * 24 * 60 * 60;
 
 function isSwitch(value: unknown): value is Switch {
   return value === "on" || value === "off";
+}
+
+export function isTheme(value: unknown): value is Theme {
+  return value === "auto" || value === "dark" || value === "light";
 }
 
 function isCorner(value: unknown): value is Corner {
@@ -31,7 +36,7 @@ function isCorner(value: unknown): value is Corner {
 function parse(value: unknown): SettingsChange {
   if (!isRecord(value)) return {};
   const change: SettingsChange = {};
-  const { name, keys, commentMode, showCursor, corner, answerTimeout } = value;
+  const { name, keys, commentMode, showCursor, corner, theme, answerTimeout } = value;
   if (typeof name === "string") change.name = name;
   if (
     isRecord(keys) && typeof keys.commentMode === "string" &&
@@ -44,6 +49,7 @@ function parse(value: unknown): SettingsChange {
   if (isSwitch(showCursor)) change.showCursor = showCursor;
   if (typeof answerTimeout === "number" && Number.isInteger(answerTimeout) &&
       answerTimeout >= 0 && answerTimeout <= MAX_ANSWER_TIMEOUT) change.answerTimeout = answerTimeout;
+  if (isTheme(theme)) change.theme = theme;
   if (isCorner(corner)) change.corner = corner;
   return change;
 }
@@ -113,6 +119,10 @@ export function missing(change: SettingsChange, settings: PageSettings): Setting
   }
   if (change.corner !== undefined && change.corner !== settings.corner) {
     needed.corner = change.corner;
+    any = true;
+  }
+  if (change.theme !== undefined && change.theme !== settings.theme) {
+    needed.theme = change.theme;
     any = true;
   }
   return any ? needed : null;

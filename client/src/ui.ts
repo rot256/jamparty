@@ -63,11 +63,19 @@ const MARKUP = `
     </div>
     <div class="control" id="corner-row">
       <span class="label" id="corner-label">Corner</span>
-      <span id="corners" role="group" aria-labelledby="corner-label">
-        <button class="corner" type="button" data-corner="top-left" aria-label="Top left" aria-pressed="false">↖</button>
-        <button class="corner" type="button" data-corner="top-right" aria-label="Top right" aria-pressed="false">↗</button>
-        <button class="corner" type="button" data-corner="bottom-left" aria-label="Bottom left" aria-pressed="false">↙</button>
-        <button class="corner" type="button" data-corner="bottom-right" aria-label="Bottom right" aria-pressed="true">↘</button>
+      <span id="corners" class="segments" role="group" aria-labelledby="corner-label">
+        <button class="corner segment" type="button" data-corner="top-left" aria-label="Top left" aria-pressed="false">↖</button>
+        <button class="corner segment" type="button" data-corner="top-right" aria-label="Top right" aria-pressed="false">↗</button>
+        <button class="corner segment" type="button" data-corner="bottom-left" aria-label="Bottom left" aria-pressed="false">↙</button>
+        <button class="corner segment" type="button" data-corner="bottom-right" aria-label="Bottom right" aria-pressed="true">↘</button>
+      </span>
+    </div>
+    <div class="control">
+      <span class="label" id="theme-label">Theme</span>
+      <span class="segments" role="group" aria-labelledby="theme-label">
+        <button class="segment" type="button" data-theme="auto" aria-pressed="true">Auto</button>
+        <button class="segment" type="button" data-theme="dark" aria-pressed="false">Dark</button>
+        <button class="segment" type="button" data-theme="light" aria-pressed="false">Light</button>
       </span>
     </div>
     <div id="name-row">

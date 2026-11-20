@@ -28,6 +28,17 @@ pub(crate) enum Corner {
     TopLeft,
 }
 
+/// The overlay colour scheme.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) enum Theme {
+    #[default]
+    Auto,
+    Dark,
+    Light,
+}
+
 const MAX_KEY: usize = 20;
 /// Largest supported answer timeout, in seconds.
 pub(crate) const MAX_ANSWER_TIMEOUT: u16 = 3600;
@@ -216,6 +227,8 @@ pub(crate) struct Settings {
     #[serde(default)]
     pub(crate) corner: Corner,
     #[serde(default)]
+    pub(crate) theme: Theme,
+    #[serde(default)]
     pub(crate) answer_timeout: AnswerTimeout,
 }
 
@@ -237,6 +250,7 @@ impl Default for Settings {
             comment_mode: comment_mode_default(),
             show_cursor: show_cursor_default(),
             corner: Corner::default(),
+            theme: Theme::default(),
             answer_timeout: AnswerTimeout::default(),
         }
     }
@@ -299,6 +313,9 @@ pub(crate) struct SettingsChange {
     pub(crate) corner: Option<Corner>,
     #[serde(default)]
     #[cfg_attr(test, ts(optional))]
+    pub(crate) theme: Option<Theme>,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) answer_timeout: Option<AnswerTimeout>,
 }
 
@@ -312,6 +329,7 @@ impl Settings {
             comment_mode,
             show_cursor,
             corner,
+            theme,
             answer_timeout,
         } = change;
         Self {
@@ -320,6 +338,7 @@ impl Settings {
             comment_mode: comment_mode.unwrap_or(self.comment_mode),
             show_cursor: show_cursor.unwrap_or(self.show_cursor),
             corner: corner.unwrap_or(self.corner),
+            theme: theme.unwrap_or(self.theme),
             answer_timeout: answer_timeout.unwrap_or(self.answer_timeout),
         }
     }
@@ -338,7 +357,7 @@ mod tests {
         assert_eq!(defaults.corner, Corner::BottomRight);
         assert_eq!(
             serde_json::to_string(&defaults).unwrap(),
-            r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"d"},"commentMode":"on","showCursor":"off","corner":"bottom-right","answerTimeout":30}"#
+            r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"d"},"commentMode":"on","showCursor":"off","corner":"bottom-right","theme":"auto","answerTimeout":30}"#
         );
         // Each corner, and only those.
         for (text, corner) in [
@@ -353,7 +372,7 @@ mod tests {
         }
         assert!(serde_json::from_str::<SettingsChange>(r#"{"corner":"middle"}"#).is_err());
         // A newer jamparty's fields are ignored.
-        let newer: Settings = serde_json::from_str(r#"{"name":"alice","theme":"dark"}"#).unwrap();
+        let newer: Settings = serde_json::from_str(r#"{"name":"alice","future":true}"#).unwrap();
         assert_eq!(newer.name.unwrap().as_str(), "alice");
     }
 

@@ -1,3 +1,4 @@
+import { isTheme } from "./remembered";
 // The control panel behind the gear: the comment mode and cursor
 // switches with their keys (rebindable), the name, and who is here.
 
@@ -65,6 +66,7 @@ export function colourOf(person: Person): string {
 }
 
 export class Panel {
+  private readonly themes: NodeListOf<HTMLButtonElement>;
   private settings: PageSettings | null = null;
   private listening: Action | null = null;
   /** Called by the clear button or its binding. */
@@ -87,6 +89,13 @@ export class Panel {
     ui.gear.addEventListener("click", () => { this.toggle(); });
     ui.commentMode.addEventListener("click", () => { this.flip("commentMode"); });
     ui.showCursor.addEventListener("click", () => { this.flip("showCursor"); });
+    this.themes = ui.shadow.querySelectorAll("button[data-theme]");
+    for (const button of this.themes) {
+      button.addEventListener("click", () => {
+        const theme = button.dataset.theme;
+        if (isTheme(theme) && this.settings?.theme !== theme) void this.change({ theme });
+      });
+    }
     for (const button of ui.corners) {
       button.addEventListener("click", () => {
         const corner = button.dataset.corner;
@@ -165,6 +174,10 @@ export class Panel {
     }
     // The styles place the pill, gear and panels by the host's corner.
     ui.host.dataset.corner = settings.corner;
+    ui.host.dataset.theme = settings.theme;
+    for (const button of this.themes) {
+      button.setAttribute("aria-pressed", String(button.dataset.theme === settings.theme));
+    }
     this.onSettings(settings);
   }
 
