@@ -573,13 +573,12 @@ var Answers = class {
   scrolled = /* @__PURE__ */ new Set();
   obstacleChanges;
   timeoutSeconds = 0;
-  highlightTarget;
+  outlined;
   highlightTimer;
   geometry;
   visibleTargets = /* @__PURE__ */ new Map();
   visibility = new IntersectionObserver((entries) => {
-    for (const { target, intersectionRect } of entries) {
-      const visible = intersectionRect.width > 0 && intersectionRect.height > 0;
+    for (const { target, isIntersecting: visible } of entries) {
       this.visibleTargets.set(target, visible);
       for (const entry of this.shown.values()) {
         if (entry.placed?.target === target) entry.wrapper.classList.toggle("target-offscreen", !visible);
@@ -1028,10 +1027,14 @@ var Answers = class {
       this.place();
     });
   }
+  outlineFollows(source) {
+    const outline = this.outlined;
+    return outline !== void 0 && (outline.sources.has(source) || outline.mode === "document" && source === document);
+  }
   onScroll = (event) => {
     const source = event.target;
     if (source === null) return;
-    if (this.historyPreview === void 0 && this.highlightTarget === void 0 && !Array.from(this.shown.values()).some(({ scroll }) => scroll?.sources.has(source))) return;
+    if (!this.outlineFollows(source) && !Array.from(this.shown.values()).some(({ scroll }) => scroll?.sources.has(source))) return;
     this.scrolled.add(source);
     if (this.scrollFrame !== void 0) return;
     this.scrollFrame = requestAnimationFrame(() => {
@@ -1049,8 +1052,8 @@ var Answers = class {
         }
         updates.set(wrapper, `translate(${rect.left - scroll.rect.left}px, ${rect.top - scroll.rect.top}px)`);
       }
-      const highlight = this.highlightTarget ?? this.places.get(this.historyPreview?.id ?? "")?.target();
-      const outline = highlight?.isConnected ? measured.get(highlight) ?? highlight.getBoundingClientRect() : void 0;
+      const target = this.outlined?.target;
+      const outline = target?.isConnected && sources.some((item) => this.outlineFollows(item)) ? measured.get(target) ?? target.getBoundingClientRect() : void 0;
       for (const [wrapper, transform] of updates) wrapper.style.setProperty("transform", transform);
       if (outline !== void 0) this.drawOutline(outline);
     });
@@ -1105,8 +1108,13 @@ var Answers = class {
         this.revealElement(target);
       }
     }
-    if (hovered !== void 0) this.outline(hovered);
-    else if (this.highlightTimer === void 0) this.ui.messageHighlight.style.display = "none";
+    if (this.highlightTimer === void 0) {
+      if (hovered !== void 0) this.outline(hovered);
+      else {
+        this.outlined = void 0;
+        this.ui.messageHighlight.style.display = "none";
+      }
+    }
     if (this.pdf !== void 0 && this.sections === null) {
       this.sections = this.ui.shadow.querySelector("#pdf-sections");
       if (this.sections !== null) {
@@ -1193,6 +1201,9 @@ var Answers = class {
         move.applied?.(dropped.point);
       }
       const obstacles2 = new Map([...controls, ...general]);
+      for (const [node, box] of targetBoxes) {
+        if (node !== target) obstacles2.set(node, box);
+      }
       const blocked = cached !== void 0 && previousBox !== void 0 && Array.from(obstacles2).some(([node, box]) => !sameBox(cached.obstacles.get(node), box) && intersects(box, previousBox));
       const height = view.bottom - view.top;
       const layoutView = rect === void 0 || rect.bottom > view.top && rect.top < view.bottom ? view : translate(view, 0, (rect.top + rect.bottom - view.top - view.bottom) / 2);
@@ -1311,7 +1322,9 @@ var Answers = class {
     }
   }
   outline(target) {
-    this.drawOutline(target.getBoundingClientRect());
+    const rect = target.getBoundingClientRect();
+    this.outlined = scrollRelationship(target, rect);
+    this.drawOutline(rect);
   }
   drawOutline(rect) {
     const { messageHighlight } = this.ui;
@@ -1323,11 +1336,9 @@ var Answers = class {
   }
   showHighlight(target) {
     this.outline(target);
-    this.highlightTarget = target;
     if (this.highlightTimer !== void 0) clearTimeout(this.highlightTimer);
     this.highlightTimer = window.setTimeout(() => {
       this.highlightTimer = void 0;
-      this.highlightTarget = void 0;
       this.schedulePlacement();
     }, 1800);
   }

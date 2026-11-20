@@ -157,13 +157,12 @@ export class Answers {
   private readonly scrolled = new Set<EventTarget>();
   private readonly obstacleChanges: MutationObserver;
   private timeoutSeconds = 0;
-  private highlightTarget: Element | undefined;
+  private outlined: ScrollRelationship | undefined;
   private highlightTimer: number | undefined;
   private readonly geometry: ResizeObserver;
   private readonly visibleTargets = new Map<Element, boolean>();
   private readonly visibility = new IntersectionObserver((entries) => {
-    for (const { target, intersectionRect } of entries) {
-      const visible = intersectionRect.width > 0 && intersectionRect.height > 0;
+    for (const { target, isIntersecting: visible } of entries) {
       this.visibleTargets.set(target, visible);
       for (const entry of this.shown.values()) {
         if (entry.placed?.target === target) entry.wrapper.classList.toggle("target-offscreen", !visible);
@@ -649,10 +648,16 @@ export class Answers {
     this.placementFrame = requestAnimationFrame(() => { this.place(); });
   }
 
+  private outlineFollows(source: EventTarget): boolean {
+    const outline = this.outlined;
+    return outline !== undefined && (outline.sources.has(source) ||
+      (outline.mode === "document" && source === document));
+  }
+
   private readonly onScroll = (event: Event): void => {
     const source = event.target;
     if (source === null) return;
-    if (this.historyPreview === undefined && this.highlightTarget === undefined &&
+    if (!this.outlineFollows(source) &&
         !Array.from(this.shown.values()).some(({ scroll }) => scroll?.sources.has(source))) return;
     this.scrolled.add(source);
     if (this.scrollFrame !== undefined) return;
@@ -671,9 +676,9 @@ export class Answers {
         }
         updates.set(wrapper, `translate(${rect.left - scroll.rect.left}px, ${rect.top - scroll.rect.top}px)`);
       }
-      const highlight = this.highlightTarget ?? this.places.get(this.historyPreview?.id ?? "")?.target();
-      const outline = highlight?.isConnected
-        ? measured.get(highlight) ?? highlight.getBoundingClientRect()
+      const target = this.outlined?.target;
+      const outline = target?.isConnected && sources.some((item) => this.outlineFollows(item))
+        ? measured.get(target) ?? target.getBoundingClientRect()
         : undefined;
       for (const [wrapper, transform] of updates) wrapper.style.setProperty("transform", transform);
       if (outline !== undefined) this.drawOutline(outline);
@@ -733,8 +738,13 @@ export class Answers {
       }
     }
 
-    if (hovered !== undefined) this.outline(hovered);
-    else if (this.highlightTimer === undefined) this.ui.messageHighlight.style.display = "none";
+    if (this.highlightTimer === undefined) {
+      if (hovered !== undefined) this.outline(hovered);
+      else {
+        this.outlined = undefined;
+        this.ui.messageHighlight.style.display = "none";
+      }
+    }
 
     // The PDF viewer adds its sections panel after Answers is constructed.
     if (this.pdf !== undefined && this.sections === null) {
@@ -831,8 +841,10 @@ export class Answers {
         dropped.point = { x: moved.left - rect.left, y: moved.top - rect.top };
         move.applied?.(dropped.point);
       }
-      // Controls that stay put while the document scrolls retain their cached geometry.
       const obstacles = new Map([...controls, ...general]);
+      for (const [node, box] of targetBoxes) {
+        if (node !== target) obstacles.set(node, box);
+      }
       const blocked = cached !== undefined && previousBox !== undefined &&
         Array.from(obstacles).some(([node, box]) =>
           !sameBox(cached.obstacles.get(node), box) && intersects(box, previousBox));
@@ -972,7 +984,9 @@ export class Answers {
   }
 
   private outline(target: Element): void {
-    this.drawOutline(target.getBoundingClientRect());
+    const rect = target.getBoundingClientRect();
+    this.outlined = scrollRelationship(target, rect);
+    this.drawOutline(rect);
   }
 
   private drawOutline(rect: DOMRect): void {
@@ -986,11 +1000,9 @@ export class Answers {
 
   private showHighlight(target: Element): void {
     this.outline(target);
-    this.highlightTarget = target;
     if (this.highlightTimer !== undefined) clearTimeout(this.highlightTimer);
     this.highlightTimer = window.setTimeout(() => {
       this.highlightTimer = undefined;
-      this.highlightTarget = undefined;
       this.schedulePlacement();
     }, 1800);
   }

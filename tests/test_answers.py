@@ -1071,6 +1071,99 @@ def test_fixed_targets_follow_their_scroll_sources(tmp_path: Path, page: Page) -
             assert aligned == 0
 
 
+def test_anchored_answer_reappears_at_viewport_edge(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "index.html"
+    _ = path.write_text(
+        '<main style="height:2000px">'
+        '<div id="target" style="position:absolute;top:300px;left:400px;'
+        'width:170px;height:40px">Target</div></main>'
+    )
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path, "send", "--at", "#target", "--page", "/index.html", "A reply."
+        )
+        card = overlay(page, "#agent-anchored .agent-message")
+        expect(card).to_be_visible()
+        _ = page.evaluate("window.scrollTo(0, 400)")
+        expect(card).to_be_hidden()
+        _ = page.locator("#target").evaluate("""target => new Promise((resolve, reject) => {
+            const observer = new IntersectionObserver(([entry]) => {
+                if (!entry.isIntersecting || entry.intersectionRect.height !== 0) return;
+                clearTimeout(timeout);
+                observer.disconnect();
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+            });
+            const timeout = setTimeout(() => {
+                observer.disconnect();
+                reject(new Error("Target did not reach exact edge contact"));
+            }, 5000);
+            observer.observe(target);
+            window.scrollTo(0, 340);
+        })""")
+        _ = page.evaluate("window.scrollTo(0, 240)")
+        expect(page.locator("#target")).to_be_in_viewport(ratio=1)
+        expect(card).to_be_visible()
+
+
+def test_new_anchor_repositions_cached_answer(tmp_path: Path, page: Page) -> None:
+    without_answer_timeout(tmp_path)
+    path = tmp_path / "index.html"
+    _ = path.write_text("""
+        <div id="first" style="position:absolute;top:240px;left:420px;width:170px">
+            First
+        </div>
+        <div id="second" style="position:absolute;top:245px;left:650px;width:100px">
+            Second
+        </div>
+    """)
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        _ = jamparty(
+            tmp_path, "send", "--at", "#first", "--page", "/index.html", "First reply."
+        )
+        first = overlay(page, ".agent-placement").filter(has_text="First reply.")
+        marker = first.locator(".agent-anchor-marker")
+        expect(marker).to_have_attribute("data-side", "right")
+        old_card = first.locator(".agent-message").bounding_box()
+        second = page.locator("#second").bounding_box()
+        assert old_card is not None and second is not None
+        assert old_card["x"] < second["x"] < old_card["x"] + old_card["width"]
+        assert old_card["y"] < second["y"] < old_card["y"] + old_card["height"]
+        _ = jamparty(
+            tmp_path,
+            "send",
+            "--at",
+            "#second",
+            "--page",
+            "/index.html",
+            "Second reply.",
+        )
+        cards = overlay(page, "#agent-anchored .agent-message")
+        expect(cards).to_have_count(2)
+        expect(marker).to_have_attribute("data-side", "left")
+        assert cards.evaluate_all("""cards => {
+            const targets = [...document.querySelectorAll("#first, #second")];
+            return cards.every(card => {
+                const a = card.getBoundingClientRect();
+                return targets.every(target => {
+                    const b = target.getBoundingClientRect();
+                    return a.right <= b.left || a.left >= b.right ||
+                        a.bottom <= b.top || a.top >= b.bottom;
+                });
+            });
+        }""")
+
+
 def test_open_comment_list_repositions_anchored_answer(
     tmp_path: Path, page: Page
 ) -> None:
@@ -1161,6 +1254,9 @@ def test_nested_scroll_batches_affected_card_reads(tmp_path: Path, page: Page) -
         <section style="height:200px;overflow:auto;margin-left:80px">
           <div id="independent" style="margin:50px 0 500px;width:240px">Other</div>
         </section>
+        <section id="unannotated" style="height:100px;overflow:auto">
+          <div style="height:300px">No annotations</div>
+        </section>
     """)
     with (
         share(tmp_path, "serve", str(path)) as shared,
@@ -1173,6 +1269,13 @@ def test_nested_scroll_batches_affected_card_reads(tmp_path: Path, page: Page) -
                 tmp_path, "send", "--at", f"#{target}", "--page", "/index.html", target
             )
         expect(overlay(page, ".agent-placement")).to_have_count(3)
+        card = overlay(page, ".agent-message").filter(has_text="first")
+        expect(card).to_be_visible()
+        card.focus()
+        expect(card).to_be_focused()
+        page.keyboard.press("Enter")
+        highlight = overlay(page, "#message-highlight")
+        expect(highlight).to_be_visible()
         frames = cast(
             list[list[str]],
             page.evaluate("""async () => {
@@ -1181,7 +1284,7 @@ def test_nested_scroll_batches_affected_card_reads(tmp_path: Path, page: Page) -
                 await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
                 const wrappers = [...shadow.querySelectorAll(".agent-placement")];
                 const styles = new Map(wrappers.map(node => [
-                    node.style, node.querySelector(".agent-message").textContent.trim()
+                    node.style, node.querySelector(".agent-body").textContent.trim()
                 ]));
                 const measure = Element.prototype.getBoundingClientRect;
                 const set = CSSStyleDeclaration.prototype.setProperty;
@@ -1198,13 +1301,16 @@ def test_nested_scroll_batches_affected_card_reads(tmp_path: Path, page: Page) -
                     return set.call(this, name, value, ...rest);
                 };
                 try {
-                    for (const top of [20, 40, 60]) {
+                    const independent = document.querySelector("#independent").parentElement;
+                    const unannotated = document.querySelector("#unannotated");
+                    for (const [source, top] of [[scroller, 20], [scroller, 40], [scroller, 60],
+                                                 [independent, 10], [unannotated, 10]]) {
                         calls = [];
                         await new Promise(resolve => {
-                            scroller.addEventListener("scroll", () => {
+                            source.addEventListener("scroll", () => {
                                 requestAnimationFrame(resolve);
                             }, { once: true });
-                            scroller.scrollTop = top;
+                            source.scrollTop = top;
                         });
                         frames.push(calls);
                     }
@@ -1215,7 +1321,9 @@ def test_nested_scroll_batches_affected_card_reads(tmp_path: Path, page: Page) -
                 }
             }"""),
         )
-        for calls in frames:
+        expect(highlight).to_be_visible()
+        assert frames[-2:] == [["read:independent", "write:independent"], []]
+        for calls in frames[:-2]:
             assert set(calls[:2]) == {"read:first", "read:second"}
             assert len(calls) == 4
             assert all(call.startswith("write:") for call in calls[2:])
