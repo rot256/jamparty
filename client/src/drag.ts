@@ -24,9 +24,10 @@ const directions: Readonly<Record<string, Point>> = {
 export function moveBy(
   handle: HTMLElement,
   surface: HTMLElement,
-  move: (point: Point, width: number) => void,
+  move: (point: Point, width: number, applied?: (point: Point) => void) => void,
   savePlacement: () => () => void,
-  before?: HTMLElement,
+  anchorOrigin?: () => Point | undefined,
+  fit: (point: Point, width: number, height: number, origin?: Point) => Point = fitPosition,
 ): () => void {
   const button = document.createElement("button");
   button.className = "move-control";
@@ -34,7 +35,7 @@ export function moveBy(
   button.setAttribute("aria-label", "Move");
   button.title = "Move with arrow keys";
   button.innerHTML = '<svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 3h0m4 0h0M4 7h0m4 0h0m-4 4h0m4 0h0"/></svg>';
-  handle.insertBefore(button, before ?? null);
+  handle.prepend(button);
 
   let drag: { id: number; start: Point; rect: DOMRect; moved: boolean } | undefined;
   let keyboard: { point: Point; rect: DOMRect } | undefined;
@@ -62,8 +63,10 @@ export function moveBy(
   };
 
   handle.addEventListener("pointerdown", (event) => {
+    const control = event.target instanceof Element ? event.target.closest("button, a") : null;
     if (!event.isPrimary || event.button !== 0 || drag !== undefined ||
-        (event.target instanceof Element && event.target.closest("button, a"))) return;
+        (control !== null && control !== button)) return;
+    if (control === button) button.focus({ preventScroll: true });
     end();
     drag = {
       id: event.pointerId,
@@ -102,16 +105,23 @@ export function moveBy(
       end();
       return;
     }
+    const origin = anchorOrigin?.();
     if (keyboard === undefined) {
       const rect = surface.getBoundingClientRect();
-      keyboard = { point: { x: rect.left, y: rect.top }, rect };
+      keyboard = { point: { x: rect.left - (origin?.x ?? 0), y: rect.top - (origin?.y ?? 0) }, rect };
       begin();
     }
     const { point, rect } = keyboard;
     const step = event.shiftKey ? 64 : 16;
-    keyboard.point = fitPosition({ x: point.x + step * direction.x, y: point.y + step * direction.y },
-      rect.width, rect.height);
-    move(keyboard.point, rect.width);
+    const next = { x: point.x + step * direction.x, y: point.y + step * direction.y };
+    const x = origin?.x ?? 0;
+    const y = origin?.y ?? 0;
+    const applied = fit({ x: next.x + x, y: next.y + y }, rect.width, rect.height, origin);
+    keyboard.point = { x: applied.x - x, y: applied.y - y };
+    const active = keyboard;
+    move(applied, rect.width, (point) => {
+      if (keyboard === active) keyboard.point = point;
+    });
   };
   const stopListening = (): void => {
     window.removeEventListener("keydown", moveWithKeys, true);

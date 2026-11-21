@@ -164,10 +164,18 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
 
         _ = jamparty(tmp_path, "send", "A new answer.")
         answer = overlay(page, ".agent-message")
+        header = answer.locator(".agent-header")
+        grip = header.get_by_role("button", name="Move", exact=True)
+        expect(header.locator(":scope > :first-child")).to_have_attribute(
+            "aria-label", "Move"
+        )
+        expect(grip).to_have_css("width", "21px")
+        expect(header).to_have_css("background-color", "rgb(240, 243, 247)")
         expect(answer).to_have_css("background-color", "rgb(255, 255, 255)")
         gear.click()
         overlay(page, "button[data-theme=dark]").click()
         expect(answer).to_have_css("background-color", "rgb(22, 22, 22)")
+        expect(header).to_have_css("background-color", "rgb(36, 39, 45)")
         gear.click()
 
         page.keyboard.press("/")
@@ -182,6 +190,11 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
         expect(field).to_have_css("outline-width", "2px")
         expect(field).to_have_css("border-top-color", "rgba(0, 0, 0, 0)")
         dialog = overlay(page, "#jamparty-dialog")
+        title_bar = dialog.locator("#dialog-header")
+        expect(title_bar).to_have_css("background-color", "rgb(36, 39, 45)")
+        expect(title_bar.locator(":scope > :first-child")).to_have_attribute(
+            "aria-label", "Move"
+        )
         cancel_drag(page, dialog, dialog.locator("#dialog-label"), -120, -80)
         expect(dialog).to_be_visible()
         expect(field).to_have_value("A draft whose position I can change.")
@@ -251,7 +264,13 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
             brace_box = cast(
                 list[float],
                 brace.evaluate(
-                    "(p) => { const b = p.getBBox(); return [b.x, b.y, b.width, b.height]; }"
+                    """p => {
+                        const b = p.getBBox();
+                        const m = p.getScreenCTM();
+                        const start = new DOMPoint(b.x, b.y).matrixTransform(m);
+                        const end = new DOMPoint(b.x + b.width, b.y + b.height).matrixTransform(m);
+                        return [start.x, start.y, end.x - start.x, end.y - start.y];
+                    }"""
                 ),
             )
             assert brace_box[1] == pytest.approx(bounds["y"], abs=0.1)
@@ -260,8 +279,9 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
             endpoints = cast(
                 list[float],
                 link.evaluate("""p => {
-                    const start = p.getPointAtLength(0);
-                    const end = p.getPointAtLength(p.getTotalLength());
+                    const matrix = p.getScreenCTM();
+                    const start = p.getPointAtLength(0).matrixTransform(matrix);
+                    const end = p.getPointAtLength(p.getTotalLength()).matrixTransform(matrix);
                     return [start.x, start.y, end.x, end.y];
                 }"""),
             )
@@ -274,6 +294,31 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
 
         check_link()
         original = link.get_attribute("d")
+        reads = page.evaluate("""async () => {
+            const measure = Element.prototype.getBoundingClientRect;
+            let reads = 0;
+            Element.prototype.getBoundingClientRect = function () {
+                if (this.getRootNode() instanceof ShadowRoot ||
+                    this.classList.contains("pdf-answer-anchor")) reads++;
+                return measure.call(this);
+            };
+            try {
+                window.scrollBy(0, 400);
+                for (let i = 0; i < 12; i++) window.dispatchEvent(new Event("scroll"));
+                await new Promise(resolve => requestAnimationFrame(
+                    () => requestAnimationFrame(resolve)));
+                return reads;
+            } finally {
+                Element.prototype.getBoundingClientRect = measure;
+            }
+        }""")
+        assert reads == 0
+        expect_position(answer, start["x"], start["y"] - 400)
+        expect_position(mark, target_box["x"], target_box["y"] - 400)
+        expect(link).to_have_attribute("d", original or "")
+        check_link()
+        _ = page.evaluate("window.scrollTo(0, 0)")
+        expect_position(answer, start["x"], start["y"])
         cancel_drag(page, answer, heading, 0, -80)
         expect(link).to_have_attribute("d", original or "")
         expect(answer).to_have_class("agent-message has-anchor")
@@ -285,8 +330,23 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
         check_link()
         manual = link.get_attribute("d")
         _ = page.evaluate("window.scrollBy(0, 75)")
-        expect(link).not_to_have_attribute("d", manual or "")
-        assert answer.bounding_box() == moved
+        expect_position(answer, moved["x"], moved["y"] - 75)
+        expect(link).to_have_attribute("d", manual or "")
+        check_link()
+        page.set_viewport_size({"width": 1520, "height": 960})
+        resized = mark.bounding_box()
+        assert resized is not None
+        expect_position(
+            answer,
+            moved["x"] + resized["x"] - target_box["x"],
+            moved["y"] + resized["y"] - target_box["y"],
+        )
+        check_link()
+        _ = page.evaluate("window.scrollBy(0, 1100)")
+        expect(mark).not_to_be_in_viewport()
+        expect(answer).not_to_be_in_viewport()
+        _ = page.evaluate("window.scrollTo(0, 75)")
+        expect(answer).to_be_in_viewport()
         check_link()
 
 
@@ -426,17 +486,39 @@ def test_answer_keyboard_move_and_reveal(tmp_path: Path, page: Page) -> None:
             "/index.html",
             "See the intro.",
         )
-        answer = overlay(page, ".agent-message")
+        answer = overlay(page, "#agent-anchored .agent-message")
         expect(answer).to_have_attribute("tabindex", "0")
+        expect(answer).to_be_visible()
         link = overlay(page, ".agent-anchor-line")
         original = link.get_attribute("d")
         answer.focus()
         answer.press("Tab")
         move_with_keys(answer, answer)
         expect(link).not_to_have_attribute("d", original or "")
+        target = page.locator("#intro")
+        moved = answer.bounding_box()
+        assert moved is not None
+        _ = jamparty(tmp_path, "send", "General note.")
+        general = overlay(page, "#agent-general .agent-message")
+        expect(general).to_have_text(re.compile("General note"))
+        fixed = general.bounding_box()
+        assert fixed is not None
+        _ = page.evaluate("window.scrollTo(0, 160)")
+        expect_position(answer, moved["x"], moved["y"] - 160)
+        assert general.bounding_box() == fixed
+        _ = page.evaluate("window.scrollTo(0, 650)")
+        expect(target).not_to_be_in_viewport()
+        expect(answer).not_to_be_in_viewport()
+        _ = page.evaluate("window.scrollTo(0, 160)")
+        expect(answer).to_be_visible()
+        expect_position(answer, moved["x"], moved["y"] - 160)
+        highlight = overlay(page, "#message-highlight")
         for key in ("Enter", "Space"):
-            _ = page.evaluate("window.scrollTo(0, 650)")
-            expect(page.locator("#intro")).not_to_be_in_viewport()
+            expect(highlight).to_be_hidden()
+            _ = page.evaluate("window.scrollTo(0, 160)")
+            expect(answer).to_be_visible()
             answer.focus()
-            answer.press(key)
-            expect(page.locator("#intro")).to_be_in_viewport()
+            expect(answer).to_be_focused()
+            page.keyboard.press(key)
+            expect(highlight).to_be_visible()
+            expect(target).to_be_in_viewport()

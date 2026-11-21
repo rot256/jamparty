@@ -46,6 +46,12 @@ function placeElement(root, selector) {
 }
 
 // client/src/answer-placement.ts
+var oppositeSide = {
+  right: "left",
+  left: "right",
+  above: "below",
+  below: "above"
+};
 var EDGE = 8;
 var GAP = 12;
 var TARGET_GAP = 28;
@@ -76,16 +82,19 @@ function sideBands(view, target, gap) {
   const bands = [{ side: "right", area: right }, { side: "left", area: left }];
   return bands.sort((a, b) => b.area.right - b.area.left - (a.area.right - a.area.left));
 }
-function placeAnswer(heightAt, view, target, page, occupied) {
+function placeAnswer(heightAt, view, target, page, occupied, preferredSide) {
   const bands = [
     ...page === void 0 ? [] : sideBands(view, page, PAGE_GAP),
     ...sideBands(view, target, TARGET_GAP),
     { side: "below", area: { ...view, top: Math.max(view.top, target.bottom + TARGET_GAP) } },
     { side: "above", area: { ...view, bottom: Math.min(view.bottom, target.top - TARGET_GAP) } }
   ];
-  for (const allowClipping of [false, true]) {
+  const passes = preferredSide === void 0 ? [false, true] : [preferredSide, false, true];
+  for (const pass of passes) {
+    const allowClipping = pass === true;
     let margin;
     for (const [index, { side, area }] of bands.entries()) {
+      if (typeof pass === "string" && side !== pass) continue;
       if (index === 2 && page !== void 0 && margin !== void 0) return margin.placement;
       const width = Math.min(MAX_WIDTH, Math.floor(area.right - area.left));
       if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
@@ -126,7 +135,7 @@ function placeAnswer(heightAt, view, target, page, occupied) {
         }
       }
       if (best === void 0) continue;
-      if (page === void 0 || index >= 2) return best.placement;
+      if (side === pass || page === void 0 || index >= 2) return best.placement;
       if (margin === void 0 || best.score < margin.score) margin = best;
     }
   }
@@ -149,10 +158,7 @@ function nearestSide(target, card) {
   }
   return dy >= 0 ? "below" : "above";
 }
-function drawAnswerLink(marker, link, view, target, { side, box }) {
-  marker.hidden = target.bottom <= view.top || target.top >= view.bottom || target.right <= view.left || target.left >= view.right;
-  link.toggleAttribute("hidden", marker.hidden);
-  if (marker.hidden) return;
+function drawAnswerLink(marker, link, target, { side, box }) {
   const horizontal = side === "right" || side === "left";
   const sign = side === "right" || side === "below" ? 1 : -1;
   const edge = { right: target.right, left: target.left, below: target.bottom, above: target.top }[side];
@@ -297,14 +303,14 @@ var directions = {
   ArrowUp: { x: 0, y: -1 },
   ArrowDown: { x: 0, y: 1 }
 };
-function moveBy(handle, surface, move, savePlacement, before) {
+function moveBy(handle, surface, move, savePlacement, anchorOrigin, fit = fitPosition) {
   const button = document.createElement("button");
   button.className = "move-control";
   button.type = "button";
   button.setAttribute("aria-label", "Move");
   button.title = "Move with arrow keys";
   button.innerHTML = '<svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 3h0m4 0h0M4 7h0m4 0h0m-4 4h0m4 0h0"/></svg>';
-  handle.insertBefore(button, before ?? null);
+  handle.prepend(button);
   let drag;
   let keyboard;
   let restore;
@@ -329,7 +335,9 @@ function moveBy(handle, surface, move, savePlacement, before) {
     window.addEventListener("keydown", escape, true);
   };
   handle.addEventListener("pointerdown", (event) => {
-    if (!event.isPrimary || event.button !== 0 || drag !== void 0 || event.target instanceof Element && event.target.closest("button, a")) return;
+    const control = event.target instanceof Element ? event.target.closest("button, a") : null;
+    if (!event.isPrimary || event.button !== 0 || drag !== void 0 || control !== null && control !== button) return;
+    if (control === button) button.focus({ preventScroll: true });
     end();
     drag = {
       id: event.pointerId,
@@ -366,19 +374,23 @@ function moveBy(handle, surface, move, savePlacement, before) {
       end();
       return;
     }
+    const origin = anchorOrigin?.();
     if (keyboard === void 0) {
       const rect2 = surface.getBoundingClientRect();
-      keyboard = { point: { x: rect2.left, y: rect2.top }, rect: rect2 };
+      keyboard = { point: { x: rect2.left - (origin?.x ?? 0), y: rect2.top - (origin?.y ?? 0) }, rect: rect2 };
       begin();
     }
     const { point, rect } = keyboard;
     const step = event.shiftKey ? 64 : 16;
-    keyboard.point = fitPosition(
-      { x: point.x + step * direction.x, y: point.y + step * direction.y },
-      rect.width,
-      rect.height
-    );
-    move(keyboard.point, rect.width);
+    const next = { x: point.x + step * direction.x, y: point.y + step * direction.y };
+    const x = origin?.x ?? 0;
+    const y = origin?.y ?? 0;
+    const applied = fit({ x: next.x + x, y: next.y + y }, rect.width, rect.height, origin);
+    keyboard.point = { x: applied.x - x, y: applied.y - y };
+    const active = keyboard;
+    move(applied, rect.width, (point2) => {
+      if (keyboard === active) keyboard.point = point2;
+    });
   };
   const stopListening = () => {
     window.removeEventListener("keydown", moveWithKeys, true);
@@ -435,6 +447,51 @@ var PALETTE = [
 ];
 
 // client/src/answers.ts
+function translate(box, x, y) {
+  return { left: box.left + x, right: box.right + x, top: box.top + y, bottom: box.bottom + y };
+}
+function sameBox(a, b) {
+  if (a === void 0 || b === void 0) return a === b;
+  return a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+}
+function intersects(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+function containsFixed(style) {
+  return [
+    style.transform,
+    style.translate,
+    style.rotate,
+    style.scale,
+    style.perspective,
+    style.filter,
+    style.backdropFilter
+  ].some((value) => value !== "" && value !== "none") || /\b(layout|paint|strict|content)\b/.test(style.contain) || style.contentVisibility === "auto" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter|contain|content-visibility)\b/.test(style.willChange);
+}
+function bodyScrolls() {
+  const root = getComputedStyle(document.documentElement);
+  const body = getComputedStyle(document.body);
+  return [root.overflowX, root.overflowY].some((overflow) => overflow !== "visible") && [body.overflowX, body.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow));
+}
+function scrollRelationship(target, rect) {
+  const body = bodyScrolls();
+  const sources = /* @__PURE__ */ new Set();
+  let fixed = false;
+  let sticky = false;
+  for (let node = target; node !== null; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (fixed && !containsFixed(style)) continue;
+    if (node !== target && (node !== document.body || body) && node !== document.documentElement && [style.overflowX, style.overflowY].some((overflow) => /^(auto|scroll|hidden)$/.test(overflow))) {
+      sources.add(node);
+    }
+    fixed = style.position === "fixed";
+    sticky ||= style.position === "sticky";
+  }
+  if (fixed) return { mode: sources.size > 0 ? "tracked" : "fixed", sources, target, rect };
+  if (!sticky && sources.size === 0) return { mode: "document", sources, target, rect };
+  sources.add(document);
+  return { mode: "tracked", sources, target, rect };
+}
 function makeLink() {
   const link = document.createElementNS(SVG_NS, "g");
   const brace = document.createElementNS(SVG_NS, "path");
@@ -484,15 +541,22 @@ var Answers = class {
     this.geometry.observe(ui.bar);
     this.geometry.observe(ui.panel);
     this.geometry.observe(ui.agentGeneral);
-    this.links.classList.add("agent-anchor-layer");
-    this.links.setAttribute("aria-hidden", "true");
-    ui.agentAnchored.prepend(this.links);
+    this.geometry.observe(ui.dialog);
+    this.obstacleChanges = new MutationObserver(schedule);
+    for (const node of [ui.list, ui.bar, ui.panel, ui.dialog]) {
+      this.obstacleChanges.observe(node, { attributes: true });
+    }
     window.visualViewport?.addEventListener("resize", schedule);
-    window.visualViewport?.addEventListener("scroll", schedule);
+    window.visualViewport?.addEventListener("scroll", this.onScroll);
     window.addEventListener("resize", schedule);
-    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
     window.addEventListener("load", schedule, true);
-    new MutationObserver(schedule).observe(document.documentElement, {
+    const indicator = this.pdf === void 0 ? null : document.querySelector("#pdf-position");
+    new MutationObserver((records) => {
+      if (records.some(({ target }) => target !== indicator)) {
+        schedule();
+      }
+    }).observe(document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
@@ -511,9 +575,22 @@ var Answers = class {
   historyTarget = () => null;
   dismissed = loadDismissed();
   placementFrame;
+  scrollFrame;
+  scrolled = /* @__PURE__ */ new Set();
+  obstacleChanges;
   timeoutSeconds = 0;
+  outlined;
   highlightTimer;
   geometry;
+  visibleTargets = /* @__PURE__ */ new Map();
+  visibility = new IntersectionObserver((entries) => {
+    for (const { target, isIntersecting: visible } of entries) {
+      this.visibleTargets.set(target, visible);
+      for (const entry of this.shown.values()) {
+        if (entry.placed?.target === target) entry.wrapper.classList.toggle("target-offscreen", !visible);
+      }
+    }
+  });
   observedTargets = /* @__PURE__ */ new Set();
   pendingReveal = takeReveal();
   landingPath = location.pathname;
@@ -647,7 +724,6 @@ var Answers = class {
       this.schedulePlacement();
     });
   }
-  links = document.createElementNS(SVG_NS, "svg");
   show(answer) {
     if (this.dismissed.has(answer.id) || this.shown.has(answer.id)) return;
     for (const id of this.shown.keys()) {
@@ -763,7 +839,11 @@ var Answers = class {
     marker.setAttribute("aria-hidden", "true");
     const link = makeLink();
     link.dataset.answerId = answer.id;
-    wrapper.append(marker);
+    const links = document.createElementNS(SVG_NS, "svg");
+    links.classList.add("agent-anchor-layer");
+    links.setAttribute("aria-hidden", "true");
+    links.append(link);
+    wrapper.append(links, marker);
     const highlight = (active) => {
       link.classList.toggle("active", active);
       marker.classList.toggle("active", active);
@@ -819,16 +899,26 @@ var Answers = class {
       hasPlace: entry !== void 0,
       heightAt,
       dropped: void 0,
-      endMove: moveBy(header, node, (point, width) => {
-        shown.dropped = { point, width: shown.dropped?.width ?? width };
+      pendingDrop: void 0,
+      placed: void 0,
+      scroll: void 0,
+      endMove: moveBy(header, node, (point, width, applied) => {
+        shown.pendingDrop = { point, width: shown.dropped?.width ?? width, applied };
         this.schedulePlacement();
       }, () => {
         const previous = shown.dropped;
+        const pending = shown.pendingDrop;
+        const placed = shown.placed;
         return () => {
+          shown.placed = placed;
+          shown.pendingDrop = pending;
           shown.dropped = previous;
           this.schedulePlacement();
         };
-      }, close)
+      }, () => {
+        const rect = shown.placed?.target.getBoundingClientRect();
+        return rect === void 0 ? void 0 : { x: rect.left, y: rect.top };
+      }, (point, width, height, origin) => this.fitMoved(point, width, height, shown.scroll?.mode, origin?.y))
     };
     this.shown.set(answer.id, shown);
     this.schedulePlacement();
@@ -841,7 +931,6 @@ var Answers = class {
     shown?.endMove();
     shown?.node.remove();
     shown?.wrapper.remove();
-    shown?.link.remove();
     this.shown.delete(id);
     this.prunePlaces();
     this.schedulePlacement();
@@ -944,6 +1033,37 @@ var Answers = class {
       this.place();
     });
   }
+  outlineFollows(source) {
+    const outline = this.outlined;
+    return outline !== void 0 && (outline.sources.has(source) || outline.mode === "document" && source === document);
+  }
+  onScroll = (event) => {
+    const source = event.target;
+    if (source === null) return;
+    if (!this.outlineFollows(source) && !Array.from(this.shown.values()).some(({ scroll }) => scroll?.sources.has(source))) return;
+    this.scrolled.add(source);
+    if (this.scrollFrame !== void 0) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = void 0;
+      const sources = Array.from(this.scrolled);
+      this.scrolled.clear();
+      const measured = /* @__PURE__ */ new Map();
+      const updates = /* @__PURE__ */ new Map();
+      for (const { scroll, wrapper } of this.shown.values()) {
+        if (scroll === void 0 || !sources.some((item) => scroll.sources.has(item))) continue;
+        let rect = measured.get(scroll.target);
+        if (rect === void 0) {
+          rect = scroll.target.getBoundingClientRect();
+          measured.set(scroll.target, rect);
+        }
+        updates.set(wrapper, `translate(${rect.left - scroll.rect.left}px, ${rect.top - scroll.rect.top}px)`);
+      }
+      const target = this.outlined?.target;
+      const outline = target?.isConnected && sources.some((item) => this.outlineFollows(item)) ? measured.get(target) ?? target.getBoundingClientRect() : void 0;
+      for (const [wrapper, transform] of updates) wrapper.style.setProperty("transform", transform);
+      if (outline !== void 0) this.drawOutline(outline);
+    });
+  };
   place() {
     this.placementFrame = void 0;
     const { agentAnchored, agentGeneral } = this.ui;
@@ -964,9 +1084,14 @@ var Answers = class {
         entry.node.removeAttribute("aria-label");
       }
       if (target !== void 0) anchored.set(entry, target);
-      if (entry.dropped !== void 0) {
+      if (target === void 0 && entry.pendingDrop !== void 0) {
+        const { point, width } = entry.pendingDrop;
+        entry.dropped = { point, width, relative: false };
+        entry.pendingDrop = void 0;
+      }
+      if (target === void 0 && entry.dropped?.relative === false) {
         fixed.set(entry, this.positionMoved(entry.node, entry.dropped));
-      } else if (entry.node.classList.contains("manually-placed")) {
+      } else if (entry.dropped === void 0 && entry.node.classList.contains("manually-placed")) {
         entry.node.classList.remove("manually-placed");
         for (const property of ["left", "top", "width", "max-width", "max-height"]) {
           entry.node.style.removeProperty(property);
@@ -989,11 +1114,19 @@ var Answers = class {
         this.revealElement(target);
       }
     }
-    if (hovered !== void 0) this.outline(hovered);
-    else if (this.highlightTimer === void 0) this.ui.messageHighlight.style.display = "none";
+    if (this.highlightTimer === void 0) {
+      if (hovered !== void 0) this.outline(hovered);
+      else {
+        this.outlined = void 0;
+        this.ui.messageHighlight.style.display = "none";
+      }
+    }
     if (this.pdf !== void 0 && this.sections === null) {
       this.sections = this.ui.shadow.querySelector("#pdf-sections");
-      if (this.sections !== null) this.geometry.observe(this.sections);
+      if (this.sections !== null) {
+        this.geometry.observe(this.sections);
+        this.obstacleChanges.observe(this.sections, { attributes: true });
+      }
     }
     const sectionsHeight = this.sections?.offsetHeight ?? 0;
     const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`;
@@ -1004,16 +1137,28 @@ var Answers = class {
       this.ui.bar,
       this.ui.list,
       this.ui.panel,
+      this.ui.dialog,
       ...this.sections === null ? [] : [this.sections],
       ...this.pdf === void 0 ? [] : document.querySelectorAll("#pdf-feedback > :not(:empty)")
     ];
-    const occupied = obstacles.filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible").map((node) => node.getBoundingClientRect());
-    occupied.push(...fixed.values());
+    const controls = new Map(obstacles.filter((node) => node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible").map((node) => [node, node.getBoundingClientRect()]));
+    for (const [entry, box] of fixed) controls.set(entry.node, box);
+    const occupied = Array.from(controls.values());
     const targets = new Set(anchored.values());
-    for (const target of this.observedTargets) if (!targets.has(target)) this.geometry.unobserve(target);
-    for (const target of targets) if (!this.observedTargets.has(target)) this.geometry.observe(target);
+    for (const target of this.observedTargets) {
+      if (targets.has(target)) continue;
+      this.geometry.unobserve(target);
+      this.visibility.unobserve(target);
+      this.visibleTargets.delete(target);
+    }
+    for (const target of targets) {
+      if (this.observedTargets.has(target)) continue;
+      this.geometry.observe(target);
+      this.visibility.observe(target);
+    }
     this.observedTargets = targets;
     const view = answerViewport();
+    const origin = agentAnchored.getBoundingClientRect();
     const pdfViewer = document.documentElement.hasAttribute("data-jamparty-pdf");
     const targetBoxes = /* @__PURE__ */ new Map();
     const pages = /* @__PURE__ */ new Map();
@@ -1027,6 +1172,7 @@ var Answers = class {
     const general = new Map(
       Array.from(agentGeneral.children).filter((node) => !node.classList.contains("manually-placed")).map((node) => [node, node.getBoundingClientRect()])
     );
+    const placedCards = [];
     const pending = new Set(anchored.keys());
     const placements = /* @__PURE__ */ new Map();
     const solve = (entry) => {
@@ -1038,13 +1184,41 @@ var Answers = class {
       const rect = targetBoxes.get(target);
       const previous = general.get(entry.node);
       general.delete(entry.node);
-      const moved = fixed.get(entry);
-      const placement = rect === void 0 ? void 0 : moved !== void 0 ? { box: moved, side: nearestSide(rect, moved), maxHeight: view.bottom - view.top } : placeAnswer(entry.heightAt, view, rect, pages.get(target), [
+      const page = pages.get(target);
+      const inherited = parent === void 0 ? void 0 : placements.get(parent)?.scroll;
+      const scroll = rect === void 0 ? void 0 : inherited ?? scrollRelationship(target, rect);
+      const mode = scroll?.mode ?? "document";
+      const viewport = mode !== "document";
+      const frame = viewport ? { x: 0, y: 0 } : { x: origin.left, y: origin.top };
+      const local = rect === void 0 ? void 0 : translate(rect, -frame.x, -frame.y);
+      const localPage = page === void 0 ? void 0 : translate(page, -frame.x, -frame.y);
+      const cached = entry.placed;
+      const previousBox = cached === void 0 ? void 0 : translate(cached.placement.box, frame.x, frame.y);
+      const move = entry.pendingDrop;
+      if (rect !== void 0 && move !== void 0) {
+        const { point, width } = move;
+        entry.dropped = { point: { x: point.x - rect.left, y: point.y - rect.top }, width, relative: true };
+        entry.pendingDrop = void 0;
+      }
+      const dropped = entry.dropped;
+      const moved = rect === void 0 || dropped === void 0 ? void 0 : this.positionMoved(entry.node, dropped, rect, mode, move !== void 0);
+      if (move !== void 0 && moved !== void 0 && rect !== void 0 && dropped !== void 0) {
+        dropped.point = { x: moved.left - rect.left, y: moved.top - rect.top };
+        move.applied?.(dropped.point);
+      }
+      const obstacles2 = new Map([...controls, ...general]);
+      for (const [node, box] of targetBoxes) {
+        if (node !== target) obstacles2.set(node, box);
+      }
+      const blocked = cached !== void 0 && previousBox !== void 0 && Array.from(obstacles2).some(([node, box]) => !sameBox(cached.obstacles.get(node), box) && intersects(box, previousBox));
+      const height = view.bottom - view.top;
+      const layoutView = rect === void 0 || rect.bottom > view.top && rect.top < view.bottom ? view : translate(view, 0, (rect.top + rect.bottom - view.top - view.bottom) / 2);
+      const placement = rect === void 0 ? void 0 : moved !== void 0 ? { box: moved, side: nearestSide(rect, moved), maxHeight: height } : cached !== void 0 && cached.target === target && previousBox !== void 0 && sameBox(cached.rect, local) && sameBox(cached.page, localPage) && sameBox(cached.view, view) && entry.scroll?.mode === mode && !blocked && !placedCards.some((box) => intersects(box, previousBox)) ? { ...cached.placement, box: previousBox } : placeAnswer(entry.heightAt, layoutView, rect, page, [
         ...occupied,
         ...general.values(),
         ...Array.from(targetBoxes.values()).filter((box) => box !== rect)
-      ]);
-      if (placement === void 0 || rect === void 0) {
+      ], blocked ? oppositeSide[cached.placement.side] : void 0);
+      if (placement === void 0 || rect === void 0 || scroll === void 0) {
         this.placeGeneral(entry, false);
         if (previous === void 0) {
           for (const node of general.keys()) {
@@ -1059,45 +1233,82 @@ var Answers = class {
         if (targets.has(entry.node)) targetBoxes.set(entry.node, box);
         return;
       }
-      if (moved === void 0) occupied.push(placement.box);
+      occupied.push(placement.box);
+      placedCards.push(placement.box);
+      entry.scroll = scroll;
+      if (local !== void 0) entry.placed = {
+        target,
+        rect: local,
+        page: localPage,
+        view,
+        obstacles: obstacles2,
+        placement: { ...placement, box: translate(placement.box, -frame.x, -frame.y) }
+      };
       if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
-      placements.set(entry, { rect, placement });
+      placements.set(entry, { rect, placement, scroll });
     };
     const ordered = Array.from(anchored).sort(([, a], [, b]) => (targetBoxes.get(a)?.top ?? Infinity) - (targetBoxes.get(b)?.top ?? Infinity));
     for (const [entry] of ordered) solve(entry);
-    for (const [entry, { rect, placement }] of placements) {
+    for (const [entry, { rect, placement, scroll }] of placements) {
+      const viewport = scroll.mode !== "document";
+      entry.wrapper.classList.toggle("viewport-anchored", viewport);
+      const target = entry.placed?.target;
+      entry.wrapper.classList.toggle("target-offscreen", target !== void 0 && !(this.visibleTargets.get(target) ?? (rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth)));
+      entry.wrapper.style.transform = "";
+      const x = viewport ? 0 : -origin.left;
+      const y = viewport ? 0 : -origin.top;
       entry.unavailable.hidden = true;
       if (entry.show !== null) entry.show.hidden = true;
-      if (entry.node.parentElement !== entry.wrapper && entry.dropped === void 0) {
+      if (entry.node.parentElement !== entry.wrapper) {
         if (entry.node.parentElement === agentGeneral) this.schedulePlacement();
         entry.wrapper.prepend(entry.node);
       }
       if (entry.wrapper.parentElement !== agentAnchored) agentAnchored.append(entry.wrapper);
-      const { box, maxHeight } = placement;
-      if (entry.dropped === void 0) {
-        entry.node.style.left = `${box.left}px`;
-        entry.node.style.top = `${box.top}px`;
-        entry.node.style.width = `${box.right - box.left}px`;
-        entry.node.style.maxHeight = `${maxHeight}px`;
-      }
-      if (entry.link.parentElement === null) this.links.append(entry.link);
-      drawAnswerLink(entry.marker, entry.link, view, rect, placement);
+      const box = translate(placement.box, x, y);
+      entry.node.style.left = `${box.left}px`;
+      entry.node.style.top = `${box.top}px`;
+      entry.node.style.width = `${box.right - box.left}px`;
+      entry.node.style.maxHeight = `${placement.maxHeight}px`;
+      drawAnswerLink(entry.marker, entry.link, translate(rect, x, y), { ...placement, box });
     }
     agentGeneral.classList.toggle("scrollable", agentGeneral.scrollHeight > agentGeneral.clientHeight);
     for (const entry of this.shown.values()) {
       if (entry.stopTimer === void 0) this.startTimer(entry);
     }
   }
-  positionMoved(node, dropped) {
+  fitMoved(point, width, height, mode, anchorTop) {
+    if (mode !== "document" || anchorTop === void 0) return fitPosition(point, width, height);
+    const view = answerViewport();
+    const end = (document.scrollingElement?.scrollHeight ?? window.innerHeight) - window.innerHeight;
+    return {
+      x: clamp(point.x, view.left, view.right - width),
+      y: clamp(
+        point.y,
+        Math.max(view.top - window.scrollY, anchorTop - (view.bottom - view.top)),
+        Math.min(view.bottom + end - window.scrollY - height, anchorTop + (view.bottom - view.top) - height)
+      )
+    };
+  }
+  positionMoved(node, dropped, target, mode, moving = false) {
     const view = answerViewport();
     node.classList.add("manually-placed");
     node.style.width = `${dropped.width}px`;
     node.style.maxWidth = `${view.right - view.left}px`;
     node.style.maxHeight = `${view.bottom - view.top}px`;
-    const { width, height } = node.getBoundingClientRect();
-    const point = fitPosition(dropped.point, width, height);
-    node.style.left = `${point.x}px`;
-    node.style.top = `${point.y}px`;
+    const { width, height } = node.isConnected ? node.getBoundingClientRect() : { width: Math.min(dropped.width, view.right - view.left), height: node.scrollHeight };
+    let point = dropped.point;
+    if (target !== void 0 && dropped.relative) {
+      point = { x: target.left + point.x, y: target.top + point.y };
+    }
+    if (mode !== "tracked" || moving) {
+      point = this.fitMoved(point, width, height, mode, target?.top);
+    } else {
+      point.x = clamp(point.x, view.left, view.right - width);
+    }
+    if (target === void 0) {
+      node.style.left = `${point.x}px`;
+      node.style.top = `${point.y}px`;
+    }
     return { left: point.x, top: point.y, right: point.x + width, bottom: point.y + height };
   }
   placeGeneral(entry, unavailable) {
@@ -1106,21 +1317,23 @@ var Answers = class {
       const hidden = unavailable || !entry.hasPlace && !entry.localAnchor();
       if (entry.show.hidden !== hidden) entry.show.hidden = hidden;
     }
-    entry.link.remove();
-    if (entry.dropped !== void 0) {
-      entry.marker.hidden = true;
-      return;
-    }
-    if (entry.node.parentElement === this.ui.agentGeneral) return;
-    this.ui.agentGeneral.append(entry.node);
+    entry.placed = void 0;
+    entry.scroll = void 0;
+    if (entry.node.parentElement !== this.ui.agentGeneral) this.ui.agentGeneral.append(entry.node);
     entry.wrapper.remove();
-    for (const property of ["left", "top", "width", "max-height"]) {
+    if (entry.dropped?.relative === false) return;
+    entry.node.classList.remove("manually-placed");
+    for (const property of ["left", "top", "width", "max-width", "max-height"]) {
       entry.node.style.removeProperty(property);
     }
   }
   outline(target) {
-    const { messageHighlight } = this.ui;
     const rect = target.getBoundingClientRect();
+    this.outlined = scrollRelationship(target, rect);
+    this.drawOutline(rect);
+  }
+  drawOutline(rect) {
+    const { messageHighlight } = this.ui;
     messageHighlight.style.display = "block";
     messageHighlight.style.left = `${rect.left}px`;
     messageHighlight.style.top = `${rect.top}px`;
@@ -3383,6 +3596,7 @@ var PageSocket = class {
 var dark = `
     color-scheme: dark;
     --jp-surface: #161616;
+    --jp-surface-header: #24272d;
     --jp-field: #202124;
     --jp-hover: #303338;
     --jp-border: #474b52;
@@ -3407,6 +3621,7 @@ var styles = `
     --jp-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-family: var(--jp-font);
     --jp-surface: #fff;
+    --jp-surface-header: #f0f3f7;
     --jp-field: #f6f7fa;
     --jp-hover: #e9edf4;
     --jp-border: #d5dbe5;
@@ -3954,8 +4169,11 @@ var styles = `
   #agent-general.scrollable { overflow: auto; }
 
   #agent-anchored {
-    position: fixed;
-    inset: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
     z-index: 2147483643;
     pointer-events: none;
   }
@@ -3976,17 +4194,21 @@ var styles = `
     pointer-events: auto;
   }
 
-  #agent-anchored .agent-message { position: fixed; z-index: 1; }
+  .agent-placement { position: absolute; inset: 0; pointer-events: none; }
+  .agent-placement.target-offscreen { visibility: hidden; }
+  .agent-placement.viewport-anchored { position: fixed; }
+  #agent-anchored .agent-message { position: absolute; z-index: 1; }
   #agent-general .agent-message { max-width: 100%; flex: none; }
   #agent-general .manually-placed { position: fixed; }
   .agent-message[hidden], .agent-anchor-marker[hidden], .agent-anchor-layer g[hidden] { display: none; }
-  .agent-anchor-marker { position: fixed; pointer-events: none; border-radius: 2px; }
+  .agent-anchor-marker { position: absolute; pointer-events: none; border-radius: 2px; }
   .agent-anchor-marker.active { background: var(--jp-tint); }
   .agent-anchor-layer {
     position: absolute;
     inset: 0;
-    width: 100%;
-    height: 100%;
+    width: 1px;
+    height: 1px;
+    overflow: visible;
     color: var(--jp-anchor);
     pointer-events: none;
   }
@@ -4010,16 +4232,17 @@ var styles = `
     outline-offset: 2px;
   }
 
-  .agent-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 21px;
-    gap: 6px;
-    margin: -2px -6px 2px 0;
-  }
+  .agent-header { margin: -7px -12px 8px; }
+  #dialog-header { margin: -14px -14px 12px; }
 
   :is(.agent-header, #dialog-header) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--jp-border);
+    border-radius: calc(var(--jp-radius) - 1px) calc(var(--jp-radius) - 1px) 0 0;
+    background: var(--jp-surface-header);
     cursor: grab;
     touch-action: none;
     user-select: none;
@@ -4037,9 +4260,12 @@ var styles = `
     border-radius: 4px;
     background: transparent;
     color: var(--jp-muted);
+    cursor: inherit;
   }
-
-  .move-control:hover { background: var(--jp-hover); }
+  .move-control:is(:hover, :focus-visible) {
+    background: var(--jp-hover);
+    color: var(--jp-text);
+  }
   .move-control:focus-visible { outline: 2px solid var(--jp-focus); }
 
   .agent-dismiss {
@@ -4105,14 +4331,6 @@ var styles = `
     margin-bottom: 8px;
     font-weight: 700;
     line-height: 1.3;
-  }
-
-  #dialog-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    margin-bottom: 8px;
   }
 
   #dialog-label { font-size: 14px; margin: 0; flex: 1; }
