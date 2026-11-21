@@ -72,25 +72,7 @@ async fn host_and_cross_site_rules() {
         ("sec-fetch-dest", "empty"),
     ];
 
-    let path = "/?first=1&second=2";
-    let refused = send("GET", path, &navigate).await;
-    assert_eq!(refused.status, 403);
-    assert_eq!(
-        refused.headers.get(header::CONTENT_TYPE).unwrap(),
-        "text/html; charset=utf-8"
-    );
-    assert!(
-        refused
-            .body
-            .contains(&format!("<code>{origin}/?first=1&amp;second=2</code>"))
-    );
-    let head = send("HEAD", path, &navigate).await;
-    assert_eq!(head.status, 403);
-    assert!(head.body.is_empty());
-
-    // Opening the page from the address bar works and carries frame-ancestors.
-    let [_, mode, dest] = navigate;
-    let navigate = [("sec-fetch-site", "none"), mode, dest];
+    // Top-level navigation from anywhere works; it carries frame-ancestors.
     let page: Reply = send("GET", "/", &navigate).await;
     assert_eq!(page.status, 200);
     let csp: Vec<_> = page

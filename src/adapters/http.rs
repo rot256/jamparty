@@ -162,21 +162,6 @@ pub(crate) fn map_incoming_response(response: Response<Incoming>) -> Response<Ap
     Response::from_parts(parts, incoming_body(body))
 }
 
-pub(crate) fn escape_html(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            character => escaped.push(character),
-        }
-    }
-    escaped
-}
-
 #[cfg(test)]
 mod upload_tests {
     use std::{convert::Infallible, sync::Arc};

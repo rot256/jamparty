@@ -35,8 +35,8 @@ use tokio::{
 use crate::{
     Report,
     adapters::http::{
-        AppBody, BodyError, HEADER_READ_TIMEOUT, RequestError, escape_html, full_body,
-        json_response, map_incoming_response, read_upload,
+        AppBody, BodyError, HEADER_READ_TIMEOUT, RequestError, full_body, json_response,
+        map_incoming_response, read_upload,
     },
     core::{
         request::{
@@ -211,20 +211,6 @@ async fn handle(
             }
             Err(error) => error.into(),
         },
-        Err(Refusal::CrossSite | Refusal::BadOrigin) if page_load => {
-            let target = request
-                .uri()
-                .path_and_query()
-                .map_or("/", |uri| uri.as_str());
-            let url = escape_html(&format!("{}{target}", origin.origin()));
-            let html = format!(
-                "<!doctype html><meta charset=\"utf-8\"><title>Navigation refused</title>\
-                 <h1>Navigation refused</h1>\
-                 <p>Open this page from the address bar or from within the share.</p>\
-                 <p>Copy this URL: <code>{url}</code></p>"
-            );
-            local_html(StatusCode::FORBIDDEN, Bytes::from(html))
-        }
         Err(refusal) => refused(refusal),
     };
     if pdf {
@@ -498,25 +484,15 @@ async fn connection(session: &Session, wait: Duration) -> Option<Arc<Control>> {
 
 /// The page a browser gets when it loads a page the share cannot serve now.
 fn unreachable_page() -> Response<AppBody> {
-    let mut response = local_html(
-        StatusCode::SERVICE_UNAVAILABLE,
-        Bytes::from_static(UNREACHABLE_PAGE.as_bytes()),
-    );
-    response
-        .headers_mut()
-        .insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
-    response
-}
-
-fn local_html(status: StatusCode, html: Bytes) -> Response<AppBody> {
-    let mut response = Response::new(full_body(html));
-    *response.status_mut() = status;
+    let mut response = Response::new(full_body(Bytes::from_static(UNREACHABLE_PAGE.as_bytes())));
+    *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
     response
 }
 
