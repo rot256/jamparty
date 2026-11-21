@@ -10,13 +10,13 @@ const { choosePdfTitle } = await import(
   `data:text/javascript;base64,${Buffer.from(module.contents).toString("base64")}`
 );
 
-test("prefers a normalized XMP title over the Info title", () => {
-  assert.equal(choosePdfTitle("/paper.pdf", "  Research\n\t \u0000 notes ", "Info"), "Research notes");
+test("prefers a normalized Info title over the XMP title", () => {
+  assert.equal(choosePdfTitle("/paper.pdf", "  Research\n\t \u0000 notes ", "ResearchRecherche"), "Research notes");
 });
 
-test("uses the Info title when XMP is empty or unusable", () => {
-  assert.equal(choosePdfTitle("/paper.pdf", " \u0000\t ", "  Info   title "), "Info title");
-  assert.equal(choosePdfTitle("/paper.pdf", null, "Info"), "Info");
+test("uses the XMP title when Info is empty or unusable", () => {
+  assert.equal(choosePdfTitle("/paper.pdf", " \u0000\t ", "  XMP   title "), "XMP title");
+  assert.equal(choosePdfTitle("/paper.pdf", null, "XMP"), "XMP");
 });
 
 test("strips controls and caps titles without splitting Unicode code points", () => {

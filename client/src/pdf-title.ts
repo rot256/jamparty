@@ -4,8 +4,10 @@ function cleanTitle(value: unknown): string {
     .replace(/^(.{199}).{2}.*$/u, "$1…");
 }
 
-export function choosePdfTitle(pathname: string, xmpTitle?: unknown, infoTitle?: unknown): string {
-  const title = cleanTitle(xmpTitle) || cleanTitle(infoTitle);
+/** The Info title, else the XMP title (PDF.js joins its language
+ *  alternatives into one string), else the file name. */
+export function choosePdfTitle(pathname: string, infoTitle?: unknown, xmpTitle?: unknown): string {
+  const title = cleanTitle(infoTitle) || cleanTitle(xmpTitle);
   if (title) return title;
 
   const fileName = pathname.split("/").pop() ?? "";

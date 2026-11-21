@@ -245,7 +245,7 @@ export class PdfViewer {
         .then(({ info, metadata }) => {
           // PDF.js returns null when the document has no XMP metadata.
           const xmp = metadata as typeof metadata | null;
-          return choosePdfTitle(pathname, xmp?.get("dc:title"), "Title" in info ? info.Title : undefined);
+          return choosePdfTitle(pathname, "Title" in info ? info.Title : undefined, xmp?.get("dc:title"));
         })
         .catch(() => choosePdfTitle(pathname))
         .then((title) => {
