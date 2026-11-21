@@ -60,13 +60,17 @@ impl Write for Escaping<'_, '_> {
     }
 }
 
-/// Control characters, and the bidirectional controls that make text
-/// read other than it is.
+/// Control characters, the bidirectional controls that make text read
+/// other than it is, and the Unicode line and paragraph separators.
 pub(crate) fn escaped(character: char) -> bool {
     character.is_control()
         || matches!(
             character,
-            '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
         )
 }
 

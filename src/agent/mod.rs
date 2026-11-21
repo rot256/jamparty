@@ -168,17 +168,12 @@ mod tests {
         assert!(line.ends_with('\n'));
         for character in controls {
             assert!(!line.contains(character));
-            // Five text fields preserve every character. Attachment names
-            // already discard most bidi controls but preserve these three.
-            let fields = if matches!(character, '\u{061c}' | '\u{2028}' | '\u{2029}') {
-                6
-            } else {
-                5
-            };
+            // Five text fields preserve every character; attachment names
+            // drop them all when parsed.
             assert_eq!(
                 line.matches(&format!("\\u{:04x}", u32::from(character)))
                     .count(),
-                fields
+                5
             );
         }
         assert_eq!(serde_json::from_str::<Comment>(&line).unwrap(), parsed);
