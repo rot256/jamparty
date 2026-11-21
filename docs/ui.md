@@ -229,8 +229,10 @@ bar.
   joiner that started over), it sends them as a change for this join; a
   remembered name keeps the prompt away. A new share is a new origin and
   starts from the defaults.
-- The defaults come from `~/.config/jamparty/settings.json` (mode 0600, the
-  same fields), which the person writes and jamparty only reads.
+- The defaults come from `~/.config/jamparty/settings.json`
+  (`$XDG_CONFIG_HOME/jamparty/settings.json` when `XDG_CONFIG_HOME` is set;
+  mode 0600, the same fields), which the person writes and jamparty only
+  reads.
   `jamparty join --name` sets the name for one run, until one is chosen in
   the page.
 - A name change mid-session is sent to the share and updates presence for

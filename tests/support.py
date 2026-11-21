@@ -176,7 +176,15 @@ def join_process(
     if port is not None:
         arguments += ["--port", str(port)]
     if answer_timeout is not None:
-        arguments += ["--answer-timeout", str(answer_timeout)]
+        # Settings come only from the file (and the page).
+        path = settings_path(home)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        settings = cast(
+            dict[str, object], json.loads(path.read_text()) if path.exists() else {}
+        )
+        settings["answerTimeout"] = answer_timeout
+        _ = path.write_text(json.dumps(settings))
+        path.chmod(0o600)
     process = Process(
         [*arguments, "--share-addr", shared.address],
         environment(home),
