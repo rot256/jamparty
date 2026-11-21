@@ -309,6 +309,15 @@ def test_the_widest_custom_timeout_keeps_its_row_on_one_line(
             assert label_box["y"] + label_box["height"] <= (
                 group_box["y"] + group_box["height"] + 1
             ), size
+            # And every button sits on that one line.
+            tops = cast(
+                list[float],
+                timeouts.evaluate(
+                    "group => [...group.children].filter((b) => !b.hidden)"
+                    ".map((b) => b.getBoundingClientRect().top)"
+                ),
+            )
+            assert max(tops) - min(tops) < 1, (size, tops)
 
 
 def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None:
