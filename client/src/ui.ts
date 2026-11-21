@@ -3,8 +3,9 @@
 // pill expands into, the control panel, other people's cursors, the
 // agent's answers and the dialogs.
 
+import { ANSWER_TIMEOUT_PRESETS, answerTimeoutLabel } from "./answer-timeout";
 import { HOST_ID } from "./config";
-import { DEFAULT_ANSWER_TIMEOUT, DEFAULT_CLEAR_ANSWERS_KEY, MAX_ANSWER_TIMEOUT, MAX_COMMENT, MAX_NAME } from "./generated/api";
+import { DEFAULT_ANSWER_TIMEOUT, DEFAULT_CLEAR_ANSWERS_KEY, MAX_COMMENT, MAX_NAME } from "./generated/api";
 import type { TextSize } from "./generated/api";
 import { styles } from "./styles";
 
@@ -61,9 +62,14 @@ const MARKUP = `
       <button class="chip" id="clear-answers-key" type="button" aria-label="Key for clear answers">${DEFAULT_CLEAR_ANSWERS_KEY.toUpperCase()}</button>
       <button id="clear-answers" type="button">Clear</button>
     </div>
-    <div class="control">
-      <label class="label" for="answer-timeout">Answer timeout (s; 0 = off)</label>
-      <input id="answer-timeout" type="number" required min="0" max="${MAX_ANSWER_TIMEOUT}" step="1" value="${DEFAULT_ANSWER_TIMEOUT}">
+    <div class="control" id="hide-answers-row">
+      <span class="label" id="hide-answers-label">Hide answers</span>
+      <span class="segments" role="group" aria-labelledby="hide-answers-label">
+        ${ANSWER_TIMEOUT_PRESETS.map((seconds) => `
+          <button class="segment" type="button" data-answer-timeout="${seconds}" aria-pressed="${seconds === DEFAULT_ANSWER_TIMEOUT}">${answerTimeoutLabel(seconds)}</button>
+        `).join("")}
+        <button class="segment" id="custom-answer-timeout" type="button" aria-pressed="true" hidden></button>
+      </span>
     </div>
     <div class="control" id="corner-row">
       <span class="label" id="corner-label">Corner</span>
@@ -177,8 +183,8 @@ export class Ui {
   readonly commentModeKey: HTMLButtonElement;
   readonly commentMode: HTMLButtonElement;
   readonly clearAnswersKey: HTMLButtonElement;
+  readonly customAnswerTimeout: HTMLButtonElement;
   readonly clearAnswers: HTMLButtonElement;
-  readonly answerTimeout: HTMLInputElement;
   readonly showCursorKey: HTMLButtonElement;
   readonly showCursor: HTMLButtonElement;
   readonly nameField: HTMLInputElement;
@@ -269,8 +275,8 @@ export class Ui {
     this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
     this.commentMode = find("#comment-mode", HTMLButtonElement);
     this.clearAnswersKey = find("#clear-answers-key", HTMLButtonElement);
+    this.customAnswerTimeout = find("#custom-answer-timeout", HTMLButtonElement);
     this.clearAnswers = find("#clear-answers", HTMLButtonElement);
-    this.answerTimeout = find("#answer-timeout", HTMLInputElement);
     this.showCursorKey = find("#show-cursor-key", HTMLButtonElement);
     this.showCursor = find("#show-cursor", HTMLButtonElement);
     this.nameField = find("#name-field", HTMLInputElement);

@@ -1435,6 +1435,19 @@ var Connection = class {
   }
 };
 
+// client/src/answer-timeout.ts
+var ANSWER_TIMEOUT_PRESETS = [0, 10, 30, 60, 300];
+function answerTimeoutLabel(seconds) {
+  if (seconds === 0) return "Never";
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes === 0) return `${seconds} s`;
+  return remainder === 0 ? `${minutes} min` : `${minutes} min ${remainder} s`;
+}
+function answerTimeoutPreset(value) {
+  return ANSWER_TIMEOUT_PRESETS.find((seconds) => String(seconds) === value);
+}
+
 // client/src/remembered.ts
 var MAX_AGE_SECS = 365 * 24 * 60 * 60;
 function isSwitch(value) {
@@ -1566,11 +1579,15 @@ var Panel = class {
     ui.clearAnswers.addEventListener("click", () => {
       this.onClearAnswers();
     });
-    ui.answerTimeout.addEventListener("change", () => {
-      if (ui.answerTimeout.reportValidity()) {
-        void this.change({ answerTimeout: ui.answerTimeout.valueAsNumber });
-      }
-    });
+    this.answerTimeouts = ui.shadow.querySelectorAll("button[data-answer-timeout]");
+    for (const button of this.answerTimeouts) {
+      button.addEventListener("click", () => {
+        const answerTimeout = answerTimeoutPreset(button.dataset.answerTimeout);
+        if (answerTimeout !== void 0 && this.settings?.answerTimeout !== answerTimeout) {
+          void this.change({ answerTimeout });
+        }
+      });
+    }
     ui.gear.addEventListener("click", () => {
       this.toggle();
     });
@@ -1628,6 +1645,7 @@ var Panel = class {
   }
   ui;
   changeSettings;
+  answerTimeouts;
   themes;
   textSizes;
   settings = null;
@@ -1670,7 +1688,14 @@ var Panel = class {
     this.settings = settings;
     const { ui } = this;
     ui.commentMode.setAttribute("aria-checked", String(settings.commentMode === "on"));
-    ui.answerTimeout.value = String(settings.answerTimeout);
+    const selectedPreset = String(settings.answerTimeout);
+    for (const button of this.answerTimeouts) {
+      button.setAttribute("aria-pressed", String(button.dataset.answerTimeout === selectedPreset));
+    }
+    ui.customAnswerTimeout.hidden = answerTimeoutPreset(selectedPreset) !== void 0;
+    if (!ui.customAnswerTimeout.hidden) {
+      ui.customAnswerTimeout.textContent = answerTimeoutLabel(settings.answerTimeout);
+    }
     ui.showCursor.setAttribute("aria-checked", String(settings.showCursor === "on"));
     for (const [action, chip] of this.chips()) {
       if (this.listening !== action) chip.textContent = keyLabel(settings.keys[action]);
@@ -3956,7 +3981,9 @@ var styles = `
     border-radius: 6px;
   }
 
-  #text-size-row, #text-size-row .segments { flex-wrap: wrap; }
+  :is(#text-size-row, #hide-answers-row), :is(#text-size-row, #hide-answers-row) .segments { flex-wrap: wrap; }
+
+  #hide-answers-row .segment { padding-inline: calc(5 * var(--jp-unit)); white-space: nowrap; }
 
   .control .label { flex-grow: 1; cursor: pointer; font-weight: 400; margin: 0; }
 
@@ -4522,17 +4549,6 @@ var styles = `
   @media (prefers-reduced-motion: reduce) {
     .agent-timeout { animation-timing-function: steps(var(--answer-timeout-steps), end); }
   }
-  #answer-timeout {
-    width: calc(60 * var(--jp-unit));
-    min-width: 0;
-    padding: calc(4 * var(--jp-unit)) calc(6 * var(--jp-unit));
-    border: 1px solid var(--jp-input-border);
-    border-radius: 5px;
-    background: var(--jp-field);
-    color: var(--jp-text);
-    font: calc(12 * var(--jp-unit))/1.3 var(--jp-font);
-  }
-
   :is(button, a, input):focus-visible { outline: 2px solid var(--jp-focus); outline-offset: 1px; }
 
   .agent-choices { display: flex; flex-wrap: wrap; gap: calc(6 * var(--jp-unit)); margin-top: calc(8 * var(--jp-unit)); }
@@ -4595,9 +4611,14 @@ var MARKUP = `
       <button class="chip" id="clear-answers-key" type="button" aria-label="Key for clear answers">${DEFAULT_CLEAR_ANSWERS_KEY.toUpperCase()}</button>
       <button id="clear-answers" type="button">Clear</button>
     </div>
-    <div class="control">
-      <label class="label" for="answer-timeout">Answer timeout (s; 0 = off)</label>
-      <input id="answer-timeout" type="number" required min="0" max="${MAX_ANSWER_TIMEOUT}" step="1" value="${DEFAULT_ANSWER_TIMEOUT}">
+    <div class="control" id="hide-answers-row">
+      <span class="label" id="hide-answers-label">Hide answers</span>
+      <span class="segments" role="group" aria-labelledby="hide-answers-label">
+        ${ANSWER_TIMEOUT_PRESETS.map((seconds) => `
+          <button class="segment" type="button" data-answer-timeout="${seconds}" aria-pressed="${seconds === DEFAULT_ANSWER_TIMEOUT}">${answerTimeoutLabel(seconds)}</button>
+        `).join("")}
+        <button class="segment" id="custom-answer-timeout" type="button" aria-pressed="true" hidden></button>
+      </span>
     </div>
     <div class="control" id="corner-row">
       <span class="label" id="corner-label">Corner</span>
@@ -4710,8 +4731,8 @@ var Ui = class _Ui {
   commentModeKey;
   commentMode;
   clearAnswersKey;
+  customAnswerTimeout;
   clearAnswers;
-  answerTimeout;
   showCursorKey;
   showCursor;
   nameField;
@@ -4797,8 +4818,8 @@ var Ui = class _Ui {
     this.commentModeKey = find("#comment-mode-key", HTMLButtonElement);
     this.commentMode = find("#comment-mode", HTMLButtonElement);
     this.clearAnswersKey = find("#clear-answers-key", HTMLButtonElement);
+    this.customAnswerTimeout = find("#custom-answer-timeout", HTMLButtonElement);
     this.clearAnswers = find("#clear-answers", HTMLButtonElement);
-    this.answerTimeout = find("#answer-timeout", HTMLInputElement);
     this.showCursorKey = find("#show-cursor-key", HTMLButtonElement);
     this.showCursor = find("#show-cursor", HTMLButtonElement);
     this.nameField = find("#name-field", HTMLInputElement);

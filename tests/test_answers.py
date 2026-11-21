@@ -283,13 +283,9 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
 
 
 def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None:
-    path = settings_path(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_text('{"answerTimeout":3600}')
-    path.chmod(0o600)
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path, shared) as joined,
+        join(tmp_path, shared, answer_timeout=45) as joined,
     ):
         _ = page.goto(joined.url)
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
@@ -300,6 +296,12 @@ def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None
         answer = overlay(page, ".agent-message")
         expect(answer).to_be_visible()
         overlay(page, "#gear").click()
+        timeouts = overlay(page, "#panel").get_by_role("group", name="Hide answers")
+        custom = timeouts.get_by_role("button", name="45 s", exact=True)
+        expect(custom).to_have_attribute("aria-pressed", "true")
+        expect(answer.locator(".agent-timeout")).to_have_css(
+            "animation-duration", "45s"
+        )
         # Freeze after layout, then start a fresh ten-second countdown.
         # Every assertion uses paused time, independent of startup speed.
         page.clock.pause_at(
@@ -307,9 +309,10 @@ def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None
                 cast(int, page.evaluate("Date.now() + 10_000")) / 1000, UTC
             )
         )
-        field = overlay(page, "#answer-timeout")
-        field.fill("10")
-        field.press("Tab")
+        ten = timeouts.get_by_role("button", name="10 s", exact=True)
+        ten.click()
+        expect(ten).to_have_attribute("aria-pressed", "true")
+        expect(custom).to_have_count(0)
         expect(answer.locator(".agent-timeout")).to_have_css(
             "animation-duration", "10s"
         )
@@ -338,7 +341,8 @@ def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None
         _ = page.reload()
         expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
         expect(answer).to_have_count(0)
-        assert path.read_text() == '{"answerTimeout":3600}'
+        overlay(page, "#gear").click()
+        expect(ten).to_have_attribute("aria-pressed", "true")
 
 
 def test_clear_answers_key_and_rebinding(tmp_path: Path, page: Page) -> None:
@@ -408,22 +412,22 @@ def test_timeout_panel_can_enable_and_disable(tmp_path: Path, page: Page) -> Non
         bar = answer.locator(".agent-timeout")
         expect(bar).to_have_css("animation-timing-function", "steps(30)")
         overlay(page, "#gear").click()
-        field = overlay(page, "#answer-timeout")
-        expect(field).to_have_value("30")
-        field.fill("3600")
-        field.press("Tab")
-        expect(bar).to_be_visible()
-        expect(bar).to_have_css("animation-timing-function", "steps(3600)")
-        page.clock.pause_at(
-            datetime.fromtimestamp(
-                cast(int, page.evaluate("Date.now() + 10_000")) / 1000, UTC
-            )
-        )
-        field.fill("0")
-        field.press("Tab")
+        timeouts = overlay(page, "#panel").get_by_role("group", name="Hide answers")
+        expect(
+            timeouts.get_by_role("button", name="30 s", exact=True)
+        ).to_have_attribute("aria-pressed", "true")
+        timeouts.get_by_role("button", name="5 min", exact=True).click()
+        expect(bar).to_have_css("animation-timing-function", "steps(300)")
+        never = timeouts.get_by_role("button", name="Never", exact=True)
+        never.click()
+        expect(never).to_have_attribute("aria-pressed", "true")
         expect(bar).to_have_count(0)
-        page.clock.fast_forward(3_600_001)
+        page.clock.fast_forward(300_001)
         expect(answer).to_be_visible()
+        _ = page.reload()
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        overlay(page, "#gear").click()
+        expect(never).to_have_attribute("aria-pressed", "true")
 
 
 def test_multiple_choice_first_pick_wins(tmp_path: Path, browser: Browser) -> None:

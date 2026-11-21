@@ -127,7 +127,7 @@ bar.
 | Comment mode | switch | on (open question, see end) | `C` |
 | Show my cursor | switch | **off** | `X` |
 | Clear answers | action | dismiss every visible answer | `D` |
-| Answer timeout | seconds | **30** (`0` turns it off) | — |
+| Hide answers | Never, 10 s, 30 s, 1 min, 5 min | **30 s** | — |
 | Corner | four buttons ↖ ↗ ↙ ↘ | bottom right | |
 | Theme | Auto, Dark, Light | Auto | |
 
@@ -154,9 +154,12 @@ bar.
   to another action, one jamparty uses (`/`, Escape), or one the page needs
   (Enter, Tab, Space) is refused with a short message instead of
   overwriting. The joiner refuses the same keys, whatever a page sends.
-- Answer timeout dismisses each answer after 1–3600 seconds of unpaused
-  time; `0` disables it. A thin bar on the bottom shows the time left;
-  hover or focus inside the answer pauses it. Reduced motion updates the
+- Hide answers dismisses each answer after the selected amount of unpaused
+  time. With Never selected, answers stay until dismissed or cleared. If the
+  settings file or command line supplies a custom duration, the panel shows it
+  as an extra selected segment until a preset is chosen. A thin bar at the
+  bottom shows the time left.
+  Hover or focus inside the answer pauses it. Reduced motion updates the
   bar once per second without smooth motion. A changed timeout restarts
   visible answers. Timeout and Clear answers
   use the dismiss button's session dismissal behavior. Keys are ignored in

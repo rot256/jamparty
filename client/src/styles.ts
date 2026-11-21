@@ -328,7 +328,9 @@ export const styles = `
     border-radius: 6px;
   }
 
-  #text-size-row, #text-size-row .segments { flex-wrap: wrap; }
+  :is(#text-size-row, #hide-answers-row), :is(#text-size-row, #hide-answers-row) .segments { flex-wrap: wrap; }
+
+  #hide-answers-row .segment { padding-inline: calc(5 * var(--jp-unit)); white-space: nowrap; }
 
   .control .label { flex-grow: 1; cursor: pointer; font-weight: 400; margin: 0; }
 
@@ -894,17 +896,6 @@ export const styles = `
   @media (prefers-reduced-motion: reduce) {
     .agent-timeout { animation-timing-function: steps(var(--answer-timeout-steps), end); }
   }
-  #answer-timeout {
-    width: calc(60 * var(--jp-unit));
-    min-width: 0;
-    padding: calc(4 * var(--jp-unit)) calc(6 * var(--jp-unit));
-    border: 1px solid var(--jp-input-border);
-    border-radius: 5px;
-    background: var(--jp-field);
-    color: var(--jp-text);
-    font: calc(12 * var(--jp-unit))/1.3 var(--jp-font);
-  }
-
   :is(button, a, input):focus-visible { outline: 2px solid var(--jp-focus); outline-offset: 1px; }
 
   .agent-choices { display: flex; flex-wrap: wrap; gap: calc(6 * var(--jp-unit)); margin-top: calc(8 * var(--jp-unit)); }
