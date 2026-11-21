@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use tokio::fs;
 
 use crate::{
-    adapters::http::{AppBody, full_body},
+    adapters::http::{AppBody, escape_html, full_body},
     share::files::{directory_url, encode_name, visible_child},
 };
 
@@ -156,21 +156,6 @@ fn human_size(bytes: u64) -> String {
         }
     }
     format!("{:.1} EiB", size / 1024.0)
-}
-
-fn escape_html(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            character => escaped.push(character),
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]
