@@ -48,8 +48,8 @@ use crate::{
         settings,
     },
     core::{
-        name::JoinerName, port::Port, request::LocalOrigin, settings::SettingsOverride,
-        token::PartyToken, version::Incompatible,
+        name::JoinerName, port::Port, request::LocalOrigin, token::PartyToken,
+        version::Incompatible,
     },
     join::{
         connection::{Dial, Final, Welcome},
@@ -70,7 +70,6 @@ pub(crate) struct JoinConfig {
     /// The settings file (`adapters::settings`): read at start for the
     /// defaults, never written.
     pub(crate) settings: PathBuf,
-    pub(crate) overrides: SettingsOverride,
     /// The joiner's iroh key for this run: `jamparty join` makes a fresh one
     /// each time and never stores it; reconnects keep it.
     pub(crate) key: SecretKey,
@@ -332,7 +331,6 @@ impl Joiner {
             name,
             default_name,
             settings: path,
-            overrides,
             key,
             net,
             share_addrs,
@@ -342,7 +340,7 @@ impl Joiner {
             proxy,
         } = config;
         let preferences = Preferences {
-            settings: overrides.apply(settings::load(&path)?)?,
+            settings: settings::load(&path)?,
             given: name,
             default: default_name,
         };

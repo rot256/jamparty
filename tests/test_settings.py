@@ -234,7 +234,11 @@ def test_the_name_prompt_and_settings_kept_for_the_share(
 def test_the_settings_file_gives_the_defaults(tmp_path: Path, page: Page) -> None:
     path = settings_path(tmp_path)
     path.parent.mkdir(parents=True)
-    _ = path.write_text('{"name": "erin", "corner": "top-left"}')
+    saved = (
+        '{"name":"erin","corner":"top-left","answerTimeout":5,'
+        '"keys":{"commentMode":"k","showCursor":"F2","clearAnswers":"q"}}'
+    )
+    _ = path.write_text(saved)
     path.chmod(0o600)
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
@@ -245,11 +249,15 @@ def test_the_settings_file_gives_the_defaults(tmp_path: Path, page: Page) -> Non
         expect(overlay(page, "#name-dialog")).to_be_hidden()
         overlay(page, "#gear").click()
         expect(overlay(page, "#name-field")).to_have_value("erin")
+        expect(overlay(page, "#answer-timeout")).to_have_value("5")
+        expect(overlay(page, "#comment-mode-key")).to_have_text("K")
+        expect(overlay(page, "#show-cursor-key")).to_have_text("F2")
+        expect(overlay(page, "#clear-answers-key")).to_have_text("Q")
         overlay(page, '.corner[data-corner="bottom-right"]').click()
         expect(page.locator("#jamparty")).to_have_attribute(
             "data-corner", "bottom-right"
         )
-    assert path.read_text() == '{"name": "erin", "corner": "top-left"}'
+    assert path.read_text() == saved
 
 
 # Several joiners at once: alice, bob and carol, each with their own home

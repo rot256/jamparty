@@ -171,14 +171,12 @@ bar.
   visible answers. Timeout and Clear answers
   use the dismiss button's session dismissal behavior. Keys are ignored in
   text fields.
-- Settings JSON uses `answerTimeout` (seconds, default 30; 0 turns it
-  off) and `keys.clearAnswers` (default `"d"`), alongside
-  `keys.commentMode` and `keys.showCursor`.
-  `jamparty join --answer-timeout N --clear-answers-key KEY` overrides the
-  settings file for a join; `--comment-mode-key` and `--show-cursor-key`
-  override the other bindings. All bindings must be distinct, ignoring case.
-  Page changes remain in the per-share cookie and never write the
-  settings file.
+- The gear panel starts with defaults from `~/.config/jamparty/settings.json`.
+  The file uses `answerTimeout` (seconds, default 30, or 0 to turn it off)
+  and `keys.clearAnswers` (default `"d"`), alongside `keys.commentMode`
+  and `keys.showCursor`. All bindings must be distinct, ignoring case.
+  Changes made in the gear panel are saved in the per-share cookie.
+  jamparty only reads the settings file.
 - Bottom row: `N here` on the left, overlapping avatar circles with
   initials on the right (the joiner's own outlined, others filled in their
   colour); the full name on hover. No paths or locations.

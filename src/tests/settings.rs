@@ -27,7 +27,6 @@ async fn joiner(share: &Share, name: Option<&str>, settings: &Path) -> Joiner {
         name: name.map(|name| name.parse().unwrap()),
         default_name: "carol@box".parse().unwrap(),
         settings: settings.to_owned(),
-        overrides: Default::default(),
         key: generate_key(&SystemRng),
         net: net(),
         share_addrs: share.direct_addrs(),
