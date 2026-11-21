@@ -260,7 +260,9 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
         to_you = alice_page.locator("#jamparty .agent-to").first
         expect(to_you).to_have_text("to you")
         expect(to_you).to_have_css("color", "rgb(83, 95, 113)")
-        expect(to_you).to_have_css("font-size", "11px")
+        assert to_you.evaluate(
+            "node => parseFloat(getComputedStyle(node).fontSize)"
+        ) == pytest.approx(12.375, abs=0.02)
         expect(to_you).to_have_css("font-weight", "700")
 
         # An ambiguous or unknown name is refused, with the candidates.
@@ -1009,7 +1011,7 @@ def test_clipped_answer_keeps_internal_scroll(tmp_path: Path, page: Page) -> Non
         )
         assert answer.evaluate("(node) => node.scrollTop") == 200
         page.set_viewport_size({"width": 540, "height": 620})
-        expect(answer).not_to_have_css("width", "340px")
+        expect(answer).not_to_have_css("width", "382.5px")
         assert answer.evaluate("(node) => node.scrollTop") == 200
 
 

@@ -26,6 +26,7 @@ interface Shown {
     page: Box | undefined;
     view: Box;
     placement: Placement;
+    scale: number;
     obstacles: ReadonlyMap<Element, Box>;
   } | undefined;
   scroll: ScrollRelationship | undefined;
@@ -505,7 +506,12 @@ export class Answers {
     // Anchored content is fixed for the lifetime of the answer. Measure
     // each width without changing the live card's overflow or scroll.
     const heights = new Map<number, number>();
+    let measuredScale = this.ui.textScale;
     const heightAt = (width: number): number => {
+      if (measuredScale !== this.ui.textScale) {
+        heights.clear();
+        measuredScale = this.ui.textScale;
+      }
       const cached = heights.get(width);
       if (cached !== undefined) return cached;
       const measure = node.cloneNode(true) as HTMLElement;
@@ -528,7 +534,7 @@ export class Answers {
       node, wrapper, marker, link, unavailable, show, target, localAnchor, hasPlace: entry !== undefined, heightAt,
       dropped: undefined, pendingDrop: undefined, placed: undefined, scroll: undefined,
       endMove: moveBy(header, node, (point, width, applied) => {
-        shown.pendingDrop = { point, width: shown.dropped?.width ?? width, applied };
+        shown.pendingDrop = { point, width: shown.dropped?.width ?? width / this.ui.textScale, applied };
         this.schedulePlacement();
       }, () => {
         const previous = shown.dropped;
@@ -567,6 +573,11 @@ export class Answers {
     for (const { node } of this.shown.values()) {
       node.querySelector<HTMLButtonElement>(".agent-dismiss")?.click();
     }
+  }
+
+  /** Reposition cards and their connectors after the overlay changes size. */
+  textSizeChanged(): void {
+    this.schedulePlacement();
   }
 
   /** A changed duration gives every visible answer a fresh countdown. */
@@ -765,7 +776,8 @@ export class Answers {
       }
     }
     const sectionsHeight = this.sections?.offsetHeight ?? 0;
-    const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14}px`;
+    const scale = this.ui.textScale;
+    const sectionsOffset = `${sectionsHeight === 0 ? 0 : sectionsHeight + 14 * scale}px`;
     if (agentGeneral.style.getPropertyValue("--sections-offset") !== sectionsOffset) {
       agentGeneral.style.setProperty("--sections-offset", sectionsOffset);
     }
@@ -865,14 +877,14 @@ export class Answers {
         ? { box: moved, side: nearestSide(rect, moved), maxHeight: height }
         : cached !== undefined && cached.target === target && previousBox !== undefined &&
             sameBox(cached.rect, local) && sameBox(cached.page, localPage) && sameBox(cached.view, view) &&
-            entry.scroll?.mode === mode && !blocked &&
+            cached.scale === scale && entry.scroll?.mode === mode && !blocked &&
             !placedCards.some((box) => intersects(box, previousBox))
           ? { ...cached.placement, box: previousBox }
           : placeAnswer(entry.heightAt, layoutView, rect, page, [
             ...occupied,
             ...general.values(),
             ...Array.from(targetBoxes.values()).filter((box) => box !== rect),
-          ], blocked ? oppositeSide[cached.placement.side] : undefined);
+          ], blocked ? oppositeSide[cached.placement.side] : undefined, scale);
       if (placement === undefined || rect === undefined || scroll === undefined) {
         this.placeGeneral(entry, false);
         if (previous === undefined) {
@@ -895,7 +907,7 @@ export class Answers {
       placedCards.push(placement.box);
       entry.scroll = scroll;
       if (local !== undefined) entry.placed = {
-        target, rect: local, page: localPage, view, obstacles,
+        target, rect: local, page: localPage, view, obstacles, scale,
         placement: { ...placement, box: translate(placement.box, -frame.x, -frame.y) },
       };
       if (targets.has(entry.node)) targetBoxes.set(entry.node, placement.box);
@@ -954,12 +966,13 @@ export class Answers {
   ): Box {
     const view = answerViewport();
     node.classList.add("manually-placed");
-    node.style.width = `${dropped.width}px`;
+    const preferredWidth = dropped.width * this.ui.textScale;
+    node.style.width = `${preferredWidth}px`;
     node.style.maxWidth = `${view.right - view.left}px`;
     node.style.maxHeight = `${view.bottom - view.top}px`;
     const { width, height } = node.isConnected
       ? node.getBoundingClientRect()
-      : { width: Math.min(dropped.width, view.right - view.left), height: node.scrollHeight };
+      : { width: Math.min(preferredWidth, view.right - view.left), height: node.scrollHeight };
     let point = dropped.point;
     if (target !== undefined && dropped.relative) {
       point = { x: target.left + point.x, y: target.top + point.y };

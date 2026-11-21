@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+import pytest
 from playwright.sync_api import (
     Browser,
     Page,
@@ -219,7 +220,9 @@ def test_cursors_follow_pointers_on_the_same_page(
         bob_page.mouse.move(300, 250)
         expect(cursors(alice_page)).to_have_count(1)
         expect(cursors(alice_page).locator(".tag")).to_have_text("bob")
-        expect(cursors(alice_page).locator(".tag")).to_have_css("font-size", "11px")
+        assert cursors(alice_page).locator(".tag").evaluate(
+            "node => parseFloat(getComputedStyle(node).fontSize)"
+        ) == pytest.approx(12.375, abs=0.02)
         eventually("the cursor at bob's pointer", lambda: near(alice_page, 300, 250))
         bob_page.mouse.move(500, 320)
         eventually("the cursor following", lambda: near(alice_page, 500, 320))

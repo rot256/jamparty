@@ -60,7 +60,7 @@ function sideBands(view: Box, target: Box, gap: number): Band[] {
 
 export function placeAnswer(
   heightAt: (width: number) => number, view: Box, target: Box, page: Box | undefined, occupied: readonly Box[],
-  preferredSide?: Side,
+  preferredSide?: Side, scale = 1,
 ): Placement | undefined {
   const bands: Band[] = [
     ...(page === undefined ? [] : sideBands(view, page, PAGE_GAP)),
@@ -75,7 +75,7 @@ export function placeAnswer(
     for (const [index, { side, area }] of bands.entries()) {
       if (typeof pass === "string" && side !== pass) continue;
       if (index === 2 && page !== undefined && margin !== undefined) return margin.placement;
-      const width = Math.min(MAX_WIDTH, Math.floor(area.right - area.left));
+      const width = Math.min(MAX_WIDTH * scale, Math.floor(area.right - area.left));
       if (width < Math.min(MIN_WIDTH, Math.floor(view.right - view.left)) || width <= 0) continue;
       const height = heightAt(width);
       const horizontal = side === "right" || side === "left";

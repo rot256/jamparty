@@ -12,6 +12,7 @@ import {
   type PageSettings,
   type SettingsChange,
   type Switch,
+  type TextSize,
   type Theme,
 } from "./generated/api";
 import { isRecord } from "./json";
@@ -27,6 +28,10 @@ export function isTheme(value: unknown): value is Theme {
   return value === "auto" || value === "dark" || value === "light";
 }
 
+export function isTextSize(value: unknown): value is TextSize {
+  return value === "small" || value === "default" || value === "large" || value === "larger";
+}
+
 function isCorner(value: unknown): value is Corner {
   return value === "bottom-right" || value === "bottom-left" ||
     value === "top-right" || value === "top-left";
@@ -36,7 +41,7 @@ function isCorner(value: unknown): value is Corner {
 function parse(value: unknown): SettingsChange {
   if (!isRecord(value)) return {};
   const change: SettingsChange = {};
-  const { name, keys, commentMode, showCursor, corner, theme, answerTimeout } = value;
+  const { name, keys, commentMode, showCursor, corner, theme, textSize, answerTimeout } = value;
   if (typeof name === "string") change.name = name;
   if (
     isRecord(keys) && typeof keys.commentMode === "string" &&
@@ -50,6 +55,7 @@ function parse(value: unknown): SettingsChange {
   if (typeof answerTimeout === "number" && Number.isInteger(answerTimeout) &&
       answerTimeout >= 0 && answerTimeout <= MAX_ANSWER_TIMEOUT) change.answerTimeout = answerTimeout;
   if (isTheme(theme)) change.theme = theme;
+  if (isTextSize(textSize)) change.textSize = textSize;
   if (isCorner(corner)) change.corner = corner;
   return change;
 }
@@ -123,6 +129,10 @@ export function missing(change: SettingsChange, settings: PageSettings): Setting
   }
   if (change.theme !== undefined && change.theme !== settings.theme) {
     needed.theme = change.theme;
+    any = true;
+  }
+  if (change.textSize !== undefined && change.textSize !== settings.textSize) {
+    needed.textSize = change.textSize;
     any = true;
   }
   return any ? needed : null;

@@ -39,6 +39,7 @@ fn settings(cursor: Switch) -> PageSettings {
         show_cursor: cursor,
         corner: Corner::BottomRight,
         theme: Default::default(),
+        text_size: Default::default(),
         answer_timeout: Default::default(),
     }
 }

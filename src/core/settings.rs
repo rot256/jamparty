@@ -39,6 +39,18 @@ pub(crate) enum Theme {
     Light,
 }
 
+/// The overlay's text and control size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) enum TextSize {
+    Small,
+    #[default]
+    Default,
+    Large,
+    Larger,
+}
+
 const MAX_KEY: usize = 20;
 /// Largest supported answer timeout, in seconds.
 pub(crate) const MAX_ANSWER_TIMEOUT: u16 = 3600;
@@ -229,6 +241,8 @@ pub(crate) struct Settings {
     #[serde(default)]
     pub(crate) theme: Theme,
     #[serde(default)]
+    pub(crate) text_size: TextSize,
+    #[serde(default)]
     pub(crate) answer_timeout: AnswerTimeout,
 }
 
@@ -251,6 +265,7 @@ impl Default for Settings {
             show_cursor: show_cursor_default(),
             corner: Corner::default(),
             theme: Theme::default(),
+            text_size: TextSize::default(),
             answer_timeout: AnswerTimeout::default(),
         }
     }
@@ -316,6 +331,9 @@ pub(crate) struct SettingsChange {
     pub(crate) theme: Option<Theme>,
     #[serde(default)]
     #[cfg_attr(test, ts(optional))]
+    pub(crate) text_size: Option<TextSize>,
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) answer_timeout: Option<AnswerTimeout>,
 }
 
@@ -330,6 +348,7 @@ impl Settings {
             show_cursor,
             corner,
             theme,
+            text_size,
             answer_timeout,
         } = change;
         Self {
@@ -339,6 +358,7 @@ impl Settings {
             show_cursor: show_cursor.unwrap_or(self.show_cursor),
             corner: corner.unwrap_or(self.corner),
             theme: theme.unwrap_or(self.theme),
+            text_size: text_size.unwrap_or(self.text_size),
             answer_timeout: answer_timeout.unwrap_or(self.answer_timeout),
         }
     }
@@ -346,7 +366,7 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::settings::{Corner, Keys, Settings, SettingsChange, Switch, Theme};
+    use crate::core::settings::{Corner, Keys, Settings, SettingsChange, Switch, TextSize, Theme};
 
     #[test]
     fn defaults_and_parsing() {
@@ -357,7 +377,7 @@ mod tests {
         assert_eq!(defaults.corner, Corner::BottomRight);
         assert_eq!(
             serde_json::to_string(&defaults).unwrap(),
-            r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"d"},"commentMode":"on","showCursor":"off","corner":"bottom-right","theme":"auto","answerTimeout":30}"#
+            r#"{"keys":{"commentMode":"c","showCursor":"x","clearAnswers":"d"},"commentMode":"on","showCursor":"off","corner":"bottom-right","theme":"auto","textSize":"default","answerTimeout":30}"#
         );
         // Each corner, and only those.
         for (text, corner) in [
@@ -392,6 +412,34 @@ mod tests {
         }
         assert!(serde_json::from_str::<Settings>(r#"{"theme":"sepia"}"#).is_err());
         assert!(serde_json::from_str::<SettingsChange>(r#"{"theme":"sepia"}"#).is_err());
+    }
+
+    #[test]
+    fn text_size_is_validated_and_round_trips() {
+        assert_eq!(Settings::default().text_size, TextSize::Default);
+        for (name, size) in [
+            ("small", TextSize::Small),
+            ("default", TextSize::Default),
+            ("large", TextSize::Large),
+            ("larger", TextSize::Larger),
+        ] {
+            let json = format!(r#"{{"textSize":"{name}"}}"#);
+            let saved: Settings = serde_json::from_str(&json).unwrap();
+            let change: SettingsChange = serde_json::from_str(&json).unwrap();
+            assert_eq!(saved.text_size, size);
+            assert_eq!(Settings::default().with(change), saved);
+            assert_eq!(saved.with(SettingsChange::default()), saved);
+            let encoded = serde_json::to_string(&saved).unwrap();
+            assert_eq!(serde_json::from_str::<Settings>(&encoded).unwrap(), saved);
+        }
+        for json in [
+            r#"{"textSize":"Larger"}"#,
+            r#"{"textSize":1.5}"#,
+            r#"{"textSize":"huge"}"#,
+        ] {
+            assert!(serde_json::from_str::<Settings>(json).is_err());
+            assert!(serde_json::from_str::<SettingsChange>(json).is_err());
+        }
     }
 
     #[test]

@@ -54,6 +54,8 @@ export type Corner = "bottom-right" | "bottom-left" | "top-right" | "top-left";
 
 export type Theme = "auto" | "dark" | "light";
 
+export type TextSize = "small" | "default" | "large" | "larger";
+
 export type KeyBinding = string;
 
 export type KeysFields = { commentMode: KeyBinding, showCursor: KeyBinding, clearAnswers: KeyBinding, };
@@ -87,9 +89,9 @@ name: JoinerName,
  * No name was chosen yet (none in the settings file or the page, no
  * `--name`): the page asks.
  */
-askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: Corner, theme: Theme, answerTimeout: AnswerTimeout, };
+askName: boolean, keys: Keys, commentMode: Switch, showCursor: Switch, corner: Corner, theme: Theme, textSize: TextSize, answerTimeout: AnswerTimeout, };
 
-export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Switch, showCursor?: Switch, corner?: Corner, theme?: Theme, answerTimeout?: AnswerTimeout, };
+export type SettingsChange = { name?: JoinerName, keys?: Keys, commentMode?: Switch, showCursor?: Switch, corner?: Corner, theme?: Theme, textSize?: TextSize, answerTimeout?: AnswerTimeout, };
 
 export type Choices = Array<string>;
 

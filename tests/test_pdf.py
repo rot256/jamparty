@@ -1345,7 +1345,7 @@ def test_show_pdf_place_across_resize_and_rebuild(tmp_path: Path, page: Page) ->
 
         check_position()
         page.set_viewport_size({"width": 1920, "height": 1080})
-        expect(answer).to_have_css("width", "340px")
+        expect(answer).to_have_css("width", "382.5px")
         check_position(outer_margin=True)
         page.set_viewport_size({"width": 848, "height": 720})
         expect(sheet).to_have_css("width", "816px")
