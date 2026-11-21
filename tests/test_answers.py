@@ -282,20 +282,26 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
 # The overlay (docs/ui.md), one joiner at a time.
 
 
-def test_the_widest_custom_timeout_keeps_its_row_on_one_line(
-    tmp_path: Path, page: Page
+@pytest.mark.parametrize("seconds", [30, 3599])
+def test_the_hide_answers_row_fits_the_panel(
+    tmp_path: Path, page: Page, seconds: int
 ) -> None:
+    """The label sits above the presets, which share the panel's width:
+    whatever the system font, nothing overflows, and the five presets
+    alone share one line."""
     with (
         share(tmp_path, "serve", str(SITE)) as shared,
-        join(tmp_path, shared, answer_timeout=3599) as joined,
+        join(tmp_path, shared, answer_timeout=seconds) as joined,
     ):
         _ = page.goto(joined.url)
         overlay(page, "#gear").click()
+        panel = overlay(page, "#panel")
         label = overlay(page, "#hide-answers-label")
-        timeouts = overlay(page, "#panel").get_by_role("group", name="Hide answers")
-        expect(
-            timeouts.get_by_role("button", name="3599 s", exact=True)
-        ).to_be_visible()
+        timeouts = panel.get_by_role("group", name="Hide answers")
+        if seconds == 3599:
+            expect(
+                timeouts.get_by_role("button", name="3599 s", exact=True)
+            ).to_be_visible()
         for size in ("small", "default", "large", "larger"):
             choice = overlay(page, f"button[data-text-size={size}]")
             choice.click()
@@ -304,20 +310,17 @@ def test_the_widest_custom_timeout_keeps_its_row_on_one_line(
             label_box = label.bounding_box()
             group_box = timeouts.bounding_box()
             assert label_box is not None and group_box is not None
-            # The label sits beside the buttons, not above them.
-            assert label_box["y"] >= group_box["y"] - 1, size
-            assert label_box["y"] + label_box["height"] <= (
-                group_box["y"] + group_box["height"] + 1
-            ), size
-            # And every button sits on that one line.
-            tops = cast(
-                list[float],
-                timeouts.evaluate(
-                    "group => [...group.children].filter((b) => !b.hidden)"
-                    ".map((b) => b.getBoundingClientRect().top)"
-                ),
-            )
-            assert max(tops) - min(tops) < 1, (size, tops)
+            assert label_box["y"] + label_box["height"] <= group_box["y"] + 1, size
+            assert panel.evaluate("p => p.scrollWidth <= p.clientWidth"), size
+            if seconds == 30:
+                tops = cast(
+                    list[float],
+                    timeouts.evaluate(
+                        "group => [...group.children].filter((b) => !b.hidden)"
+                        ".map((b) => b.getBoundingClientRect().top)"
+                    ),
+                )
+                assert max(tops) - min(tops) < 1, (size, tops)
 
 
 def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None:
