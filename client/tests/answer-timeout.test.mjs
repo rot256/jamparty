@@ -22,7 +22,9 @@ test("answer timeout presets map to their labels and numeric settings", () => {
 test("custom durations have labels and cannot be sent by the preset buttons", () => {
   assert.equal(answerTimeoutLabel(45), "45 s");
   assert.equal(answerTimeoutLabel(120), "2 min");
-  assert.equal(answerTimeoutLabel(125), "2 min 5 s");
+  assert.equal(answerTimeoutLabel(90), "90 s");
+  assert.equal(answerTimeoutLabel(125), "125 s");
+  assert.equal(answerTimeoutLabel(3599), "3599 s");
   assert.equal(answerTimeoutLabel(3600), "60 min");
   for (const value of ["45", "120", "3601", "", " 10", undefined]) {
     assert.equal(answerTimeoutPreset(value), undefined);

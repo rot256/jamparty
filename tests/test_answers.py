@@ -282,6 +282,35 @@ def test_addressed_replies(tmp_path: Path, browser: Browser) -> None:
 # The overlay (docs/ui.md), one joiner at a time.
 
 
+def test_the_widest_custom_timeout_keeps_its_row_on_one_line(
+    tmp_path: Path, page: Page
+) -> None:
+    with (
+        share(tmp_path, "serve", str(SITE)) as shared,
+        join(tmp_path, shared, answer_timeout=3599) as joined,
+    ):
+        _ = page.goto(joined.url)
+        overlay(page, "#gear").click()
+        label = overlay(page, "#hide-answers-label")
+        timeouts = overlay(page, "#panel").get_by_role("group", name="Hide answers")
+        expect(
+            timeouts.get_by_role("button", name="3599 s", exact=True)
+        ).to_be_visible()
+        for size in ("small", "default", "large", "larger"):
+            choice = overlay(page, f"button[data-text-size={size}]")
+            choice.click()
+            # The size applies once the joiner confirms the change.
+            expect(choice).to_have_attribute("aria-pressed", "true")
+            label_box = label.bounding_box()
+            group_box = timeouts.bounding_box()
+            assert label_box is not None and group_box is not None
+            # The label sits beside the buttons, not above them.
+            assert label_box["y"] >= group_box["y"] - 1, size
+            assert label_box["y"] + label_box["height"] <= (
+                group_box["y"] + group_box["height"] + 1
+            ), size
+
+
 def test_answer_timeout_pauses_and_dismisses(tmp_path: Path, page: Page) -> None:
     with (
         share(tmp_path, "serve", str(SITE)) as shared,

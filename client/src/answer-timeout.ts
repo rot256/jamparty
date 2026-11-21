@@ -2,10 +2,8 @@ export const ANSWER_TIMEOUT_PRESETS = [0, 10, 30, 60, 300] as const;
 
 export function answerTimeoutLabel(seconds: number): string {
   if (seconds === 0) return "Never";
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  if (minutes === 0) return `${seconds} s`;
-  return remainder === 0 ? `${minutes} min` : `${minutes} min ${remainder} s`;
+  // Whole minutes read as minutes; anything else stays exact, and short.
+  return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
 }
 
 export function answerTimeoutPreset(value: string | undefined): number | undefined {

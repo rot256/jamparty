@@ -1439,10 +1439,7 @@ var Connection = class {
 var ANSWER_TIMEOUT_PRESETS = [0, 10, 30, 60, 300];
 function answerTimeoutLabel(seconds) {
   if (seconds === 0) return "Never";
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  if (minutes === 0) return `${seconds} s`;
-  return remainder === 0 ? `${minutes} min` : `${minutes} min ${remainder} s`;
+  return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
 }
 function answerTimeoutPreset(value) {
   return ANSWER_TIMEOUT_PRESETS.find((seconds) => String(seconds) === value);
@@ -3942,7 +3939,7 @@ var styles = `
     font: calc(12 * var(--jp-unit))/1.4 var(--jp-font);
   }
 
-  #panel { width: min(calc(360 * var(--jp-unit)), calc(100vw - 28 * var(--jp-unit))); }
+  #panel { width: min(calc(384 * var(--jp-unit)), calc(100vw - 28 * var(--jp-unit))); }
   #panel[hidden], #pdf-sections[hidden] { display: none; }
 
   #pdf-sections {
@@ -3985,7 +3982,7 @@ var styles = `
   :is(#text-size-row, #hide-answers-row), :is(#text-size-row, #hide-answers-row) .segments { flex-wrap: wrap; }
 
   #hide-answers-row .segments { margin-inline-start: auto; }
-  #hide-answers-row .segment { padding-inline: calc(5 * var(--jp-unit)); white-space: nowrap; }
+  #hide-answers-row .segment { padding-inline: calc(4 * var(--jp-unit)); white-space: nowrap; }
 
   .control .label { flex-grow: 1; cursor: pointer; font-weight: 400; margin: 0; }
 
