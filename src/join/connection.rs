@@ -1,7 +1,7 @@
 //! The joiner's connection to the share: connect, present the secret, run
 //! the control stream, reconnect with backoff.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{fmt, net::SocketAddr, sync::Arc, time::Duration};
 
 use iroh::{
     Endpoint,
@@ -22,7 +22,7 @@ use crate::{
         token::PartyToken,
         version::{Incompatible, JampartyVersion},
     },
-    join::{control::Control, session::Session},
+    join::{Refused, control::Control, session::Session},
     protocol::{
         control::{
             Envelope, Greeting, Hello, JoinerMessage, REFUSED_CODE, RefusedReason, ShareMessage,
@@ -61,6 +61,15 @@ pub(crate) enum Final {
     Incompatible(Incompatible),
 }
 
+impl fmt::Display for Final {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refused(reason) => Refused(*reason).fmt(f),
+            Self::Incompatible(incompatible) => incompatible.fmt(f),
+        }
+    }
+}
+
 /// How the first admission went.
 pub(crate) type First = Result<Welcome, Final>;
 
@@ -86,7 +95,6 @@ pub(crate) async fn run(dial: Dial, session: Arc<Session>, first: oneshot::Sende
     loop {
         match attempt(&dial, &session, &mut first).await {
             Ended::Final(ended) => {
-                tracing::warn!(?ended, "the joiner gives up on the share");
                 let reason = match &ended {
                     Final::Refused(reason) => *reason,
                     Final::Incompatible(incompatible) => {
@@ -95,9 +103,13 @@ pub(crate) async fn run(dial: Dial, session: Arc<Session>, first: oneshot::Sende
                     }
                 };
                 session.disconnected(Some(reason));
-                if let Some(first) = first.take() {
-                    // Nobody waits any more if the start was given up.
-                    let _ = first.send(Err(ended));
+                match first.take() {
+                    // The start reports it; nobody waits any more if the
+                    // start was given up.
+                    Some(first) => {
+                        let _ = first.send(Err(ended));
+                    }
+                    None => tracing::warn!("stopped reconnecting to the share: {ended}"),
                 }
                 return;
             }
