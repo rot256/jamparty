@@ -286,6 +286,7 @@ function bt(o){return typeof o=="object"&&o!==null}function me(o){if(!bt(o)||typ
     font: calc(12 * var(--jp-unit))/1.4 var(--jp-font);
   }
 
+  #panel { width: min(calc(360 * var(--jp-unit)), calc(100vw - 28 * var(--jp-unit))); }
   #panel[hidden], #pdf-sections[hidden] { display: none; }
 
   #pdf-sections {
@@ -327,6 +328,7 @@ function bt(o){return typeof o=="object"&&o!==null}function me(o){if(!bt(o)||typ
 
   :is(#text-size-row, #hide-answers-row), :is(#text-size-row, #hide-answers-row) .segments { flex-wrap: wrap; }
 
+  #hide-answers-row .segments { margin-inline-start: auto; }
   #hide-answers-row .segment { padding-inline: calc(5 * var(--jp-unit)); white-space: nowrap; }
 
   .control .label { flex-grow: 1; cursor: pointer; font-weight: 400; margin: 0; }

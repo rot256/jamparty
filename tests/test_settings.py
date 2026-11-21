@@ -51,7 +51,7 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         overlay(page, "#collapse").click()
         overlay(page, "#gear").click()
         expect(overlay(page, "#panel")).to_be_visible()
-        expect(overlay(page, "#panel")).to_have_css("width", "360px")
+        expect(overlay(page, "#panel")).to_have_css("width", "405px")
         expect(comment_mode).to_have_attribute("aria-checked", "true")
         expect(show_cursor).to_have_attribute("aria-checked", "false")
         expect(overlay(page, "#comment-mode-key")).to_have_text("C")
