@@ -230,7 +230,7 @@ bar.
   remembered name keeps the prompt away. A new share is a new origin and
   starts from the defaults.
 - The defaults come from `~/.config/jamparty/settings.json`
-  (`$XDG_CONFIG_HOME/jamparty/settings.json` when `XDG_CONFIG_HOME` is set;
+  (`$XDG_CONFIG_HOME/jamparty/settings.json` when `XDG_CONFIG_HOME` is nonempty;
   mode 0600, the same fields), which the person writes and jamparty only
   reads.
   `jamparty join --name` sets the name for one run, until one is chosen in
