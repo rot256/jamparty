@@ -83,5 +83,17 @@ brotli = "=9.1.3"
 [profile.dev.package.brotli]
 opt-level = 3
 
+[profile.release]
+# One self-contained binary people download: favour size. Fat LTO across
+# one codegen unit and optimising for size roughly halve it; the work is
+# network-bound, and the asset codecs below keep full optimisation.
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
 [profile.release.package.brotli]
+opt-level = 3
+
+[profile.release.package.brotli-decompressor]
 opt-level = 3
