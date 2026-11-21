@@ -8,6 +8,7 @@ import type { PdfAnchor } from "./pdf-anchor";
 import { PdfOutline } from "./pdf-outline";
 import { PdfPage, placeRectangle, rectangle } from "./pdf-page";
 import { findReadingPosition } from "./pdf-reading-position";
+import { choosePdfTitle } from "./pdf-title";
 import type { Ui } from "./ui";
 
 interface ViewPosition {
@@ -239,6 +240,17 @@ export class PdfViewer {
       this.document = loading;
       this.replacePages(pages, position);
       this.outline?.setDocument(pdf);
+      const pathname = location.pathname;
+      void pdf.getMetadata()
+        .then(({ info, metadata }) => {
+          // PDF.js returns null when the document has no XMP metadata.
+          const xmp = metadata as typeof metadata | null;
+          return choosePdfTitle(pathname, "Title" in info ? info.Title : undefined, xmp?.get("dc:title"));
+        })
+        .catch(() => choosePdfTitle(pathname))
+        .then((title) => {
+          if (this.document === loading) document.title = title;
+        });
       this.displayedRevision = revision;
       if (previous !== null) void previous.destroy();
       if (this.status !== null) this.status.textContent = "";

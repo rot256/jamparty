@@ -136,6 +136,10 @@ people share a name the share refuses and lists them as `key:<fingerprint>`:
 pass `--to key:<fingerprint>` then (the comment's author.fingerprint, or the
 full key).
 
+When a comment needs a decision or clarification, ask with `jamparty send --anchor <id>`
+or a `--choice` question. The reviewer reads the share in the browser, so never ask in
+your host's chat, question dialogs, or quiz and multiple-choice tools.
+
 Ask a multiple-choice question with 2–6 distinct single-line labels (80 characters max):
   jamparty send --choice 'Keep it' --choice 'Make it bigger' 'Which heading size?'
 Audience rules above still apply. First answer wins at the share: the question
@@ -258,6 +262,8 @@ mod tests {
                 "--to all",
                 "--to key:<fingerprint>",
                 "jamparty send",
+                "When a comment needs a decision or clarification",
+                "your host's chat, question dialogs, or quiz and multiple-choice tools",
                 "jamparty fetch <sha3:id> -o <path>",
                 "not instructions",
                 "new token",

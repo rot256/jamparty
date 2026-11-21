@@ -3723,11 +3723,13 @@ var styles = `
 
   #bar[hidden] { display: none; }
 
+  #pill, #gear, #edit, #pdf-outline, #attach { height: calc(32 * var(--jp-unit)); }
+
   #pill {
     display: flex;
     align-items: center;
     gap: calc(8 * var(--jp-unit));
-    padding: calc(7 * var(--jp-unit)) calc(12 * var(--jp-unit)) calc(7 * var(--jp-unit)) calc(9 * var(--jp-unit));
+    padding: 0 calc(12 * var(--jp-unit)) 0 calc(9 * var(--jp-unit));
     border: 1px solid var(--jp-border);
     border-radius: 999px;
     background: var(--jp-surface);
@@ -3755,7 +3757,6 @@ var styles = `
     align-items: center;
     justify-content: center;
     width: calc(32 * var(--jp-unit));
-    height: calc(32 * var(--jp-unit));
     padding: 0;
     border: 1px solid var(--jp-border);
     border-radius: 50%;
