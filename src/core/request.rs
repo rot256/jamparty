@@ -3,13 +3,13 @@
 //!
 //! - `Host` must be exactly `<sid>.localhost:<port>` (defeats DNS
 //!   rebinding); `<sid>.localhost` on port 80.
-//! - Top-level document navigations (GET/HEAD, `Sec-Fetch-Mode: navigate`,
-//!   `Sec-Fetch-Dest: document`) are allowed from anywhere.
-//! - Every other request needs `Sec-Fetch-Site: same-origin`, or no
-//!   `Sec-Fetch-Site` at all (non-browser clients).
+//! - Requests need `Sec-Fetch-Site: same-origin` or no `Sec-Fetch-Site`
+//!   (non-browser clients). Top-level document navigations (GET/HEAD,
+//!   `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`) also allow
+//!   `Sec-Fetch-Site: none` (address bar, bookmarks and browser launches).
 //! - Non-GET/HEAD requests and upgrades also need `Origin` to be exactly
-//!   `http://<sid>.localhost:<port>`; other non-navigation requests with an
-//!   `Origin` need that one too.
+//!   `http://<sid>.localhost:<port>`; other requests with an `Origin` need
+//!   that one too.
 //!
 //! Paths are matched exactly as received (no decoding or normalisation).
 //! The joiner answers `/_jamparty/client.js` (GET or HEAD) itself, so a
@@ -106,9 +106,9 @@ pub(crate) enum Route {
 pub(crate) enum Refusal {
     /// `Host` is not this session's (wrong name, port, or missing).
     WrongHost,
-    /// A non-navigation request from another site.
+    /// Fetch metadata does not permit the request.
     CrossSite,
-    /// A write or upgrade without this session's exact `Origin`.
+    /// A foreign `Origin`, or a write or upgrade without an `Origin`.
     BadOrigin,
     /// A reserved path with the wrong method, or with an upgrade or
     /// without one when it takes the other.
@@ -165,22 +165,21 @@ impl LocalOrigin {
         if facts.host != Some(self.host.as_str()) {
             return Err(Refusal::WrongHost);
         }
-        if !is_navigation(facts) {
-            match facts.sec_fetch_site {
-                None | Some("same-origin") => {}
-                Some(_) => return Err(Refusal::CrossSite),
-            }
-            let writes = match facts.method {
-                Method::Get | Method::Head => facts.upgrade == Upgrade::Yes,
-                Method::Post | Method::Other => true,
-            };
-            let origin_ok = match facts.origin {
-                Some(origin) => origin == self.origin,
-                None => !writes,
-            };
-            if !origin_ok {
-                return Err(Refusal::BadOrigin);
-            }
+        match facts.sec_fetch_site {
+            None | Some("same-origin") => {}
+            Some("none") if is_navigation(facts) => {}
+            Some(_) => return Err(Refusal::CrossSite),
+        }
+        let writes = match facts.method {
+            Method::Get | Method::Head => facts.upgrade == Upgrade::Yes,
+            Method::Post | Method::Other => true,
+        };
+        let origin_ok = match facts.origin {
+            Some(origin) => origin == self.origin,
+            None => !writes,
+        };
+        if !origin_ok {
+            return Err(Refusal::BadOrigin);
         }
         route(facts)
     }

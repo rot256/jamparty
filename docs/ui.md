@@ -14,12 +14,19 @@ injects the client's script tag into each HTML page; the joiner serves
 the client itself (`/_jamparty/client.js`, no-store), so a page always runs
 its own joiner's client.
 
-Top-level page loads (GET and HEAD) are accepted from anywhere, as with a
-local dev server: a site the joiner visits can link or redirect to the join
-URL, so it can make blind GET requests to the share through the joiner. It
-cannot read the responses. Browsers that send Fetch Metadata also stop it
-from sending anything else; older ones let its subresource GETs (such as
-images) through as well.
+Open the join URL from the browser's address bar, a bookmark, or a page
+within the same share. The joiner refuses top-level GET and HEAD navigations
+marked `cross-site` or `same-site` (including from other shares, and
+sign-in redirects back from an external site) and displays the URL to copy
+into the address bar. It accepts `Sec-Fetch-Site: none`, `same-origin`, or a
+missing header for clients that omit Fetch Metadata. If the request carries
+an `Origin` header, it must match the join URL's origin.
+Join with a browser that sends full Fetch Metadata (Chrome 80, Firefox 90
+and Safari 16.4 or later). Browsers that omit `Sec-Fetch-Site` cannot have
+their cross-site navigations told apart from non-browser clients such as
+`curl`; Chrome 76–79 omit `Sec-Fetch-Dest`, so their address-bar loads are
+refused.
+
 
 ## Pill (bottom right)
 
