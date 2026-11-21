@@ -384,7 +384,10 @@ async fn embedded_assets_negotiate_encoding_and_head_lengths() {
                     "default-src 'none'"
                 );
             }
-            if path == "/fixture.pdf" || path == "/_jamparty/pdf.css" {
+            if matches!(
+                path,
+                "/fixture.pdf" | "/_jamparty/pdf.css" | "/_jamparty/favicon.svg"
+            ) {
                 assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
             }
             if path == "/fixture.pdf" {
