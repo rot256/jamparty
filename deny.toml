@@ -21,9 +21,6 @@ targets = [
 # advisory, list it under `ignore` with the reason.
 [advisories]
 yanked = "deny"
-ignore = [
-    { id = "RUSTSEC-2024-0436", reason = "paste is archived, not vulnerable: a build-time proc macro reached only through iroh's netlink-packet-core; goes when iroh drops it" },
-]
 
 # Permissive licenses only (MPL-2.0 is file-level copyleft, compatible
 # with shipping an MIT binary).
