@@ -242,6 +242,10 @@ def test_text_size_changes_overlay_and_persists(tmp_path: Path, page: Page) -> N
             button.click()
             expect(button).to_have_attribute("aria-pressed", "true")
             expect(pill).to_have_css("font-size", font)
+            pill_box = pill.bounding_box()
+            gear_box = gear.bounding_box()
+            assert pill_box is not None and gear_box is not None
+            assert pill_box["height"] == pytest.approx(gear_box["height"], abs=0.5)
             expect(panel).to_have_css("font-size", font)
             expect(page_title).to_have_css("font-size", "48px")
 
