@@ -109,7 +109,7 @@ pub(crate) async fn run(dial: Dial, session: Arc<Session>, first: oneshot::Sende
                     Some(first) => {
                         let _ = first.send(Err(ended));
                     }
-                    None => tracing::warn!("{ended}"),
+                    None => tracing::warn!("stopped reconnecting to the share: {ended}"),
                 }
                 return;
             }
