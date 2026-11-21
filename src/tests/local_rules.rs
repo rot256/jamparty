@@ -84,6 +84,11 @@ async fn host_and_cross_site_rules() {
             .body
             .contains(&format!("<code>{origin}/?first=1&amp;second=2</code>"))
     );
+    assert!(
+        refused
+            .body
+            .contains(r#"<link rel="icon" href="/_jamparty/favicon.svg" type="image/svg+xml">"#)
+    );
     let head = send("HEAD", path, &navigate).await;
     assert_eq!(head.status, 403);
     assert!(head.body.is_empty());
@@ -101,7 +106,7 @@ async fn host_and_cross_site_rules() {
     assert_eq!(csp, ["frame-ancestors 'self'"]);
 
     // Another site cannot read pages or the client.
-    for path in ["/", "/_jamparty/client.js"] {
+    for path in ["/", "/_jamparty/client.js", "/_jamparty/favicon.svg"] {
         let reply = send("GET", path, &cross_fetch).await;
         assert_eq!(reply.status, 403, "{path}");
         assert!(reply.headers.contains_key(header::CONTENT_SECURITY_POLICY));

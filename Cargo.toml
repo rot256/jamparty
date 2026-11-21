@@ -15,6 +15,7 @@ include = [
   "/assets/*.js",
   "/assets/*.css",
   "/assets/*.html",
+  "/assets/favicon.svg",
   "/assets/pdf-cmaps.bin",
   "/assets/pdf-cmaps.rs",
   "/assets/*-LICENSE",

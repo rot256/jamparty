@@ -232,6 +232,7 @@ def test_proxy_through_join_with_websockets(tmp_path: Path, page: Page) -> None:
         assert status == 200
         assert b"/_jamparty/client.js" in body
         _ = page.goto(joined.url)
+        expect(page.locator("link[rel~=icon]")).to_have_count(0)
         echoed = page.evaluate(
             """() => new Promise((resolve, reject) => {
                 const socket = new WebSocket(`ws://${location.host}/socket`);

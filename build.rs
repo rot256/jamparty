@@ -12,6 +12,7 @@ fn main() -> io::Result<()> {
 
     for name in [
         "client.js",
+        "favicon.svg",
         "pdf.js",
         "pdf-worker.js",
         "pdf.css",

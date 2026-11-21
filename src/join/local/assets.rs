@@ -22,6 +22,7 @@ macro_rules! embed {
 
 // The client always speaks this joiner's page API.
 pub(super) static CLIENT: Asset = embed!("client.js");
+pub(super) static FAVICON: Asset = embed!("favicon.svg");
 pub(super) static PDF_SCRIPT: Asset = embed!("pdf.js");
 pub(super) static PDF_WORKER: Asset = embed!("pdf-worker.js");
 pub(super) static PDF_STYLE: Asset = embed!("pdf.css");

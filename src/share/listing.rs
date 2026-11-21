@@ -84,6 +84,7 @@ async fn render(
     let mut html = format!(
         "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <link rel=\"icon\" href=\"/_jamparty/favicon.svg\" type=\"image/svg+xml\">\
          <title>Index of /{path}</title><style>\
          :root {{color-scheme: light dark}}\
          body {{font: 1rem system-ui, sans-serif; max-width: 65rem; margin: 2rem auto; padding: 0 1rem}}\
@@ -185,6 +186,11 @@ mod tests {
             fs::write(root.join(name), "").unwrap();
         }
         let exact = render(&root, &root, "".as_ref(), 3, 10).await.unwrap();
+        assert!(
+            exact.contains(
+                r#"<link rel="icon" href="/_jamparty/favicon.svg" type="image/svg+xml">"#
+            )
+        );
         assert_eq!(exact.matches("<tr><td>").count(), 3);
         assert!(!exact.contains("truncated"));
         let capped = render(&root, &root, "".as_ref(), 2, 10).await.unwrap();
