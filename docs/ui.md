@@ -21,9 +21,11 @@ sign-in redirects back from an external site) and displays the URL to copy
 into the address bar. It accepts `Sec-Fetch-Site: none`, `same-origin`, or a
 missing header for clients that omit Fetch Metadata. If the request carries
 an `Origin` header, it must match the join URL's origin.
-Join with a browser that sends Fetch Metadata (Chrome 80, Firefox 90 and
-Safari 16.4 or later): older browsers send none, so these checks cannot
-tell their cross-site navigations from non-browser clients such as `curl`.
+Join with a browser that sends full Fetch Metadata (Chrome 80, Firefox 90
+and Safari 16.4 or later). Browsers that omit `Sec-Fetch-Site` cannot have
+their cross-site navigations told apart from non-browser clients such as
+`curl`; Chrome 76–79 omit `Sec-Fetch-Dest`, so their address-bar loads are
+refused.
 
 
 ## Pill (bottom right)
