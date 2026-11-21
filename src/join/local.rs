@@ -40,8 +40,8 @@ use crate::{
     },
     core::{
         request::{
-            FRAME_ANCESTORS, LocalOrigin, Method, PDF_CMAP_PREFIX, Refusal, RequestFacts, Route,
-            Upgrade, is_navigation, is_pdf_path,
+            FAVICON_PATH, FRAME_ANCESTORS, LocalOrigin, Method, PDF_CMAP_PREFIX, Refusal,
+            RequestFacts, Route, Upgrade, is_navigation, is_pdf_path,
         },
         text::{OneLineReport, Untrusted},
     },
@@ -51,7 +51,9 @@ use crate::{
 
 mod assets;
 
-use assets::{CLIENT, JAVASCRIPT, PDF_CMAPS, PDF_SCRIPT, PDF_STYLE, PDF_VIEWER, PDF_WORKER};
+use assets::{
+    CLIENT, FAVICON, JAVASCRIPT, PDF_CMAPS, PDF_SCRIPT, PDF_STYLE, PDF_VIEWER, PDF_WORKER,
+};
 
 /// The pause after a failed accept.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
@@ -119,6 +121,7 @@ impl Proxy {
 /// that retries by itself (the joiner reconnects after a drop).
 const UNREACHABLE_PAGE: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
 <meta http-equiv=\"refresh\" content=\"2\"><title>jamparty: connecting</title>\
+<link rel=\"icon\" href=\"/_jamparty/favicon.svg\" type=\"image/svg+xml\">\
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:32em;margin:4em auto;padding:0 1em;color:#222}</style>\
 </head><body><h1>Connecting to the share…</h1>\
 <p>jamparty join cannot reach the share yet. This page retries every few seconds.</p>\
@@ -185,6 +188,7 @@ async fn handle(
     let headers = request.headers();
     let mut response = match decision {
         Ok(Route::Client) => CLIENT.response(headers, JAVASCRIPT),
+        Ok(Route::Favicon) => nosniff(FAVICON.response(headers, "image/svg+xml")),
         Ok(Route::PdfViewer) => pdf_viewer_response(origin, headers),
         Ok(Route::PdfScript) => PDF_SCRIPT.response(headers, JAVASCRIPT),
         Ok(Route::PdfWorker) => {
@@ -219,6 +223,7 @@ async fn handle(
             let url = escape_html(&format!("{}{target}", origin.origin()));
             let html = format!(
                 "<!doctype html><meta charset=\"utf-8\"><title>Navigation refused</title>\
+                 <link rel=\"icon\" href=\"/_jamparty/favicon.svg\" type=\"image/svg+xml\">\
                  <h1>Navigation refused</h1>\
                  <p>Open this page from the address bar or from within the share.</p>\
                  <p>Copy this URL: <code>{url}</code></p>"
@@ -266,7 +271,7 @@ fn pdf_viewer_response(origin: &LocalOrigin, headers: &HeaderMap) -> Response<Ap
     let csp = format!(
         "default-src 'none'; script-src {http}/_jamparty/pdf.js {http}/_jamparty/pdf-worker.js; \
          worker-src {http}/_jamparty/pdf-worker.js; style-src 'self' 'unsafe-inline'; \
-         font-src blob:; img-src blob: data:; connect-src 'self' {ws}; \
+         font-src blob:; img-src {http}{FAVICON_PATH} blob: data:; connect-src 'self' {ws}; \
          base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     );
     response.headers_mut().insert(

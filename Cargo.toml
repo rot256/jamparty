@@ -1,6 +1,6 @@
 [package]
 name = "jamparty"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 description = "Share a site under development with a few people, peer to peer, and route their browser comments to a coding agent"
 license = "MIT"
@@ -15,6 +15,7 @@ include = [
   "/assets/*.js",
   "/assets/*.css",
   "/assets/*.html",
+  "/assets/favicon.svg",
   "/assets/pdf-cmaps.bin",
   "/assets/pdf-cmaps.rs",
   "/assets/*-LICENSE",

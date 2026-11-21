@@ -38,6 +38,7 @@ pub(super) fn missing_page(method: &Method, revision: Revision) -> Response<AppB
     } else {
         Bytes::from_static(
             b"<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
+              <link rel=\"icon\" href=\"/_jamparty/favicon.svg\" type=\"image/svg+xml\">\
               <title>Page not found</title><body><h1>Page not found</h1></body></html>",
         )
     };

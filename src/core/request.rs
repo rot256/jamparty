@@ -16,7 +16,7 @@
 //! page's client is always its joiner's. Everything under `/_jamparty/api/`
 //! is the joiner's own too: the page's socket (GET with an upgrade), the
 //! attachment upload (POST), and a 404 for any other path in the prefix.
-//! Top-level PDF navigations and the viewer's assets are local too.
+//! The favicon, top-level PDF navigations and the viewer's assets are local too.
 //! Everything else goes to the share.
 
 use crate::{
@@ -36,6 +36,8 @@ pub(crate) const PDF_CMAP_PREFIX: &str = "/_jamparty/pdf-cmaps/";
 
 /// The browser client the share's pages load.
 pub(crate) const CLIENT_PATH: &str = "/_jamparty/client.js";
+/// The favicon for jamparty-generated pages.
+pub(crate) const FAVICON_PATH: &str = "/_jamparty/favicon.svg";
 /// The joiner's API paths start with this.
 const API_PREFIX: &str = "/_jamparty/api/";
 pub(crate) const SOCKET_PATH: &str = "/_jamparty/api/socket";
@@ -87,6 +89,7 @@ pub(crate) struct RequestFacts<'a> {
 pub(crate) enum Route {
     /// GET or HEAD the browser client.
     Client,
+    Favicon,
     PdfViewer,
     PdfScript,
     PdfWorker,
@@ -204,13 +207,14 @@ pub(crate) fn is_pdf_path(path: &str) -> bool {
 
 fn route(facts: &RequestFacts<'_>) -> Result<Route, Refusal> {
     let (route, method, upgrade) = match facts.path {
-        CLIENT_PATH | PDF_VIEWER_PATH | PDF_WORKER_PATH | PDF_STYLE_PATH => {
+        CLIENT_PATH | FAVICON_PATH | PDF_VIEWER_PATH | PDF_WORKER_PATH | PDF_STYLE_PATH => {
             let read = match facts.method {
                 Method::Get | Method::Head => facts.upgrade == Upgrade::No,
                 Method::Post | Method::Other => false,
             };
             return if read {
                 Ok(match facts.path {
+                    FAVICON_PATH => Route::Favicon,
                     PDF_VIEWER_PATH => Route::PdfScript,
                     PDF_WORKER_PATH => Route::PdfWorker,
                     PDF_STYLE_PATH => Route::PdfStyle,

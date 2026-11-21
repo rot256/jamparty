@@ -116,6 +116,29 @@ def send_comment(page: Page, message: str) -> None:
     )
 
 
+def test_favicon_on_generated_pages(tmp_path: Path, page: Page) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    _ = (site / "paper.pdf").write_bytes(fixture_pdf("Second page"))
+    with (
+        share(tmp_path, "serve", str(site)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        for path in ("/", "/paper.pdf"):
+            _ = page.goto(f"{joined.url.rstrip('/')}{path}")
+            link = page.locator('head link[rel="icon"]')
+            expect(link).to_have_attribute("href", "/_jamparty/favicon.svg")
+            expect(link).to_have_attribute("type", "image/svg+xml")
+            # Loading as an image also exercises the viewer's img-src policy.
+            with page.expect_response("**/_jamparty/favicon.svg") as loaded:
+                _ = link.evaluate(
+                    "(link) => { const image = new Image(); image.src = link.href; "
+                    "return image.decode(); }"
+                )
+            assert loaded.value.status == 200
+            assert loaded.value.headers["content-type"] == "image/svg+xml"
+
+
 def test_pdf_fits_and_keeps_reading_position(tmp_path: Path, page: Page) -> None:
     pdf = tmp_path / "paper.pdf"
     _ = pdf.write_bytes(fixture_pdf("Second page"))

@@ -243,6 +243,11 @@ async fn without_the_share_a_page_load_gets_a_page_that_retries() {
         page.body
     );
 
+    assert!(
+        page.body
+            .contains(r#"<link rel="icon" href="/_jamparty/favicon.svg" type="image/svg+xml">"#)
+    );
+
     // Anything else (the page's own fetches) keeps the JSON answer.
     let asset = get(&joiner, "/style.css").await;
     assert_eq!(asset.status, StatusCode::BAD_GATEWAY);
@@ -302,6 +307,11 @@ async fn embedded_assets_negotiate_encoding_and_head_lengths() {
             "/_jamparty/client.js",
             include_bytes!("../../assets/client.js").as_slice(),
             "text/javascript; charset=utf-8",
+        ),
+        (
+            "/_jamparty/favicon.svg",
+            include_bytes!("../../assets/favicon.svg").as_slice(),
+            "image/svg+xml",
         ),
         (
             "/_jamparty/pdf.js",
@@ -374,7 +384,10 @@ async fn embedded_assets_negotiate_encoding_and_head_lengths() {
                     "default-src 'none'"
                 );
             }
-            if path == "/fixture.pdf" || path == "/_jamparty/pdf.css" {
+            if matches!(
+                path,
+                "/fixture.pdf" | "/_jamparty/pdf.css" | "/_jamparty/favicon.svg"
+            ) {
                 assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
             }
             if path == "/fixture.pdf" {
