@@ -134,16 +134,9 @@ fn table() {
         ),
         ("upgrade", upgrade(Some("same-origin")), Ok(Route::Proxy)),
         ("upgrade no site", upgrade(None), Ok(Route::Proxy)),
-        // Navigation from anywhere.
         (
-            "nav cross-site",
-            nav("/docs", "cross-site"),
-            Ok(Route::Proxy),
-        ),
-        ("nav same-site", nav("/", "same-site"), Ok(Route::Proxy)),
-        (
-            "nav to client.js",
-            nav(CLIENT_PATH, "cross-site"),
+            "same-origin navigation to client.js",
+            nav(CLIENT_PATH, "same-origin"),
             Ok(Route::Client),
         ),
         // Non-browser clients.
@@ -343,12 +336,33 @@ fn reads_with_another_origin_are_refused() {
         ..fetch(Method::Get, CLIENT_PATH)
     };
     assert_eq!(local.decide(&own), Ok(Route::Client));
-    // Navigations are allowed from anywhere, with their Origin.
     let navigation = RequestFacts {
         origin: Some(OTHER_ORIGIN),
-        ..nav("/", "cross-site")
+        ..nav("/", "none")
     };
-    assert_eq!(local.decide(&navigation), Ok(Route::Proxy));
+    assert_eq!(local.decide(&navigation), Err(Refusal::BadOrigin));
+}
+
+#[test]
+fn top_level_navigations_need_a_local_fetch_site() {
+    let local = local();
+    for method in [Method::Get, Method::Head] {
+        for (site, expected) in [
+            (None, Ok(Route::Proxy)),
+            (Some("none"), Ok(Route::Proxy)),
+            (Some("same-origin"), Ok(Route::Proxy)),
+            (Some("same-site"), Err(Refusal::CrossSite)),
+            (Some("cross-site"), Err(Refusal::CrossSite)),
+            (Some("bogus"), Err(Refusal::CrossSite)),
+        ] {
+            let facts = RequestFacts {
+                method,
+                sec_fetch_site: site,
+                ..nav("/docs", "none")
+            };
+            assert_eq!(local.decide(&facts), expected, "{method:?} {site:?}");
+        }
+    }
 }
 
 #[test]
@@ -424,10 +438,7 @@ proptest! {
 #[test]
 fn only_top_level_pdf_navigations_open_the_viewer() {
     let path = "/docs/Paper.PdF";
-    assert_eq!(
-        local().decide(&nav(path, "cross-site")),
-        Ok(Route::PdfViewer)
-    );
+    assert_eq!(local().decide(&nav(path, "none")), Ok(Route::PdfViewer));
     let fetch = fetch(Method::Get, path);
     assert_eq!(local().decide(&fetch), Ok(Route::Proxy));
     for dest in ["iframe", "embed", "object", "image", "script"] {
