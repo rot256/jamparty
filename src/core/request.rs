@@ -8,8 +8,8 @@
 //! - Every other request needs `Sec-Fetch-Site: same-origin`, or no
 //!   `Sec-Fetch-Site` at all (non-browser clients).
 //! - Non-GET/HEAD requests and upgrades also need `Origin` to be exactly
-//!   `http://<sid>.localhost:<port>`; other requests with an `Origin` need
-//!   that one too.
+//!   `http://<sid>.localhost:<port>`; other non-navigation requests with an
+//!   `Origin` need that one too.
 //!
 //! Paths are matched exactly as received (no decoding or normalisation).
 //! The joiner answers `/_jamparty/client.js` (GET or HEAD) itself, so a

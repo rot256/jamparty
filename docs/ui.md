@@ -17,7 +17,9 @@ its own joiner's client.
 Top-level page loads (GET and HEAD) are accepted from anywhere, as with a
 local dev server: a site the joiner visits can link or redirect to the join
 URL, so it can make blind GET requests to the share through the joiner. It
-cannot read the responses or send anything else.
+cannot read the responses. Browsers that send Fetch Metadata also stop it
+from sending anything else; older ones let its subresource GETs (such as
+images) through as well.
 
 ## Pill (bottom right)
 
