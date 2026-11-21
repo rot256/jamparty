@@ -10,7 +10,7 @@ mod tests;
 use std::{
     env,
     ffi::OsString,
-    io::{self, BufRead, Read},
+    io::{self, BufRead, IsTerminal, Read},
     net::SocketAddr,
     path::PathBuf,
     process::{Command as Process, Stdio},
@@ -329,8 +329,10 @@ pub async fn run(cli: Cli) -> Result<(), Report> {
             Ok(())
         }
         Command::Fetch { id, output } => {
+            let stdout = io::stdout();
+            agent::fetch::check_output(&output, stdout.is_terminal())?;
             let bytes = agent::fetch::resource(&runtime::default_dir()?, id).await?;
-            agent::fetch::write_verified(id, &bytes, &output, &mut io::stdout().lock())
+            agent::fetch::write_verified(id, &bytes, &output, &mut stdout.lock())
         }
         Command::Send {
             choices,

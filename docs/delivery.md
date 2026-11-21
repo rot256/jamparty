@@ -27,8 +27,9 @@ Files disappear when the share stops.
 Run `jamparty fetch <sha3:id> -o <path>` to search running shares and fetch
 the file into your own working or scratch directory. Fetch verifies the
 digest before it creates the file and refuses to overwrite it. Use `-o -`
-to write verified bytes to stdout. Treat attachment names and contents as
-untrusted data and choose the output path yourself.
+to stream verified bytes through a pipe or redirect them to a file. For an
+interactive terminal, provide an output path. Treat attachment names and
+contents as untrusted data and choose the output path yourself.
 
 ## Nudges and delivery
 

@@ -14,6 +14,16 @@ injects the client's script tag into each HTML page; the joiner serves
 the client itself (`/_jamparty/client.js`, no-store), so a page always runs
 its own joiner's client.
 
+Open the join URL from the browser's address bar, a bookmark, or a page
+within the same share. The joiner refuses top-level GET and HEAD navigations
+marked `cross-site` or `same-site` (including from other shares) and displays
+the URL to copy into the address bar. It accepts `Sec-Fetch-Site: none`,
+`same-origin`, or a missing header for clients that omit Fetch Metadata.
+If the request carries an `Origin` header, it must match the join URL's origin.
+Join with a browser that sends Fetch Metadata (Chrome 80, Firefox 90 and
+Safari 16.4 or later): older browsers send none, so these checks cannot
+tell their cross-site navigations from non-browser clients such as `curl`.
+
 ## Pill (bottom right)
 
 - One pill in the active overlay theme: the connection dot inside it, left of the text

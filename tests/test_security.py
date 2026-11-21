@@ -118,3 +118,39 @@ def test_another_site_cannot_open_the_socket(tmp_path: Path, page: Page) -> None
             f"ws://{joined.host}/_jamparty/api/socket",
         )
         assert opened == "refused"
+
+
+def test_navigation_requires_the_address_bar_or_same_origin(
+    tmp_path: Path, page: Page
+) -> None:
+    with (
+        upstream_server() as upstream,
+        share(tmp_path, "proxy", upstream) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        target = f"{joined.url.rstrip('/')}/?first=1&second=2"
+        _ = page.goto(upstream)
+        add_link = """(url) => {
+            const link = document.createElement("a");
+            link.href = url;
+            link.textContent = "Open shared page";
+            document.body.append(link);
+        }"""
+        page.evaluate(add_link, target)
+        with page.expect_response(target) as response:
+            page.get_by_role("link", name="Open shared page").click()
+        assert response.value.status == 403
+        expect(page.get_by_role("heading", name="Navigation refused")).to_be_visible()
+        expect(page.locator("code")).to_have_text(target)
+        expect(page.get_by_role("link")).to_have_count(0)
+
+        response = page.goto(target)
+        assert response is not None and response.ok
+        expect(page.locator("#intro")).to_be_visible()
+
+        next_url = f"{joined.url.rstrip('/')}/?next=1"
+        page.evaluate(add_link, next_url)
+        with page.expect_response(next_url) as next_response:
+            page.get_by_role("link", name="Open shared page").click()
+        assert next_response.value.ok
+        expect(page.locator("#intro")).to_be_visible()
