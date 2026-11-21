@@ -12,7 +12,11 @@ from support import SocketTap, jamparty, join, overlay, recv_all, share, waiting
 
 
 def fixture_pdf(
-    label: str, padding: int = 0, *, outline_child: str | None = None
+    label: str,
+    padding: int = 0,
+    *,
+    outline_child: str | None = None,
+    title: str | None = None,
 ) -> bytes:
     """Two letter-size pages with PDF-standard Helvetica and a valid xref."""
     objects = [
@@ -46,7 +50,7 @@ def fixture_pdf(
                 f"<< /Title ({outline_child}) /Parent 10 0 R /Dest /appendix >>".encode(),
             ]
         )
-    return make_pdf(objects, padding)
+    return make_pdf(objects, padding, title=title)
 
 
 def pdf_stream(fields: bytes, data: bytes) -> bytes:
@@ -59,7 +63,14 @@ def pdf_stream(fields: bytes, data: bytes) -> bytes:
     )
 
 
-def make_pdf(objects: list[bytes], padding: int = 0) -> bytes:
+def make_pdf(
+    objects: list[bytes], padding: int = 0, *, title: str | None = None
+) -> bytes:
+    info = ""
+    if title is not None:
+        title_hex = (b"\xfe\xff" + title.encode("utf-16-be")).hex()
+        objects = [*objects, f"<< /Title <{title_hex}> >>".encode()]
+        info = f" /Info {len(objects)} 0 R"
     pdf = bytearray(b"%PDF-1.4\n")
     if padding:
         pdf.extend((b"%" + b" " * 998 + b"\n") * (padding // 1000))
@@ -72,7 +83,7 @@ def make_pdf(objects: list[bytes], padding: int = 0) -> bytes:
     for offset in offsets[1:]:
         pdf.extend(f"{offset:010} 00000 n \n".encode())
     pdf.extend(
-        f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+        f"trailer\n<< /Size {len(offsets)} /Root 1 0 R{info} >>\nstartxref\n{xref}\n%%EOF\n".encode()
     )
     return bytes(pdf)
 
@@ -134,6 +145,24 @@ def test_pdf_fits_and_keeps_reading_position(tmp_path: Path, page: Page) -> None
             "document.documentElement.scrollWidth === document.documentElement.clientWidth"
         )
         expect(indicator).to_be_hidden()
+
+
+def test_pdf_tab_title_tracks_rebuilds(tmp_path: Path, page: Page) -> None:
+    pdf = tmp_path / "paper #%.pdf"
+    _ = pdf.write_bytes(fixture_pdf("First version", title="Research notes"))
+    with (
+        share(tmp_path, "serve", str(pdf)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(page).to_have_title("Research notes")
+        updated = tmp_path / "paper.tmp"
+        _ = updated.write_bytes(fixture_pdf("Second version", title="Revised notes"))
+        _ = updated.replace(pdf)
+        expect(page).to_have_title("Revised notes")
+        _ = updated.write_bytes(fixture_pdf("Third version"))
+        _ = updated.replace(pdf)
+        expect(page).to_have_title("paper #%.pdf")
 
 
 def test_pdf_outline(tmp_path: Path, page: Page) -> None:
