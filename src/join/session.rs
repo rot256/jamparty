@@ -443,6 +443,7 @@ pub(crate) mod tests {
             show_cursor: _,
             corner,
             theme,
+            text_size,
             answer_timeout,
         } = Settings::default();
         Session::new(Preferences {
@@ -453,6 +454,7 @@ pub(crate) mod tests {
                 show_cursor: Switch::On,
                 corner,
                 theme,
+                text_size,
                 answer_timeout,
             },
             given: None,

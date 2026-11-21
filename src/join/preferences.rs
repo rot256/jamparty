@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::core::{
     name::JoinerName,
-    settings::{AnswerTimeout, Corner, Keys, Settings, SettingsChange, Switch, Theme},
+    settings::{AnswerTimeout, Corner, Keys, Settings, SettingsChange, Switch, TextSize, Theme},
 };
 
 /// The settings as the page sees them.
@@ -25,6 +25,7 @@ pub(crate) struct PageSettings {
     pub(crate) show_cursor: Switch,
     pub(crate) corner: Corner,
     pub(crate) theme: Theme,
+    pub(crate) text_size: TextSize,
     pub(crate) answer_timeout: AnswerTimeout,
 }
 
@@ -58,6 +59,7 @@ impl Preferences {
             show_cursor,
             corner,
             theme,
+            text_size,
             answer_timeout,
         } = &self.settings;
         PageSettings {
@@ -68,6 +70,7 @@ impl Preferences {
             show_cursor: *show_cursor,
             corner: *corner,
             theme: *theme,
+            text_size: *text_size,
             answer_timeout: *answer_timeout,
         }
     }

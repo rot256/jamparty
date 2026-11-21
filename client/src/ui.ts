@@ -5,7 +5,12 @@
 
 import { HOST_ID } from "./config";
 import { DEFAULT_ANSWER_TIMEOUT, DEFAULT_CLEAR_ANSWERS_KEY, MAX_ANSWER_TIMEOUT, MAX_COMMENT, MAX_NAME } from "./generated/api";
+import type { TextSize } from "./generated/api";
 import { styles } from "./styles";
+
+const TEXT_SCALES: Readonly<Record<TextSize, number>> = {
+  small: 1, default: 1.125, large: 1.25, larger: 1.375,
+};
 
 const GEAR_ICON = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>`;
 
@@ -75,6 +80,15 @@ const MARKUP = `
         <button class="segment" type="button" data-theme="auto" aria-pressed="true">Auto</button>
         <button class="segment" type="button" data-theme="dark" aria-pressed="false">Dark</button>
         <button class="segment" type="button" data-theme="light" aria-pressed="false">Light</button>
+      </span>
+    </div>
+    <div class="control" id="text-size-row">
+      <span class="label" id="text-size-label">Text size</span>
+      <span class="segments" role="group" aria-labelledby="text-size-label">
+        <button class="segment" type="button" data-text-size="small" aria-pressed="false">Small</button>
+        <button class="segment" type="button" data-text-size="default" aria-pressed="true">Default</button>
+        <button class="segment" type="button" data-text-size="large" aria-pressed="false">Large</button>
+        <button class="segment" type="button" data-text-size="larger" aria-pressed="false">Larger</button>
       </span>
     </div>
     <div id="name-row">
@@ -195,6 +209,18 @@ export class Ui {
   readonly nameInput: HTMLInputElement;
   readonly nameError: HTMLDivElement;
   readonly nameJoin: HTMLButtonElement;
+  private readonly root: HTMLDivElement;
+  private scale = TEXT_SCALES.default;
+
+  get textScale(): number {
+    return this.scale;
+  }
+
+  setTextSize(size: TextSize): void {
+    this.scale = TEXT_SCALES[size];
+    this.root.style.setProperty("--jp-unit", `${this.scale}px`);
+  }
+
   private toastTimer: number | undefined;
 
   /** Adds the UI to the page; null when it is there already. */
@@ -216,6 +242,8 @@ export class Ui {
     };
     this.host = host;
     this.shadow = shadow;
+    this.root = find("#overlay-root", HTMLDivElement);
+    this.setTextSize("default");
     this.cursors = find("#cursors", HTMLDivElement);
     this.highlight = find("#highlight", HTMLDivElement);
     this.editHighlight = find("#edit-highlight", HTMLDivElement);

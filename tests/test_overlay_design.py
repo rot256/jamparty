@@ -169,7 +169,9 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
         expect(header.locator(":scope > :first-child")).to_have_attribute(
             "aria-label", "Move"
         )
-        expect(grip).to_have_css("width", "21px")
+        bounds = grip.bounding_box()
+        assert bounds is not None
+        assert bounds["width"] == pytest.approx(23.625, abs=0.02)
         expect(header).to_have_css("background-color", "rgb(240, 243, 247)")
         expect(answer).to_have_css("background-color", "rgb(255, 255, 255)")
         gear.click()
@@ -211,6 +213,47 @@ def test_theme_and_dialog_on_serif_page(tmp_path: Path, page: Page) -> None:
         expect(field).to_have_value("A draft whose position I can change.")
 
 
+def test_text_size_changes_overlay_and_persists(tmp_path: Path, page: Page) -> None:
+    path = tmp_path / "index.html"
+    _ = path.write_text(
+        '<html style="font: 24px Georgia, serif; --jp-unit: 99px">'
+        '<h1 style="font-size: 2rem">Review copy</h1></html>'
+    )
+    with (
+        share(tmp_path, "serve", str(path)) as shared,
+        join(tmp_path, shared) as joined,
+    ):
+        _ = page.goto(joined.url)
+        expect(overlay(page, "#connection")).to_have_attribute("data-state", "green")
+        pill = overlay(page, "#pill")
+        page_title = page.get_by_role("heading", name="Review copy")
+        expect(page_title).to_have_css("font-size", "48px")
+        expect(pill).to_have_css("font-size", "13.5px")
+
+        gear = overlay(page, "#gear")
+        gear.click()
+        panel = overlay(page, "#panel")
+        sizes = panel.get_by_role("group", name="Text size")
+        expect(sizes.get_by_role("button", name="Default")).to_have_attribute(
+            "aria-pressed", "true"
+        )
+        for name, font in [("Small", "12px"), ("Large", "15px"), ("Larger", "16.5px")]:
+            button = sizes.get_by_role("button", name=name, exact=True)
+            button.click()
+            expect(button).to_have_attribute("aria-pressed", "true")
+            expect(pill).to_have_css("font-size", font)
+            expect(panel).to_have_css("font-size", font)
+            expect(page_title).to_have_css("font-size", "48px")
+
+        _ = page.reload()
+        expect(pill).to_have_css("font-size", "16.5px")
+        gear.click()
+        expect(sizes.get_by_role("button", name="Larger")).to_have_attribute(
+            "aria-pressed", "true"
+        )
+        expect(page_title).to_have_css("font-size", "48px")
+
+
 def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
     without_answer_timeout(tmp_path)
     path = tmp_path / "paper.pdf"
@@ -227,6 +270,9 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
         )
         gear = overlay(page, "#gear")
         gear.click()
+        small = overlay(page, "button[data-text-size=small]")
+        small.click()
+        expect(small).to_have_attribute("aria-pressed", "true")
         overlay(page, "button[data-theme=dark]").click()
         expect(page.locator("#jamparty")).to_have_attribute("data-theme", "dark")
         gear.click()
@@ -348,6 +394,18 @@ def test_pdf_margin_and_dragged_connector(tmp_path: Path, page: Page) -> None:
         _ = page.evaluate("window.scrollTo(0, 75)")
         expect(answer).to_be_in_viewport()
         check_link()
+        page_rect = page.locator(".pdf-page").first.bounding_box()
+        card_rect = answer.bounding_box()
+        path_before = link.get_attribute("d")
+        assert card_rect is not None and path_before is not None
+        gear.click()
+        overlay(page, "button[data-text-size=larger]").click()
+        expect(link).not_to_have_attribute("d", path_before)
+        check_link()
+        larger = answer.bounding_box()
+        assert larger is not None
+        assert larger["width"] > card_rect["width"]
+        assert page.locator(".pdf-page").first.bounding_box() == page_rect
 
 
 def test_pdf_drag_measures_card_once_per_frame(tmp_path: Path, page: Page) -> None:

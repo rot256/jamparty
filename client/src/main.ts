@@ -143,6 +143,7 @@ export function install(pdf?: PdfViewer): void {
   const prompt = new NamePrompt(ui, changeSettings);
   panel.onSettings = (settings: PageSettings): void => {
     answers.setTimeoutSeconds(settings.answerTimeout);
+    answers.textSizeChanged();
     sender.setOn(settings.showCursor === "on");
     prompt.show(settings);
   };

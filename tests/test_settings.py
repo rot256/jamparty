@@ -51,7 +51,7 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         overlay(page, "#collapse").click()
         overlay(page, "#gear").click()
         expect(overlay(page, "#panel")).to_be_visible()
-        expect(overlay(page, "#panel")).to_have_css("width", "260px")
+        expect(overlay(page, "#panel")).to_have_css("width", "360px")
         expect(comment_mode).to_have_attribute("aria-checked", "true")
         expect(show_cursor).to_have_attribute("aria-checked", "false")
         expect(overlay(page, "#comment-mode-key")).to_have_text("C")
@@ -185,6 +185,9 @@ def test_the_name_prompt_and_settings_kept_for_the_share(
                 overlay(page, "#comment-mode-key").click()
                 page.keyboard.press("k")
                 expect(overlay(page, "#comment-mode-key")).to_have_text("K")
+                larger = overlay(page, "button[data-text-size=larger]")
+                larger.click()
+                expect(larger).to_have_attribute("aria-pressed", "true")
                 page.close()
                 # Never on disk.
                 assert not settings_path(home).exists()
@@ -197,6 +200,9 @@ def test_the_name_prompt_and_settings_kept_for_the_share(
                 overlay(page, "#gear").click()
                 expect(overlay(page, "#name-field")).to_have_value("dora.b")
                 expect(overlay(page, "#answer-timeout")).to_have_value("17")
+                expect(
+                    overlay(page, "button[data-text-size=larger]")
+                ).to_have_attribute("aria-pressed", "true")
                 expect(overlay(page, "#clear-answers-key")).to_have_text("Q")
                 expect(overlay(page, "#show-cursor")).to_have_attribute(
                     "aria-checked", "true"

@@ -11,7 +11,7 @@ import type {
   SettingsChange,
   SettingsOutcome,
 } from "./generated/api";
-import { isTheme } from "./remembered";
+import { isTextSize, isTheme } from "./remembered";
 import type { Ui } from "./ui";
 
 type Action = keyof Keys;
@@ -67,6 +67,7 @@ export function colourOf(person: Person): string {
 
 export class Panel {
   private readonly themes: NodeListOf<HTMLButtonElement>;
+  private readonly textSizes: NodeListOf<HTMLButtonElement>;
   private settings: PageSettings | null = null;
   private listening: Action | null = null;
   /** Called by the clear button or its binding. */
@@ -94,6 +95,15 @@ export class Panel {
       button.addEventListener("click", () => {
         const theme = button.dataset.theme;
         if (isTheme(theme) && this.settings?.theme !== theme) void this.change({ theme });
+      });
+    }
+    this.textSizes = ui.shadow.querySelectorAll("button[data-text-size]");
+    for (const button of this.textSizes) {
+      button.addEventListener("click", () => {
+        const textSize = button.dataset.textSize;
+        if (isTextSize(textSize) && this.settings?.textSize !== textSize) {
+          void this.change({ textSize });
+        }
       });
     }
     for (const button of ui.corners) {
@@ -177,6 +187,11 @@ export class Panel {
     ui.host.dataset.theme = settings.theme;
     for (const button of this.themes) {
       button.setAttribute("aria-pressed", String(button.dataset.theme === settings.theme));
+    }
+    const textSize = isTextSize(settings.textSize) ? settings.textSize : "default";
+    ui.setTextSize(textSize);
+    for (const button of this.textSizes) {
+      button.setAttribute("aria-pressed", String(button.dataset.textSize === textSize));
     }
     this.onSettings(settings);
   }

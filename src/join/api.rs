@@ -197,7 +197,7 @@ mod bindings {
             settings::{
                 AnswerTimeout, Corner, DEFAULT_ANSWER_TIMEOUT, DEFAULT_CLEAR_ANSWERS_KEY,
                 KeyBinding, Keys, KeysFields, MAX_ANSWER_TIMEOUT, MODIFIER_KEYS, PAGE_KEYS,
-                RESERVED_KEYS, SettingsChange, Switch, Theme,
+                RESERVED_KEYS, SettingsChange, Switch, TextSize, Theme,
             },
         },
         join::{
@@ -247,6 +247,7 @@ mod bindings {
             Switch::decl(&cfg),
             Corner::decl(&cfg),
             Theme::decl(&cfg),
+            TextSize::decl(&cfg),
             KeyBinding::decl(&cfg),
             KeysFields::decl(&cfg),
             Keys::decl(&cfg),
