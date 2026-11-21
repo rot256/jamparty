@@ -5,45 +5,47 @@
   </picture>
 </h1>
 
-Share a site you are working on; people comment on it from their own
-browser and the comments reach your agent. Peer to peer over
-[iroh](https://iroh.computer).
+Claude design, but for everything, everyone and everywhere.
 
-## Install
+Jamparty works with:
+
+- Practically any web framework/language, because it just proxies the dev server.
+- Easily with static files.
+- PDFs
+
+And provides an experience similar to Claude design: 
+you get a live reloading view of the thing you are working on,
+if you see something you want changed, you click it, and tell your agent what to change, it changes it and the page reloads.
+It works whether you want to work on something with your friends or just jam with your agent by yourself.
+
+## Get Started
+
+Jamparty is centered around the idea of two parties:
+
+- The "share": which shares one/more resources, e.g. files or a dev server.
+- The "join": which joins a party and automatically provided with a live view / comment ability.
+
+Joining is deliberately very easy (see below), while sharing depends on what stack/project is being shared,
+fortunately, getting it working is the job of your agent and `jamparty` provides the command `jamparty agent`to quickly get them started.
+
+### Install
 
 ```sh
-cargo install --locked jamparty
+cargo install jamparty
 ```
 
-## Share
+### Sharing
 
-```sh
-jamparty serve ./public                     # a static directory
-jamparty serve build/paper.pdf              # a single file
-jamparty proxy http://127.0.0.1:5173        # a running dev server
-jamparty serve ./public -- ./on-comments.sh # nudge when nobody is listening
-jamparty serve ./public -- t3 thread send "$T3CODE_THREAD_ID" -
-```
+Just ask your agent to use `jamparty` to share the project, it will figure it out.
 
-Anyone with the printed token can see the site and comment until the
-share stops. Serving a directory exposes its non-dot files and lists each
-directory that has no servable `index.html`. Listings show up to 1,000
-entries and skip names that aren't valid UTF-8. To share a single file,
-choose a regular file with a non-dot, UTF-8 name. The start URL redirects
-to that file.
+### Join
 
-Comments wait for `jamparty recv`, which prints them as NDJSON and confirms
-delivery. An optional command after `--` receives only a short plain-text
-reminder when comments wait and no recv listens: one nudge per backlog.
-Inside T3, start the share in the background; when the nudge arrives as a new
-turn, run `jamparty recv`, then answer. A subagent should pass the top-level
-thread's id. Failed nudges retry with backoff without affecting the queue.
-See [comment delivery](docs/delivery.md) or `jamparty agent t3`.
-
-## Join
+From anywhere else in the world you/your collaborators run: 
 
 ```sh
 jamparty join <token>
-jamparty join -          # read the token from stdin
-jamparty join <token> --port 8080  # serve on this port (default: the dev server's)
 ```
+
+This establishes an end-to-end encrypted (QUIC) connection directly to the sharing instance using [iroh](https://iroh.computer).
+No signup, no centralized service, works on the local network and without internet (e.g. when using local models).
+
