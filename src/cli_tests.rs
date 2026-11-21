@@ -32,6 +32,20 @@ fn token() -> String {
 }
 
 #[test]
+fn join_rejects_settings_override_flags() {
+    for (flag, value) in [
+        ("--answer-timeout", "5"),
+        ("--clear-answers-key", "q"),
+        ("--comment-mode-key", "k"),
+        ("--show-cursor-key", "F2"),
+    ] {
+        let error = Cli::try_parse_from(["jamparty", "join", flag, value, "-"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        assert!(error.to_string().contains(flag));
+    }
+}
+
+#[test]
 fn validates_the_serve_path() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();

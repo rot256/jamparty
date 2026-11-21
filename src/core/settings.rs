@@ -152,22 +152,6 @@ impl From<AnswerTimeout> for u16 {
     }
 }
 
-impl std::str::FromStr for AnswerTimeout {
-    type Err = Invalid;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        raw.parse::<u16>().map_err(|_| out_of_range())?.try_into()
-    }
-}
-
-impl std::str::FromStr for KeyBinding {
-    type Err = Invalid;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        raw.to_owned().try_into()
-    }
-}
-
 fn clear_answers_default() -> KeyBinding {
     KeyBinding(DEFAULT_CLEAR_ANSWERS_KEY.to_owned())
 }
@@ -268,41 +252,6 @@ impl Default for Settings {
             text_size: TextSize::default(),
             answer_timeout: AnswerTimeout::default(),
         }
-    }
-}
-
-/// Overrides supplied for this join, independent of the CLI parser.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct SettingsOverride {
-    pub(crate) answer_timeout: Option<AnswerTimeout>,
-    pub(crate) clear_answers_key: Option<KeyBinding>,
-    pub(crate) comment_mode_key: Option<KeyBinding>,
-    pub(crate) show_cursor_key: Option<KeyBinding>,
-}
-
-impl SettingsOverride {
-    pub(crate) fn apply(self, mut settings: Settings) -> Result<Settings, Invalid> {
-        let Self {
-            answer_timeout,
-            clear_answers_key,
-            comment_mode_key,
-            show_cursor_key,
-        } = self;
-        let mut keys = KeysFields::from(settings.keys);
-        if let Some(key) = clear_answers_key {
-            keys.clear_answers = key;
-        }
-        if let Some(key) = comment_mode_key {
-            keys.comment_mode = key;
-        }
-        if let Some(key) = show_cursor_key {
-            keys.show_cursor = key;
-        }
-        settings.keys = keys.try_into()?;
-        if let Some(timeout) = answer_timeout {
-            settings.answer_timeout = timeout;
-        }
-        Ok(settings)
     }
 }
 
