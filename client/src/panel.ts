@@ -1,6 +1,7 @@
 // The control panel behind the gear: the comment mode and cursor
 // switches with their keys (rebindable), the name, and who is here.
 
+import { answerTimeoutLabel, answerTimeoutPreset } from "./answer-timeout";
 import { PALETTE } from "./config";
 import { MODIFIER_KEYS, PAGE_KEYS, RESERVED_KEYS } from "./generated/api";
 import type {
@@ -66,6 +67,7 @@ export function colourOf(person: Person): string {
 }
 
 export class Panel {
+  private readonly answerTimeouts: NodeListOf<HTMLButtonElement>;
   private readonly themes: NodeListOf<HTMLButtonElement>;
   private readonly textSizes: NodeListOf<HTMLButtonElement>;
   private settings: PageSettings | null = null;
@@ -82,11 +84,15 @@ export class Panel {
     private readonly changeSettings: ChangeSettings,
   ) {
     ui.clearAnswers.addEventListener("click", () => { this.onClearAnswers(); });
-    ui.answerTimeout.addEventListener("change", () => {
-      if (ui.answerTimeout.reportValidity()) {
-        void this.change({ answerTimeout: ui.answerTimeout.valueAsNumber });
-      }
-    });
+    this.answerTimeouts = ui.shadow.querySelectorAll("button[data-answer-timeout]");
+    for (const button of this.answerTimeouts) {
+      button.addEventListener("click", () => {
+        const answerTimeout = answerTimeoutPreset(button.dataset.answerTimeout);
+        if (answerTimeout !== undefined && this.settings?.answerTimeout !== answerTimeout) {
+          void this.change({ answerTimeout });
+        }
+      });
+    }
     ui.gear.addEventListener("click", () => { this.toggle(); });
     ui.commentMode.addEventListener("click", () => { this.flip("commentMode"); });
     ui.showCursor.addEventListener("click", () => { this.flip("showCursor"); });
@@ -173,7 +179,14 @@ export class Panel {
     this.settings = settings;
     const { ui } = this;
     ui.commentMode.setAttribute("aria-checked", String(settings.commentMode === "on"));
-    ui.answerTimeout.value = String(settings.answerTimeout);
+    const selectedPreset = String(settings.answerTimeout);
+    for (const button of this.answerTimeouts) {
+      button.setAttribute("aria-pressed", String(button.dataset.answerTimeout === selectedPreset));
+    }
+    ui.customAnswerTimeout.hidden = answerTimeoutPreset(selectedPreset) !== undefined;
+    if (!ui.customAnswerTimeout.hidden) {
+      ui.customAnswerTimeout.textContent = answerTimeoutLabel(settings.answerTimeout);
+    }
     ui.showCursor.setAttribute("aria-checked", String(settings.showCursor === "on"));
     for (const [action, chip] of this.chips()) {
       if (this.listening !== action) chip.textContent = keyLabel(settings.keys[action]);

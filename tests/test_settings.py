@@ -51,7 +51,7 @@ def test_the_control_panel(tmp_path: Path, page: Page) -> None:
         overlay(page, "#collapse").click()
         overlay(page, "#gear").click()
         expect(overlay(page, "#panel")).to_be_visible()
-        expect(overlay(page, "#panel")).to_have_css("width", "360px")
+        expect(overlay(page, "#panel")).to_have_css("width", "432px")
         expect(comment_mode).to_have_attribute("aria-checked", "true")
         expect(show_cursor).to_have_attribute("aria-checked", "false")
         expect(overlay(page, "#comment-mode-key")).to_have_text("C")
@@ -173,8 +173,9 @@ def test_the_name_prompt_and_settings_kept_for_the_share(
                 )
                 expect(overlay(page, ".avatar")).to_have_text("DB")
                 # Keys and switches are kept too.
-                overlay(page, "#answer-timeout").fill("17")
-                overlay(page, "#answer-timeout").press("Tab")
+                timeout = overlay(page, 'button[data-answer-timeout="0"]')
+                timeout.click()
+                expect(timeout).to_have_attribute("aria-pressed", "true")
                 overlay(page, "#clear-answers-key").click()
                 page.keyboard.press("q")
                 expect(overlay(page, "#clear-answers-key")).to_have_text("Q")
@@ -199,7 +200,9 @@ def test_the_name_prompt_and_settings_kept_for_the_share(
                 _ = page.goto(joined.url)
                 overlay(page, "#gear").click()
                 expect(overlay(page, "#name-field")).to_have_value("dora.b")
-                expect(overlay(page, "#answer-timeout")).to_have_value("17")
+                expect(
+                    overlay(page, 'button[data-answer-timeout="0"]')
+                ).to_have_attribute("aria-pressed", "true")
                 expect(
                     overlay(page, "button[data-text-size=larger]")
                 ).to_have_attribute("aria-pressed", "true")

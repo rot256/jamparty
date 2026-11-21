@@ -166,6 +166,8 @@ def join_process(
     token: str,
     name: str | None = "alice",
     port: int | None = None,
+    *,
+    answer_timeout: int | None = None,
 ) -> Iterator[Process]:
     # The token goes on stdin, as `jamparty join -` reads it: out of argv.
     arguments = ["join", "-", "--no-open"]
@@ -173,6 +175,8 @@ def join_process(
         arguments += ["--name", name]
     if port is not None:
         arguments += ["--port", str(port)]
+    if answer_timeout is not None:
+        arguments += ["--answer-timeout", str(answer_timeout)]
     process = Process(
         [*arguments, "--share-addr", shared.address],
         environment(home),
@@ -186,9 +190,16 @@ def join_process(
 
 @contextmanager
 def join(
-    home: Path, shared: Shared, name: str | None = "alice", port: int | None = None
+    home: Path,
+    shared: Shared,
+    name: str | None = "alice",
+    port: int | None = None,
+    *,
+    answer_timeout: int | None = None,
 ) -> Iterator[Joined]:
-    with join_process(home, shared, shared.token, name, port) as process:
+    with join_process(
+        home, shared, shared.token, name, port, answer_timeout=answer_timeout
+    ) as process:
         url = process.wait_for("jamparty: open ")
         parts = urlsplit(url)
         assert parts.hostname is not None and parts.port is not None
