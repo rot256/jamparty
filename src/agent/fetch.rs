@@ -81,6 +81,13 @@ async fn fetch_from(stream: UnixStream, id: ResourceId) -> Result<Option<Vec<u8>
     }
 }
 
+pub(crate) fn check_output(output: &Path, stdout_is_terminal: bool) -> Result<(), Report> {
+    if output == Path::new("-") && stdout_is_terminal {
+        bail!("refusing to write attachment bytes to a terminal; use -o <path> or pipe stdout");
+    }
+    Ok(())
+}
+
 /// The destination is exclusively caller-supplied. Verify before opening
 /// it, including when it designates stdout.
 pub(crate) fn write_verified(
@@ -129,7 +136,7 @@ mod tests {
 
     use crate::{
         adapters::{lines, runtime},
-        agent::fetch::{resource, write_verified},
+        agent::fetch::{check_output, resource, write_verified},
         core::ids::EndpointKey,
         protocol::{
             agent::{AgentReply, AgentRequest},
@@ -137,6 +144,15 @@ mod tests {
             resource::ResourceId,
         },
     };
+
+    #[test]
+    fn only_terminal_stdout_is_refused() {
+        let stdout = Path::new("-");
+        let error = check_output(stdout, true).unwrap_err().to_string();
+        assert!(error.contains("use -o <path> or pipe stdout"));
+        assert!(check_output(stdout, false).is_ok());
+        assert!(check_output(Path::new("attachment"), true).is_ok());
+    }
 
     #[test]
     fn verifies_before_writing_and_never_overwrites() {
