@@ -326,7 +326,7 @@ function bt(o){return typeof o=="object"&&o!==null}function me(o){if(!bt(o)||typ
 
   #text-size-row, #text-size-row .segments { flex-wrap: wrap; }
 
-  .control .label { flex-grow: 1; cursor: pointer; }
+  .control .label { flex-grow: 1; cursor: pointer; font-weight: 400; margin: 0; }
 
   .segments {
     display: flex;
