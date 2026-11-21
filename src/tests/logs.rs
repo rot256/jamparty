@@ -189,3 +189,27 @@ async fn a_control_line_with_escapes_is_logged_escaped() {
         "{log:?}"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_refused_start_is_reported_once() {
+    let captured = capture();
+    let share = fake_share(vec![
+        r#"{"version":1,"message":{"type":"refused","reason":"incompatible","jamparty":"0.1.2"}}"#
+            .to_owned(),
+    ])
+    .await;
+    let Err(error) = within(
+        "the refusal",
+        try_joiner(share.token.clone(), share.addrs.clone()),
+    )
+    .await
+    else {
+        panic!("the joiner started");
+    };
+    assert!(
+        error.to_string().contains("the share runs jamparty 0.1.2;"),
+        "{error}"
+    );
+    let log = captured.text();
+    assert!(!log.contains("WARN"), "{log}");
+}
